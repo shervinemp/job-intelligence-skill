@@ -5,7 +5,7 @@
  * gem, sets 3.5 Flash + Extended thinking, sends a prompt, reads response.
  *
  * Start Chrome:
- *   & "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="C:\Users\sherv\.openclaw\chrome-profile" --remote-debugging-port=9222 --no-first-run
+ *   & "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="%USERPROFILE%\.openclaw\chrome-profile" --remote-debugging-port=9222 --no-first-run
  *
  * Usage:
  *   node gemini.js "your prompt"
@@ -26,7 +26,7 @@ const os = require('os');
 
 const SESSION = path.join(__dirname, 'session.json');
 const CDP = 'http://127.0.0.1:9222';
-const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME_PATH = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const CHROME_PROFILE = path.join(os.homedir(), '.openclaw', 'chrome-profile');
 
 function loadGemId() {

@@ -1,16 +1,11 @@
 # Job Intelligence SOP
 
-When the user asks to "Check jobs", "Scan job emails", or "Run job intelligence", follow the **Job Intelligence Orchestrator (v4)** SOP found in `C:\Users\sherv\.openclaw\workspace\skills\job_intelligence\SKILL.md`.
+When asked to run job intelligence, follow `AGENTS.md` in this repo — that is the canonical pipeline SOP.
 
-## Core Instructions
-- **DO NOT** run `main.py` or any custom Python scripts in the `job_intelligence` folder.
-- **DO NOT** look for an "Intelligence Agent" script.
-- **DO** act as the Orchestrator yourself.
-- **DO** use the following tool sequence:
-    1. **Fetch**: Use the `gmail-cli` skill to retrieve job-related emails (use `newer_than:7d` if unspecified).
-    2. **Research**: Use `web_search` and `web_fetch` to research companies and job links.
-    3. **Parse/Normalize**: Use your own reasoning to extract Title, Company, Link, Salary, Location, Tech Stack, Summary, etc.
-    4. **Export**: Use the `notion` skill to append the data to the user's Job Tracker database.
-
-## Master Schema
-Ensure all entries match the Master Schema: Title, Company, Link, Salary, Location, Tech Stack, Summary, Fit Score, Company Vibe, Recruiter/Poster, Date Posted, Source, Status, Research Notes.
+## Quick reference
+1. **Fetch**: `gmail-cli gmail search '<query>' --all -j > search_results.json`
+2. **Stage**: `stage_emails.py` 
+3. **Extract**: `extract.py step` (LLM identifies job URLs from emails)
+4. **Fetch descriptions**: `fetch.py run --count 30`
+5. **Review**: Read `DESC:` lines → `fetch.py admit/reject/flag`
+6. **Tailor**: `tailor.py ready <jid>` then `tailor.py done <jid>`
