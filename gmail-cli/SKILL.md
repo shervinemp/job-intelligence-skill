@@ -1,12 +1,12 @@
 ---
 name: gmail-cli
 description: Gmail CLI for job pipeline (secure Python replacement for gog).
-metadata: {"clawdbot":{"emoji":"🐍","requires":{"bins":["python"]}}}
+metadata: {}
 ---
 
 # gmail-cli
 
-`skills/gmail-cli/gmail_cli.py` — uses Google Gmail API directly. Supports the Gmail + Auth subset needed by the job intelligence pipeline.
+Replaces gog with the Google Gmail API directly. Supports the Gmail + Auth subset needed by the job pipeline.
 
 ## Setup (once)
 - `gmail-cli auth credentials /path/to/client_secret.json`
@@ -23,4 +23,3 @@ metadata: {"clawdbot":{"emoji":"🐍","requires":{"bins":["python"]}}}
 
 ## Notes
 - Tokens stored at `~/.config/gmail-cli/tokens/<email>.json`
-- Original `gog.exe` was quarantined (renamed to `gog.exe.quarantined`)

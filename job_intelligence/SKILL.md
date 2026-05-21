@@ -63,4 +63,4 @@ Sessions persist — log in once, lasts forever.
 | `invalid_grant` | `gmail-cli auth add email` |
 | `TIMEOUT` | `tailor.py retry` |
 | Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="CHROME_PROFILE"','--remote-debugging-port=9222'` |
-| DB crash | `tools/recover_jobs.py` |
+| DB crash | `extract.py reset` or restore from backup |

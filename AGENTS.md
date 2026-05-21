@@ -52,4 +52,4 @@ Run `python3 db.py stats` then match the stage:
 | Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="CHROME_PROFILE"','--remote-debugging-port=9222'` |
 | Gemini timeout | `tailor.py retry` |
 | Fetch failed | `fetch.py retry` or skip |
-| DB corrupt | `tools/recover_jobs.py` |
+| DB corrupt | `python3 pipeline.py reset` or restore from backup |
