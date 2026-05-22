@@ -37,23 +37,9 @@ def cmd_status():
     print(" ".join(tokens))
 
 
-EXTRACT_COUNT = 3
-
-
 def cmd_step():
-    from lib.db import stage_count, load_state, setting_get
+    from lib.db import load_state
 
-    # 1. Check stage table for unextracted — use LLM-driven extract.py
-    total_stage = stage_count()
-    extracted_ids = set(setting_get("extracted_ids", []))
-    pending_extract = total_stage - len(extracted_ids)
-    if pending_extract > 0:
-        count = min(pending_extract, EXTRACT_COUNT)
-        r = _run("extract.py", "step", "--count", str(count))
-        print(f"STEP:extract {count} (read above, then submit)")
-        return
-
-    # 2. Check for described jobs (need tailor) — fetch is manual via DESC/admit/reject
     state = load_state()
     described = state.get("stages", {}).get("described", 0)
     if described > 0:
