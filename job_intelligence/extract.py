@@ -1,12 +1,4 @@
-"""extract.py — Review staged emails, pick job URLs, save to DB.
-
-Usage:
-  extract.py [--count N]        Show N staged emails to pick URLs from (default: 1)
-  extract.py submit <tid> <json>  Save extracted jobs from an email
-  extract.py clean               Filter non-job emails + auto-extract URLs
-  extract.py reset               Clear all jobs and start fresh
-  extract.py status              Pipeline status
-"""
+"""extract.py — Auto-extract URLs from staged emails, SLM admits/rejects."""
 
 import json
 import os
@@ -14,10 +6,81 @@ import re
 import sys
 
 from lib.db import stage_list_all, stage_count, setting_get, setting_set
-from lib.db import add_job, pipeline_status
+from lib.db import add_job, pipeline_status, get_conn, advance
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 EXTRACTED_IDS_KEY = "extracted_ids"
+
+_SKIP_DOMAINS = {
+    "linkedin.com/comm", "linkedin.com/feed", "linkedin.com/notifications",
+    "linkedin.com/mynetwork", "linkedin.com/messaging",
+    "accounts.google.com", "github.com", "google.com",
+    "facebook.com", "twitter.com", "x.com", "instagram.com",
+    "youtube.com", "unsubscribe", "user-subscription",
+}
+
+
+def _extract_urls(content):
+    urls = set()
+    for m in re.finditer(r'https?://[^\s<>"\')\]]+', content):
+        url = m.group(0).rstrip('.,;:!?)>\'"]')
+        skip = any(d in url.lower() for d in _SKIP_DOMAINS)
+        if not skip and len(url) > 20:
+            urls.add(url)
+    return list(urls)
+
+
+def _snippet(content, url):
+    idx = content.lower().find(url.lower())
+    if idx == -1:
+        return ""
+    start = max(0, idx - 80)
+    end = min(len(content), idx + len(url) + 80)
+    s = content[start:end]
+    s = re.sub(r'\s+', ' ', s).strip()
+    return f"...{s}..."
+
+
+def cmd_auto():
+    pending_ids = set(setting_get(EXTRACTED_IDS_KEY, []))
+    all_staged = stage_list_all()
+    pending = [(tid, content) for tid, content in all_staged if tid not in pending_ids]
+    if not pending:
+        print("NO_PENDING_STAGED", file=sys.stderr)
+        return
+
+    total = 0
+    extracted_ids = list(pending_ids)
+    for tid, content in pending:
+        urls = _extract_urls(content)
+        if not urls:
+            extracted_ids.append(tid)
+            continue
+        for url in urls:
+            jid = add_job({"url": url, "email_id": tid, "source": "Email", "source_url": url})
+            if jid:
+                ctx = _snippet(content, url)
+                print(f"JOB:{jid}:{url}  [{ctx}]")
+                total += 1
+        extracted_ids.append(tid)
+    setting_set(EXTRACTED_IDS_KEY, extracted_ids)
+    print(f"EXTRACTED:{total}", file=sys.stderr)
+
+
+def cmd_admit(*jids):
+    conn = get_conn()
+    for jid in jids:
+        conn.execute("UPDATE jobs SET stage='extracted' WHERE id=? AND stage='extracted'", (jid,))
+    conn.commit()
+    print(f"ADMITTED:{len(jids)}", file=sys.stderr)
+
+
+def cmd_reject(*jids):
+    conn = get_conn()
+    for jid in jids:
+        conn.execute("UPDATE jobs SET stage='skipped' WHERE id=?", (jid,))
+    conn.commit()
+    print(f"REJECTED:{len(jids)}", file=sys.stderr)
 
 
 def cmd_review(count):
@@ -61,7 +124,6 @@ def cmd_submit(tid, jobs_json):
 
 
 def cmd_reset():
-    from lib.db import get_conn
     c = get_conn()
     c.execute("PRAGMA foreign_keys=OFF")
     c.execute("DELETE FROM events")
@@ -94,52 +156,8 @@ def cmd_status():
     print(f"  next: {s['next_step']}", file=sys.stderr)
 
 
-_URL_PATTERNS = [
-    r'https?://(?:www\.)?jobright\.ai/jobs/info/[a-zA-Z0-9]+',
-    r'https?://(?:www\.)?linkedin\.com/jobs/view/\d+',
-    r'https?://(?:www\.)?linkedin\.com/comm/jobs/view/\d+',
-    r'https?://(?:www\.)?indeed\.com/viewjob\?[^"\s>]+',
-    r'https?://(?:www\.)?careerbeacon\.com/job/\d+',
-    r'https?://[^"\s>]*teamtailor[^"\s>]+',
-    r'https?://[^"\s>]*jobs2web[^"\s>]+',
-]
-
-
-def cmd_clean():
-    all_staged = stage_list_all()
-    pending_ids = set(setting_get(EXTRACTED_IDS_KEY, []))
-    pending = [(tid, content) for tid, content in all_staged if tid not in pending_ids]
-    if not pending:
-        print("ALL_EXTRACTED", file=sys.stderr)
-        return
-    filtered = 0
-    total = 0
-    extracted_ids = list(pending_ids)
-    for tid, content in pending:
-        if not re.search(r'\b(job|jobs)\b', content.lower()):
-            filtered += 1
-            extracted_ids.append(tid)
-            continue
-        urls = set()
-        for pat in _URL_PATTERNS:
-            for m in re.finditer(pat, content):
-                urls.add(m.group(0).rstrip(')'))
-        if not urls:
-            extracted_ids.append(tid)
-            continue
-        count = 0
-        for url in urls:
-            if add_job({"url": url, "email_id": tid, "source": "Email", "source_url": url}):
-                count += 1
-        total += count
-        extracted_ids.append(tid)
-        print(f"  {tid}: {count} jobs", file=sys.stderr)
-    setting_set(EXTRACTED_IDS_KEY, extracted_ids)
-    print(f"\nFiltered: {filtered} non-job | Extracted: {total} jobs", file=sys.stderr)
-
-
 def main():
-    subcommands = {"submit", "reset", "status", "clean"}
+    subcommands = {"submit", "reset", "status", "admit", "reject", "review"}
     if len(sys.argv) > 1 and sys.argv[1] in subcommands:
         cmd = sys.argv[1]
         if cmd == "submit":
@@ -151,20 +169,22 @@ def main():
             cmd_reset()
         elif cmd == "status":
             cmd_status()
-        elif cmd == "clean":
-            cmd_clean()
+        elif cmd == "admit":
+            cmd_admit(*sys.argv[2:])
+        elif cmd == "reject":
+            cmd_reject(*sys.argv[2:])
+        elif cmd == "review":
+            count = 3
+            if "--count" in sys.argv:
+                i = sys.argv.index("--count")
+                if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
+                    count = int(sys.argv[i + 1])
+            cmd_review(count)
     elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
-        count = 3
-        if "--count" in sys.argv:
-            i = sys.argv.index("--count")
-            if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
-                print("Warning: --count requires a number, using default 3", file=sys.stderr)
-            else:
-                count = int(sys.argv[i + 1])
-        cmd_review(count)
+        cmd_auto()
     else:
         print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
-        print("Usage: python3 extract.py [--count N] | submit <tid> '<json>' | reset | status", file=sys.stderr)
+        print("Usage: python3 extract.py [--count N] | submit | reset | status | admit | reject", file=sys.stderr)
         sys.exit(1)
 
 

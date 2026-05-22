@@ -122,7 +122,7 @@ def stage_emails(search_results_path):
         for future in as_completed(futures):
             done += 1
             tid, text = future.result()
-            if text:
+            if text and re.search(r'\b(job|jobs)\b', text.lower()):
                 results.append((tid, text))
             if done % 50 == 0 or done == len(pending):
                 print(f"  {done}/{len(pending)} fetched ({len(results)} ok)", file=sys.stderr)
@@ -133,16 +133,13 @@ def stage_emails(search_results_path):
         new_staged.append(tid)
 
     setting_set("staged_ids", new_staged)
-    print(f"\nStaging complete. Staged: {len(results)}, Skipped: {len(threads) - len(pending)}, Failed: {len(pending) - len(results)}", file=sys.stderr)
+    filtered = len(pending) - len(results)
+    print(f"\nStaging complete. Staged: {len(results)}, Skipped: {len(threads) - len(pending)}{f', Filtered (no job/jobs): {filtered}' if filtered else ''}", file=sys.stderr)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        SEARCH_RESULTS = sys.argv[1]
-    else:
-        SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-        SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results_new.json")
-        if not os.path.exists(SEARCH_RESULTS):
-            SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results.json")
-
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results_new.json")
+    if not os.path.exists(SEARCH_RESULTS):
+        SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results.json")
     stage_emails(SEARCH_RESULTS)
