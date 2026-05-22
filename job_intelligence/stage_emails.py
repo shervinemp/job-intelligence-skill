@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""stage_emails.py — Fetch & clean emails from search_results.json into DB stage table."""
+"""stage_emails.py — Search Gmail, save threads to DB, fetch & clean emails."""
 
 import json
 import os
@@ -7,13 +7,15 @@ import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from html import unescape
 
-from lib.db import stage_save, stage_exists, setting_get, setting_set
+from lib.db import stage_save, setting_get, setting_set
+from lib.db import search_threads_save, search_threads_pending, search_threads_clear, get_conn
 
-GMAIL_CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gmail-cli", "gmail_cli.py")
+SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
+GMAIL_CLI = os.path.join(SKILL_DIR, "..", "gmail-cli", "gmail_cli.py")
 _POOL_SIZE = 8
-
 
 _FOOTER_MARKS = [
     "unsubscribe", "manage your", "you are receiving this",
@@ -25,8 +27,31 @@ _FOOTER_MARKS = [
 ]
 
 
+def _load_query():
+    path = os.path.join(SKILL_DIR, ".env")
+    if os.path.exists(path):
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("GMAIL_SEARCH_QUERY="):
+                    return line[len("GMAIL_SEARCH_QUERY="):].strip().strip('"').strip("'")
+    return os.environ.get("GMAIL_SEARCH_QUERY", "label:Jobs OR from:linkedin OR from:indeed OR subject:job")
+
+
+def _run_search(query):
+    r = subprocess.run(
+        [sys.executable, GMAIL_CLI, "gmail", "search"] + query.split() + ["--all", "--json"],
+        capture_output=True, timeout=120,
+    )
+    if r.returncode != 0:
+        err = r.stderr.decode("utf-8", errors="replace").strip()
+        print(f"Search failed: {err}", file=sys.stderr)
+        sys.exit(1)
+    raw = r.stdout.decode("utf-8", errors="replace")
+    return json.loads(raw)
+
+
 def _strip_footer(text):
-    """Remove everything from the last footer marker onwards, but only if it's in the last 30%."""
     cutoff = len(text) * 0.3
     lower = text.lower()
     best = len(text)
@@ -72,7 +97,6 @@ def clean_html(html):
 
 
 def _fetch_one(tid):
-    """Fetch and clean a single email. Returns (tid, cleaned_text) or (tid, None) on failure."""
     try:
         r = subprocess.run([sys.executable, GMAIL_CLI, 'gmail', 'get', tid],
                            capture_output=True, timeout=60)
@@ -86,29 +110,10 @@ def _fetch_one(tid):
         return tid, None
 
 
-def stage_emails(search_results_path):
-    if not os.path.exists(search_results_path):
-        print(f"Error: {search_results_path} not found. Run gmail-cli search first.", file=sys.stderr)
-        sys.exit(1)
+def stage_emails():
+    staged_ids = set(setting_get("staged_ids", []))
 
-    with open(search_results_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    threads = data.get('threads', [])
-    print(f"Found {len(threads)} threads in search results.", file=sys.stderr)
-
-    staged = set(setting_get("staged_ids", []))
-
-    pending = []
-    for thread in threads:
-        tid = thread['id']
-        if tid in staged:
-            continue
-        if stage_exists(tid):
-            staged.add(tid)
-            continue
-        pending.append(tid)
-
+    pending = search_threads_pending()
     if not pending:
         print("No new threads to stage.", file=sys.stderr)
         return
@@ -117,7 +122,7 @@ def stage_emails(search_results_path):
 
     results = []
     with ThreadPoolExecutor(max_workers=_POOL_SIZE) as pool:
-        futures = {pool.submit(_fetch_one, tid): tid for tid in pending}
+        futures = {pool.submit(_fetch_one, tid): tid for tid, *_ in pending}
         done = 0
         for future in as_completed(futures):
             done += 1
@@ -127,19 +132,44 @@ def stage_emails(search_results_path):
             if done % 50 == 0 or done == len(pending):
                 print(f"  {done}/{len(pending)} fetched ({len(results)} ok)", file=sys.stderr)
 
-    new_staged = list(staged)
+    new_staged = list(staged_ids)
     for tid, text in results:
         stage_save(tid, text)
         new_staged.append(tid)
 
     setting_set("staged_ids", new_staged)
     filtered = len(pending) - len(results)
-    print(f"\nStaging complete. Staged: {len(results)}, Skipped: {len(threads) - len(pending)}{f', Filtered (no job/jobs): {filtered}' if filtered else ''}", file=sys.stderr)
+    print(f"\nStaging complete. Staged: {len(results)}{f', Filtered (no job/jobs): {filtered}' if filtered else ''}", file=sys.stderr)
 
 
 if __name__ == "__main__":
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results_new.json")
-    if not os.path.exists(SEARCH_RESULTS):
-        SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results.json")
-    stage_emails(SEARCH_RESULTS)
+    days = 14
+    refresh = False
+    remaining = []
+    i = 1
+    while i < len(sys.argv):
+        a = sys.argv[i]
+        if a == "--refresh":
+            refresh = True
+        elif a == "--days" and i + 1 < len(sys.argv):
+            days = int(sys.argv[i + 1])
+            i += 1
+        else:
+            remaining.append(a)
+        i += 1
+    sys.argv = remaining or [sys.argv[0]]
+
+    if refresh:
+        search_threads_clear()
+        setting_set("staged_ids", [])
+
+    query = _load_query()
+    if days:
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y/%m/%d")
+        query = f"{query} after:{cutoff}"
+    print(f"Searching Gmail (last {days}d)", file=sys.stderr)
+    data = _run_search(query)
+    threads = data.get("threads", [])
+    print(f"Found {len(threads)} threads.", file=sys.stderr)
+    search_threads_save(threads)
+    stage_emails()

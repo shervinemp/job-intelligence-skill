@@ -1,15 +1,14 @@
 # Job Intelligence Pipeline
 
 > **Windows note**: All commands must be prefixed with `python3` (e.g. `python3 extract.py`).  
-> Bare `extract.py` opens the file in VSCode instead of running it.  
-> `search_results.json` in workspace root is the Gmail search output — keep for re-staging.
+> Bare `extract.py` opens the file in VSCode instead of running it.
 
 ## Pipeline stages
 
 | Stage | What happens | Filter / Gate |
 |-------|-------------|--------------|
-| **gmail search** | `python3 skills/gmail-cli/gmail_cli.py gmail search '<query>' --all -j > search_results.json` | — |
-| **stage** | `python3 stage_emails.py` — fetches + cleans each email (defaults to `search_results.json`) | Auto: skips emails without `job`/`jobs` keyword |
+| **search + stage** | `python3 stage_emails.py [--days N]` — searches Gmail (last 14d), saves threads to DB, fetches + cleans each email | Auto: skips emails without `job`/`jobs` keyword |
+| **re-search** | `python3 stage_emails.py --refresh [--days N]` — clears cached threads, re-searches Gmail, re-stages | — |
 | **extract** | `python3 extract.py` — finds all URLs in staged emails, saves to DB | SLM: `admit`/`reject` each extracted URL |
 | **fetch** | `python3 fetch.py` — visits each URL (Playwright), scrapes description | SLM: `admit`/`reject`/`flag` each description |
 | **tailor** | `python3 tailor.py [--count N]` — Gemini crafts CV | SLM: `done`/`skip`/`redo` |
@@ -18,6 +17,9 @@
 
 | I run | What happens | What I do |
 |-------|-------------|-----------|
+| `python3 stage_emails.py` | Search Gmail (last 14d), stage new threads | — |
+| `python3 stage_emails.py --refresh` | Re-search + re-stage everything | — |
+| `python3 stage_emails.py --days 30` | Override lookback to 30 days | — |
 | `python3 extract.py` | Auto-extract URLs, shows `JOB:{jid}:{url}` with context | `admit`/`reject` each |
 | `python3 extract.py admit <jid>` | Keep the extracted job | — |
 | `python3 extract.py reject <jid>` | Skip the extracted job | — |

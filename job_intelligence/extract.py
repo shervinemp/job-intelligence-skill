@@ -131,6 +131,7 @@ def cmd_reset():
     c.execute("DELETE FROM jobs")
     c.execute("DELETE FROM companies")
     c.execute("DELETE FROM stages")
+    c.execute("DELETE FROM search_threads")
     c.execute("PRAGMA foreign_keys=ON")
     c.commit()
     setting_set(EXTRACTED_IDS_KEY, [])

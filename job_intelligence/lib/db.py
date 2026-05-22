@@ -99,6 +99,13 @@ def _create_v3_tables():
             reached_out INTEGER DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS search_threads (
+            thread_id TEXT PRIMARY KEY,
+            subject TEXT NOT NULL DEFAULT '',
+            date TEXT NOT NULL DEFAULT '',
+            from_addr TEXT NOT NULL DEFAULT '',
+            searched_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id TEXT NOT NULL REFERENCES jobs(id),
@@ -661,6 +668,33 @@ def setting_set(key, value):
     c.commit()
 
 
+# =========================================================================
+# Search Threads
+# =========================================================================
+
+def search_threads_save(threads):
+    c = get_conn()
+    for t in threads:
+        c.execute(
+            "INSERT OR IGNORE INTO search_threads (thread_id, subject, date, from_addr) VALUES (?,?,?,?)",
+            (t["id"], t.get("subject", ""), t.get("date", ""), t.get("from", "")),
+        )
+    c.commit()
+
+
+def search_threads_pending():
+    staged = set(setting_get("staged_ids", []))
+    rows = get_conn().execute(
+        "SELECT thread_id, subject, date, from_addr FROM search_threads ORDER BY date"
+    ).fetchall()
+    return [(r["thread_id"], r["subject"], r["date"], r["from_addr"]) for r in rows
+            if r["thread_id"] not in staged]
+
+
+def search_threads_clear():
+    c = get_conn()
+    c.execute("DELETE FROM search_threads")
+    c.commit()
 
 
 
