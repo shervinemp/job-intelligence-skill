@@ -107,11 +107,11 @@ def main():
         elif cmd == "status":
             cmd_status()
     elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
-        count = 1
+        count = 3
         if "--count" in sys.argv:
             i = sys.argv.index("--count")
             if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
-                print("Warning: --count requires a number, using default 1", file=sys.stderr)
+                print("Warning: --count requires a number, using default 3", file=sys.stderr)
             else:
                 count = int(sys.argv[i + 1])
         cmd_review(count)

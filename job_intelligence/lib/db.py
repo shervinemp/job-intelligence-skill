@@ -724,7 +724,7 @@ def pipeline_status():
 
     next_step = ""
     if pending_staged > 0:
-        next_step = f"extract.py --count {min(5, pending_staged)}"
+        next_step = f"extract.py --count {min(3, pending_staged)}"
     elif state["stages"].get("extracted", 0) > 0:
         next_step = "fetch.py --count 10"
     elif state["stages"].get("described", 0) > 0:

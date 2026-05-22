@@ -15,55 +15,30 @@ GMAIL_CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gmai
 _POOL_SIZE = 8
 
 
-_FOOTER_MARKS = [
-    "unsubscribe", "manage your", "preferences", "you are receiving this",
-    "you received this email", "you're receiving this", "this email was intended",
-    "view in browser", "view this email", "view email as a web page",
-    "privacy policy", "terms of service", "all rights reserved",
-    "help centre", "contact us", "email was sent to",
-    "if you don't want", "if you prefer not", "to stop receiving",
-    "this is a secure transaction", "for your security",
-]
-
-
-def _strip_footer(text):
-    """Remove everything from the first footer marker to the end."""
-    lower = text.lower()
-    best = len(text)
-    for mark in _FOOTER_MARKS:
-        idx = lower.find(mark)
-        if idx != -1 and idx < best:
-            best = idx
-    if best < len(text):
-        text = text[:best]
-    return text.strip()
-
-
 def clean_html(html):
     html = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
-    # Remove tracking images (1x1 transparent gifs)
     html = re.sub(r'<img[^>]*\ssrc=["\'][^"\']*(?:track|pixel|spacer|beacon|open)[^"\']*["\'][^>]*/?>', '', html, flags=re.IGNORECASE)
-    # Remove social media / app-store icon links (link text shorter than 4 chars, typically icons)
     html = re.sub(r'<a\s+[^>]*href=["\'][^"\']*["\'][^>]*>\s*</a>', '', html)
-    # Strip email obfuscation spans (common in Gmail HTML)
     html = re.sub(r'<span[^>]*>\u200c</span>', '', html)
-    # Convert meaningful links: <a href="url">text</a> -> [url] text
+
+    seen_urls = set()
     def link_replacer(match):
         url = match.group(1)
+        if url in seen_urls:
+            return ""
+        seen_urls.add(url)
         text = re.sub(r'<[^>]+>', '', match.group(2).strip())
         if not text or len(text) < 2:
             return f" {url}"
         return f" [{url}] {text} "
     html = re.sub(r'<a\s+(?:[^>]*?\s+)?href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', link_replacer, html, flags=re.DOTALL | re.IGNORECASE)
-    # Remove remaining HTML tags
+
     html = re.sub(r'<[^>]+>', ' ', html)
     text = unescape(html)
-    # Remove zero-width characters
     text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
-    # Strip footer noise
-    text = _strip_footer(text)
     text = re.sub(r'\s+', ' ', text)
-    return text.encode('utf-8', errors='replace').decode('utf-8').strip()
+    text = text.encode('utf-8', errors='replace').decode('utf-8').strip()
+    return text[:3000]
 
 
 def _fetch_one(tid):
