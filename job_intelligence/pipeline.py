@@ -48,7 +48,9 @@ def cmd_step():
     extracted_ids = set(setting_get("extracted_ids", []))
     pending_extract = total_stage - len(extracted_ids)
     if pending_extract > 0:
-        print(f"STEP:extract {pending_extract} pending — run `python3 extract.py run --count {min(pending_extract, EXTRACT_COUNT)}` manually")
+        count = min(pending_extract, EXTRACT_COUNT)
+        r = _run("extract.py", "step", "--count", str(count))
+        print(f"STEP:extract {count} (read above, then submit)")
         return
 
     # 2. Check for described jobs (need tailor) — fetch is manual via DESC/admit/reject
