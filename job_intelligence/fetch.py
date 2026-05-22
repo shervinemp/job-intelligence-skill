@@ -9,6 +9,22 @@ from lib import auth_walls
 MAX_DESC_LEN = 8000
 
 
+_AUTH_SIGNALS = [
+    "sign in", "sign in to view", "sign in to see", "sign in to continue",
+    "log in", "log in to view", "log in to continue",
+    "create account to view", "join now to see", "please sign in",
+    "authwall", "auth_wall", "this page requires you to sign in",
+]
+
+
+def _detect_auth_wall(text):
+    t = (text or "").lower()
+    for signal in _AUTH_SIGNALS:
+        if signal in t:
+            return True
+    return False
+
+
 def _pw_fetch(url, timeout=30):
     """Fetch a URL via Playwright. Uses chrome_manager for CDP or fallback."""
     try:
@@ -18,24 +34,28 @@ def _pw_fetch(url, timeout=30):
     try:
         b, ctx = connect()
         if ctx:
-            p = ctx.pages[0] if ctx.pages else ctx.new_page()
+            p = ctx.new_page()
             p.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
             p.wait_for_timeout(2000)
             text = p.evaluate('document.body.innerText')
             b.close()
             if text and len(text.strip()) > 80:
                 return True, text.strip()
+            if _detect_auth_wall(text):
+                return False, "auth_wall"
             return False, f"Short text ({len(text or '')} chars)"
         else:
             with sync_playwright() as spw:
                 ctx = spw.chromium.launch_persistent_context(BROWSER_PROFILE, headless=True, no_viewport=True)
-                p = ctx.pages[0] if ctx.pages else ctx.new_page()
+                p = ctx.new_page()
                 p.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
                 p.wait_for_timeout(2000)
                 text = p.evaluate('document.body.innerText')
                 ctx.close()
                 if text and len(text.strip()) > 80:
                     return True, text.strip()
+                if _detect_auth_wall(text):
+                    return False, "auth_wall"
                 return False, f"Short text ({len(text or '')} chars)"
     except Exception as e:
         return False, str(e)[:120]
@@ -183,7 +203,7 @@ def cmd_retry(use_playwright=True):
 
 
 def cmd_open():
-    """Open single visible browser tab for the first flagged job. Browser stays open 5min."""
+    """Open visible Chrome tab for the first flagged job. Waits for user to close tab, then retries all."""
     from playwright.sync_api import sync_playwright
     entries = auth_walls.list_all()
     if not entries:
@@ -193,20 +213,20 @@ def cmd_open():
     entry = entries[0]
     url = entry.get("url", "https://linkedin.com")
     print(f"OPENING: {entry.get('title','')[:40]} @ {entry.get('company','')[:20]}", file=sys.stderr)
-    print("Log in, close browser. Pipeline will retry flagged jobs after.", file=sys.stderr)
+    print("Log in, close the tab. Pipeline retries flagged jobs after.", file=sys.stderr)
 
     b, ctx = connect()
     if ctx is not None:
-        p = ctx.pages[0] if ctx.pages else ctx.new_page()
+        p = ctx.new_page()
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
         p.wait_for_timeout(2000)
-        for i in range(300):
+        try:
+            p.bring_to_front()
+        except Exception:
+            pass
+        for _ in range(300):
             try:
-                pages = ctx.pages
-                if not pages:
-                    break
-                p = pages[0]
-                if p.url() == "about:blank" or p.is_closed():
+                if p.is_closed():
                     break
             except Exception:
                 break
@@ -217,22 +237,28 @@ def cmd_open():
             b = spw.chromium.launch_persistent_context(
                 BROWSER_PROFILE, headless=False, no_viewport=True,
             )
-            p = b.pages[0] if b.pages else b.new_page()
+            p = b.new_page()
             p.goto(url, wait_until="domcontentloaded", timeout=30000)
             p.wait_for_timeout(2000)
-            for i in range(300):
+            for _ in range(300):
                 try:
-                    if not b.pages:
-                        break
-                    p = b.pages[0]
-                    if p.url() == "about:blank" or p.is_closed():
+                    if not p.is_closed():
                         break
                 except Exception:
                     break
                 time.sleep(1)
             b.close()
     print("LOGIN_DONE — retrying flagged jobs", file=sys.stderr)
-    cmd_run(count=30, use_playwright=True, force=True)
+
+    state = load()
+    for e in entries:
+        jid = e.get("jid")
+        if jid and jid in state.get("jobs", {}):
+            entry_obj = state["jobs"][jid]
+            if entry_obj.get("stage") == "failed":
+                advance(entry_obj, "extracted", error=None)
+    save(state)
+    cmd_run(count=50, use_playwright=True, force=True)
 
 
 def main():
