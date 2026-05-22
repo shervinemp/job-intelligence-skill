@@ -54,13 +54,13 @@ def clean_html(html):
         if len(url) > 150:
             if '?' in url:
                 base, qs = url.split('?', 1)
-                limit = max(0, 150 - len(base) - 1)
-                if limit > 0:
-                    cut = qs[:limit]
+                budget = 150 - len(base) - 1
+                if budget > 0:
+                    cut = qs[:budget]
                     last = cut.rfind('&')
                     url = base + '?' + (cut[:last] if last > 0 else cut) + '...'
                 else:
-                    url = base[:150] + '...'
+                    url = base + '?...'
             else:
                 url = url[:150] + '...'
         text = re.sub(r'<[^>]+>', '', match.group(2).strip())
