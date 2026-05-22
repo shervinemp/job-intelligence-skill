@@ -5,7 +5,7 @@
  * gem, sets 3.5 Flash + Extended thinking, sends a prompt, reads response.
  *
  * Start Chrome:
- *   & "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="%USERPROFILE%\.openclaw\chrome-profile" --remote-debugging-port=9222 --no-first-run
+ *   & "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="C:\Users\sherv\.openclaw\chrome-profile" --remote-debugging-port=9222 --no-first-run
  *
  * Usage:
  *   node gemini.js "your prompt"
@@ -26,7 +26,7 @@ const os = require('os');
 
 const SESSION = path.join(__dirname, 'session.json');
 const CDP = 'http://127.0.0.1:9222';
-const CHROME_PATH = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const CHROME_PROFILE = path.join(os.homedir(), '.openclaw', 'chrome-profile');
 
 function loadGemId() {
@@ -308,23 +308,18 @@ async function read(page, timeout = 360000) {
 
 // ─── Delete last conversation ──────────────────────────
 
-async function deleteChat(page, convTitle) {
+async function deleteChat(page) {
   try {
     await wait(2000);
 
-    // Cross-check: verify the first conversation still matches what we captured
-    const match = await page.evaluate((title) => {
-      const conv = document.querySelector('[data-test-id="conversation"]');
-      if (!conv) return false;
-      const current = (conv.textContent || '').trim().substring(0, 40);
-      return title && current === title;
-    }, convTitle);
-    if (!match) { log('deleteChat: conversation mismatch, skipping'); return; }
+    // Cross-check: verify we're on the gem page
+    const onGem = await page.evaluate(() => location.href.includes('/gem/'));
+    if (!onGem) { log('deleteChat: not on gem page'); return; }
 
     const moreBtn = await page.evaluate(() => {
-      const conv = document.querySelector('[data-test-id="conversation"]');
-      if (!conv) return false;
-      conv.scrollIntoView({ block: 'center' });
+      const first = document.querySelector('[data-test-id="conversation"]');
+      if (!first) return false;
+      first.scrollIntoView({ block: 'center' });
       const btn = document.querySelector('button[data-test-id="actions-menu-button"]');
       if (btn) { btn.click(); return true; }
       return false;
@@ -417,6 +412,13 @@ async function dump(page) {
     }
     log('3.5 Flash + Extended thinking');
 
+    // Verify mode stick — if UI changed, this logs and continues anyway
+    const modeText = await page.evaluate(() => {
+      const btn = document.querySelector('[data-test-id="bard-mode-menu-button"]');
+      return btn ? (btn.textContent || '').trim() : 'unknown';
+    });
+    log(`mode: ${modeText}`);
+
     let resp = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) {
@@ -447,13 +449,7 @@ async function dump(page) {
       } catch (e) { log(`app-dir write failed: ${e.message}`); }
     }
 
-    // Capture the active conversation title (no navigation between now and delete)
-    const convTitle = await page.evaluate(() => {
-      const el = document.querySelector('[data-test-id="conversation"]');
-      return el ? (el.textContent || '').trim().substring(0, 40) : null;
-    });
-
-    await deleteChat(page, convTitle);
+    await deleteChat(page);
     await page.close();
     process.exit(0);
   } catch (e) {

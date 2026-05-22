@@ -38,7 +38,7 @@ def _pw_try_cdp():
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        return None, None
+        return None, None, None
     pw = sync_playwright().start()
     for port in CDP_PORTS:
         try:
