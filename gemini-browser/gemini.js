@@ -542,10 +542,10 @@ async function dump(page) {
       process.exit(1);
     }
 
-    console.log(resp);
-
     if (opts.outputFile) {
       try { fs.writeFileSync(opts.outputFile, resp, 'utf8'); } catch (e) { log(`write failed: ${e.message}`); }
+    } else {
+      console.log(resp);
     }
     if (opts.appDir) {
       try {
