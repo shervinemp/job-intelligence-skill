@@ -98,7 +98,12 @@ def fetch_description(url, use_playwright=False):
 
 
 def save_description(jid, text):
-    desc_save(jid, text[:MAX_DESC_LEN])
+    text = text[:MAX_DESC_LEN]
+    cutoff = int(len(text) * 0.3)
+    idx = text.lower().find('copyright', cutoff)
+    if idx != -1:
+        text = text[:idx].strip()
+    desc_save(jid, text)
 
 
 def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbose=False):

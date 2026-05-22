@@ -68,6 +68,9 @@ def generate_tailored_docs(job_entry):
     ]:
         desc_clean = desc_clean.replace(bad, good)
 
+    desc_clean = re.sub(r'https?://\S+', '', desc_clean)
+    desc_clean = re.sub(r'\n{2,}', '\n', desc_clean).strip()
+
     prompt = JOB_PROMPT_TEMPLATE.format(
         title=title_clean,
         company=job.get("company", "Unknown"),
