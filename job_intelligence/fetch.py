@@ -10,7 +10,7 @@ from lib.chrome_manager import CHROME_PROFILE as BROWSER_PROFILE, connect
 
 MAX_DESC_LEN = 8000
 
-NEEDS_AUTH_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "needs_auth.json")
+NEEDS_AUTH_PATH = os.path.join(os.path.expanduser('~'), '.openclaw', 'needs_auth.json')
 
 
 def _record_auth_wall(jid, url, title, company):
@@ -31,7 +31,7 @@ def _record_auth_wall(jid, url, title, company):
         json.dump(entries, f, indent=2)
 
 
-# CDP connection moved to lib.chrome_manager.connect()
+
 
 def _pw_fetch(url, timeout=30):
     """Fetch a URL via Playwright. Uses chrome_manager for CDP or fallback."""
