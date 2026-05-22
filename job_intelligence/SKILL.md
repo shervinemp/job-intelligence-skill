@@ -7,9 +7,10 @@
 
 | I run | What happens | What I do |
 |-------|-------------|-----------|
-| `python3 extract.py [--count N]` | Prints staged email, extracts URLs | Pick URLs → `submit <tid> '<json>'` |
-| `python3 fetch.py [--count N] [--curl] [--force]` | Fetches descriptions for extracted jobs | `admit`/`reject`/`flag` each |
-| `python3 fetch.py --refresh [--count N]` | Re-fetches described URLs (freshness check) | Same admit/reject/flag |
+| `python3 extract.py clean` | Filter non-job emails + auto-extract URLs | — |
+| `python3 extract.py [--count N]` | Prints staged email for manual URL picking | Pick URLs → `submit <tid> '<json>'` |
+| `python3 fetch.py` | Fetches descriptions for all extracted jobs (Playwright) | `admit`/`reject`/`flag` each |
+| `python3 fetch.py --refresh` | Re-fetches described URLs (freshness check) | Same admit/reject/flag |
 | `python3 fetch.py admit <jid>` | Mark job as described | — |
 | `python3 fetch.py reject <jid>` | Mark job as skipped (garbage/closed) | — |
 | `python3 fetch.py flag <jid>` | Mark auth wall (save to needs_auth.json) | — |

@@ -3,6 +3,7 @@
 Usage:
   extract.py [--count N]        Show N staged emails to pick URLs from (default: 1)
   extract.py submit <tid> <json>  Save extracted jobs from an email
+  extract.py clean               Filter non-job emails + auto-extract URLs
   extract.py reset               Clear all jobs and start fresh
   extract.py status              Pipeline status
 """
@@ -93,8 +94,52 @@ def cmd_status():
     print(f"  next: {s['next_step']}", file=sys.stderr)
 
 
+_URL_PATTERNS = [
+    r'https?://(?:www\.)?jobright\.ai/jobs/info/[a-zA-Z0-9]+',
+    r'https?://(?:www\.)?linkedin\.com/jobs/view/\d+',
+    r'https?://(?:www\.)?linkedin\.com/comm/jobs/view/\d+',
+    r'https?://(?:www\.)?indeed\.com/viewjob\?[^"\s>]+',
+    r'https?://(?:www\.)?careerbeacon\.com/job/\d+',
+    r'https?://[^"\s>]*teamtailor[^"\s>]+',
+    r'https?://[^"\s>]*jobs2web[^"\s>]+',
+]
+
+
+def cmd_clean():
+    all_staged = stage_list_all()
+    pending_ids = set(setting_get(EXTRACTED_IDS_KEY, []))
+    pending = [(tid, content) for tid, content in all_staged if tid not in pending_ids]
+    if not pending:
+        print("ALL_EXTRACTED", file=sys.stderr)
+        return
+    filtered = 0
+    total = 0
+    extracted_ids = list(pending_ids)
+    for tid, content in pending:
+        if not re.search(r'\b(job|jobs)\b', content.lower()):
+            filtered += 1
+            extracted_ids.append(tid)
+            continue
+        urls = set()
+        for pat in _URL_PATTERNS:
+            for m in re.finditer(pat, content):
+                urls.add(m.group(0).rstrip(')'))
+        if not urls:
+            extracted_ids.append(tid)
+            continue
+        count = 0
+        for url in urls:
+            if add_job({"url": url, "email_id": tid, "source": "Email", "source_url": url}):
+                count += 1
+        total += count
+        extracted_ids.append(tid)
+        print(f"  {tid}: {count} jobs", file=sys.stderr)
+    setting_set(EXTRACTED_IDS_KEY, extracted_ids)
+    print(f"\nFiltered: {filtered} non-job | Extracted: {total} jobs", file=sys.stderr)
+
+
 def main():
-    subcommands = {"submit", "reset", "status"}
+    subcommands = {"submit", "reset", "status", "clean"}
     if len(sys.argv) > 1 and sys.argv[1] in subcommands:
         cmd = sys.argv[1]
         if cmd == "submit":
@@ -106,6 +151,8 @@ def main():
             cmd_reset()
         elif cmd == "status":
             cmd_status()
+        elif cmd == "clean":
+            cmd_clean()
     elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
         count = 3
         if "--count" in sys.argv:
