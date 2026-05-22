@@ -16,7 +16,7 @@ import re
 import sys
 
 from lib.db import stage_list_all, stage_count, setting_get, setting_set
-from lib.db import add_job
+from lib.db import add_job, load
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 EXTRACTED_IDS_KEY = "extracted_ids"
@@ -116,7 +116,7 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: python3 extract.py <cmd> [args]", file=sys.stderr)
         print("Commands:", file=sys.stderr)
-        print("  step [--count N]     Automated: LLM → fetch → LLM → save (end-to-end)", file=sys.stderr)
+        print("  step [--count N]     Print staged emails for LLM to identify job URLs", file=sys.stderr)
         print("  run [--count N]      Print staged emails for manual review", file=sys.stderr)
         print("  submit <tid> <json>  Submit LLM results manually", file=sys.stderr)
         print("  reset                Clear state and start fresh", file=sys.stderr)
