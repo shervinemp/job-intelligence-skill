@@ -6,10 +6,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 from lib.db import load, save, advance
 from lib.db import desc_save, desc_exists, desc_get, get_jobs_by_stage, get_job
+from lib.chrome_manager import CHROME_PROFILE as BROWSER_PROFILE, connect
 
 MAX_DESC_LEN = 8000
 
-BROWSER_PROFILE = os.path.join(os.path.expanduser('~'), '.openclaw', 'chrome-profile')
 NEEDS_AUTH_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "needs_auth.json")
 
 
@@ -31,33 +31,26 @@ def _record_auth_wall(jid, url, title, company):
         json.dump(entries, f, indent=2)
 
 
-CDP_PORTS = [9222, 9223]
-
-def _pw_try_cdp():
-    """Try connecting to an existing CDP endpoint. Returns (browser, context) or (None, None)."""
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return None, None, None
-    pw = sync_playwright().start()
-    for port in CDP_PORTS:
-        try:
-            b = pw.chromium.connect_over_cdp(f'http://127.0.0.1:{port}')
-            ctx = b.contexts[0]
-            return pw, b, ctx
-        except Exception:
-            continue
-    pw.stop()
-    return None, None, None
+# CDP connection moved to lib.chrome_manager.connect()
 
 def _pw_fetch(url, timeout=30):
+    """Fetch a URL via Playwright. Uses chrome_manager for CDP or fallback."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return False, "Playwright not installed"
     try:
-        pw, b, ctx = _pw_try_cdp()
-        if ctx is None:
+        b, ctx = connect()
+        if ctx:
+            p = ctx.pages[0] if ctx.pages else ctx.new_page()
+            p.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+            p.wait_for_timeout(2000)
+            text = p.evaluate('document.body.innerText')
+            b.close()
+            if text and len(text.strip()) > 80:
+                return True, text.strip()
+            return False, f"Short text ({len(text or '')} chars)"
+        else:
             with sync_playwright() as spw:
                 ctx = spw.chromium.launch_persistent_context(BROWSER_PROFILE, headless=True, no_viewport=True)
                 p = ctx.pages[0] if ctx.pages else ctx.new_page()
@@ -68,49 +61,13 @@ def _pw_fetch(url, timeout=30):
                 if text and len(text.strip()) > 80:
                     return True, text.strip()
                 return False, f"Short text ({len(text or '')} chars)"
-        else:
-            p = ctx.pages[0] if ctx.pages else ctx.new_page()
-            p.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
-            p.wait_for_timeout(2000)
-            text = p.evaluate('document.body.innerText')
-            pw.stop()
-            if text and len(text.strip()) > 80:
-                return True, text.strip()
-            return False, f"Short text ({len(text or '')} chars)"
     except Exception as e:
         return False, str(e)[:120]
 
 
+# _pw_chase is an alias for _pw_fetch (both use chrome_manager)
 def _pw_chase(url, timeout=30):
-    """Fetch a URL via Playwright. No link chasing — LLM decides which URLs to follow."""
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return _pw_fetch(url, timeout)
-    try:
-        spw = None
-        pw, b, ctx = _pw_try_cdp()
-        own_context = ctx is None
-        if own_context:
-            spw = sync_playwright().start()
-            ctx = spw.chromium.launch_persistent_context(BROWSER_PROFILE, headless=True, no_viewport=True)
-
-        p = ctx.pages[0] if ctx.pages else ctx.new_page()
-        p.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
-        p.wait_for_timeout(3000)
-        text = p.evaluate('document.body.innerText')
-
-        if own_context:
-            ctx.close()
-            spw.stop()
-        else:
-            pw.stop()
-
-        if text and len(text.strip()) > 80:
-            return True, text.strip()[:MAX_DESC_LEN]
-        return False, f"Short text ({len(text or '')} chars)"
-    except Exception as e:
-        return False, str(e)[:120]
+    return _pw_fetch(url, timeout)
 
 
 def fetch_description(url, use_playwright=False):
@@ -265,7 +222,7 @@ def cmd_open():
     print("Log in, close browser. Pipeline auto-retries after.", file=sys.stderr)
 
     # Try connecting to an existing Chrome first (e.g. Gemini browser already running)
-    pw, b, ctx = _pw_try_cdp()
+    b, ctx = connect()
     if ctx is not None:
         p = ctx.pages[0] if ctx.pages else ctx.new_page()
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
