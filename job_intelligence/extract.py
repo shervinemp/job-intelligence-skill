@@ -220,17 +220,20 @@ def _mark_extracted(tid, count):
 
 def cmd_reset():
     """Reset extraction state and clear stale jobs from old regex extraction."""
-    answer = input("Reset all 470 stale jobs and extraction state? (y/N): ")
-    if answer.lower() != "y":
-        print("Canceled.")
-        return
-    # Clear extracted_ids
+    from lib.db import get_conn
+    c = get_conn()
+    c.execute("PRAGMA foreign_keys=OFF")
+    c.execute("DELETE FROM events")
+    c.execute("DELETE FROM job_documents")
+    c.execute("DELETE FROM jobs")
+    c.execute("DELETE FROM companies")
+    c.execute("PRAGMA foreign_keys=ON")
+    c.commit()
     setting_set(EXTRACTED_IDS_KEY, [])
-    # Clear jobs from state
-    state = load()
-    state["jobs"] = {}
-    state["stages"] = {s: 0 for s in ["extracted", "described", "tailored", "applied", "skipped", "failed"]}
-    save(state)
+    import shutil
+    res_dir = os.path.join(SKILL_DIR, "results")
+    if os.path.exists(res_dir):
+        shutil.rmtree(res_dir)
     print("Reset complete. Staged emails ready for fresh extraction.", file=sys.stderr)
 
 
