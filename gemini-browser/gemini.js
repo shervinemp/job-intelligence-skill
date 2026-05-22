@@ -162,35 +162,27 @@ async function ensureMode(page) {
   await modeBtn().click();
   await wait(2000);
 
-  // Check inside the picker for disabled option with "Limit resets" text
-  const limitInPicker = await page.evaluate(() => {
-    const items = document.querySelectorAll('[data-test-id^="bard-mode-option-"], gem-menu-item');
-    for (const item of items) {
-      const text = (item.textContent || '').trim();
-      if (/limit resets/i.test(text)) {
-        const idx = text.indexOf('Limit resets ');
-        return { timedOut: true, resetsAt: idx >= 0 ? text.substring(idx + 13).trim() : 'unknown' };
-      }
-    }
-    return { timedOut: false };
-  });
-  if (limitInPicker.timedOut) {
-    await page.keyboard.press('Escape'); await wait(500);
-    return { status: 'timedOut', resetsAt: limitInPicker.resetsAt };
-  }
-
-  // 1. Select 3.5 Flash if not already selected
-  const flashSelected = await page.evaluate(() => {
+  // 1. Select 3.5 Flash — if disabled (rate limited), it shows "Limit resets at X"
+  const flashResult = await page.evaluate(() => {
     const items = document.querySelectorAll('[data-test-id^="bard-mode-option-"]');
     for (const item of items) {
-      if ((item.textContent || '').includes('Flash') && !(item.textContent || '').includes('Lite')) {
+      const text = (item.textContent || '').trim();
+      if (text.includes('Flash') && !text.includes('Lite')) {
+        if (/limit resets/i.test(text)) {
+          const idx = text.indexOf('Limit resets ');
+          return { status: 'timedOut', resetsAt: idx >= 0 ? text.substring(idx + 13).trim() : 'unknown' };
+        }
         const isSel = item.classList.contains('selected');
         if (!isSel) item.click();
-        return isSel;
+        return { status: isSel ? 'already' : 'clicked' };
       }
     }
-    return false;
+    return { status: 'not found' };
   });
+  if (flashResult.status === 'timedOut') {
+    await page.keyboard.press('Escape'); await wait(500);
+    return { status: 'timedOut', resetsAt: flashResult.resetsAt };
+  }
   await wait(1500);
 
   // 2. Expand thinking level and set to Extended
