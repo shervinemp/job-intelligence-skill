@@ -6,9 +6,13 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 
 from lib.db import stage_save, stage_exists, setting_get, setting_set
+
+GMAIL_CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gmail-cli", "gmail_cli.py")
+_POOL_SIZE = 8
 
 
 def clean_html(html):
@@ -25,6 +29,21 @@ def clean_html(html):
     return text.encode('utf-8', errors='replace').decode('utf-8').strip()
 
 
+def _fetch_one(tid):
+    """Fetch and clean a single email. Returns (tid, cleaned_text) or (tid, None) on failure."""
+    try:
+        r = subprocess.run([sys.executable, GMAIL_CLI, 'gmail', 'get', tid],
+                           capture_output=True, timeout=60)
+        if r.returncode != 0:
+            return tid, None
+        cleaned = clean_html(r.stdout.decode('utf-8', errors='replace'))
+        return tid, cleaned
+    except subprocess.TimeoutExpired:
+        return tid, None
+    except Exception:
+        return tid, None
+
+
 def stage_emails(search_results_path):
     if not os.path.exists(search_results_path):
         print(f"Error: {search_results_path} not found. Run gmail-cli search first.", file=sys.stderr)
@@ -38,39 +57,41 @@ def stage_emails(search_results_path):
 
     staged = set(setting_get("staged_ids", []))
 
-    count = 0
-    skipped = 0
-    new_staged = list(staged)
-
+    pending = []
     for thread in threads:
         tid = thread['id']
-
         if tid in staged:
-            skipped += 1
             continue
-
         if stage_exists(tid):
-            new_staged.append(tid)
-            skipped += 1
+            staged.add(tid)
             continue
+        pending.append(tid)
 
-        try:
-            r = subprocess.run(['gmail-cli', 'gmail', 'get', tid], capture_output=True, timeout=60, shell=True)
-            if r.returncode != 0:
-                print(f"  ERROR: {tid}", file=sys.stderr)
-                continue
-            cleaned = clean_html(r.stdout.decode('utf-8', errors='replace'))
-            stage_save(tid, cleaned)
-            new_staged.append(tid)
-            count += 1
-            print(f"  Staged: {tid}", file=sys.stderr)
-        except subprocess.TimeoutExpired:
-            print(f"  TIMEOUT: {tid}", file=sys.stderr)
-        except Exception as e:
-            print(f"  FAIL {tid}: {e}", file=sys.stderr)
+    if not pending:
+        print("No new threads to stage.", file=sys.stderr)
+        return
+
+    print(f"Fetching {len(pending)} threads ({_POOL_SIZE} workers)...", file=sys.stderr)
+
+    results = []
+    with ThreadPoolExecutor(max_workers=_POOL_SIZE) as pool:
+        futures = {pool.submit(_fetch_one, tid): tid for tid in pending}
+        done = 0
+        for future in as_completed(futures):
+            done += 1
+            tid, text = future.result()
+            if text:
+                results.append((tid, text))
+            if done % 50 == 0 or done == len(pending):
+                print(f"  {done}/{len(pending)} fetched ({len(results)} ok)", file=sys.stderr)
+
+    new_staged = list(staged)
+    for tid, text in results:
+        stage_save(tid, text)
+        new_staged.append(tid)
 
     setting_set("staged_ids", new_staged)
-    print(f"\nStaging complete. Staged: {count}, Skipped: {skipped}", file=sys.stderr)
+    print(f"\nStaging complete. Staged: {len(results)}, Skipped: {len(threads) - len(pending)}, Failed: {len(pending) - len(results)}", file=sys.stderr)
 
 
 if __name__ == "__main__":
