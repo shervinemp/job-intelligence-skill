@@ -136,6 +136,7 @@ def cmd_reset():
     c.commit()
     setting_set(EXTRACTED_IDS_KEY, [])
     setting_set("staged_ids", [])
+    setting_set("skipped_ids", [])
     import shutil
     res_dir = os.path.join(SKILL_DIR, "results")
     if os.path.exists(res_dir):

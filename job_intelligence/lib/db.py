@@ -683,12 +683,12 @@ def search_threads_save(threads):
 
 
 def search_threads_pending():
-    staged = set(setting_get("staged_ids", []))
+    seen = set(setting_get("staged_ids", [])) | set(setting_get("skipped_ids", []))
     rows = get_conn().execute(
         "SELECT thread_id, subject, date, from_addr FROM search_threads ORDER BY date"
     ).fetchall()
     return [(r["thread_id"], r["subject"], r["date"], r["from_addr"]) for r in rows
-            if r["thread_id"] not in staged]
+            if r["thread_id"] not in seen]
 
 
 def search_threads_clear():
@@ -760,7 +760,7 @@ def pipeline_status():
     if pending_staged > 0:
         next_step = f"extract.py --count {min(3, pending_staged)}"
     elif state["stages"].get("extracted", 0) > 0:
-        next_step = "fetch.py --count 10"
+        next_step = "fetch.py --count 3"
     elif state["stages"].get("described", 0) > 0:
         next_step = "tailor.py"
     elif state["stages"].get("tailored", 0) > 0:

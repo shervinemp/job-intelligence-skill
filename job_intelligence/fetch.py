@@ -1,17 +1,18 @@
 """fetch.py — Fetch job descriptions. SLM reviews DESC lines, admits or rejects.
 
 Usage:
-  fetch.py [--count N] [--curl] [--force] [--refresh]
+  fetch.py [--count N] [--curl] [--force] [--refresh]   (default --count 3)
   fetch.py admit <jid> [jid...]
   fetch.py reject <jid> [jid...]
   fetch.py flag <jid> [jid...]
   fetch.py open [<jid>]
-  fetch.py retry
+  fetch.py retry               Retry failed fetches
+  fetch.py retry-skipped       Reset all skipped jobs back to extracted
   fetch.py status
 """
 import os, subprocess, sys, time, re
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-from lib.db import load, advance, pipeline_status
+from lib.db import load, advance, pipeline_status, get_conn
 from lib.db import desc_save, desc_exists
 from lib.chrome_manager import CHROME_PROFILE as BROWSER_PROFILE, connect
 from lib import auth_walls
@@ -39,14 +40,14 @@ def _pw_fetch(url, timeout=30):
         from playwright.sync_api import sync_playwright
     except ImportError:
         return False, "Playwright not installed"
+    page = b = None
     try:
         b, ctx = connect()
         if ctx:
-            p = ctx.new_page()
-            p.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
-            p.wait_for_timeout(2000)
-            text = p.evaluate('document.body.innerText')
-            b.close()
+            page = ctx.new_page()
+            page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+            page.wait_for_timeout(2000)
+            text = page.evaluate('document.body.innerText')
             if text and len(text.strip()) > 80:
                 return True, text.strip()
             if _detect_auth_wall(text):
@@ -55,11 +56,10 @@ def _pw_fetch(url, timeout=30):
         else:
             with sync_playwright() as spw:
                 ctx = spw.chromium.launch_persistent_context(BROWSER_PROFILE, headless=True, no_viewport=True)
-                p = ctx.new_page()
-                p.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
-                p.wait_for_timeout(2000)
-                text = p.evaluate('document.body.innerText')
-                ctx.close()
+                page = ctx.new_page()
+                page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+                page.wait_for_timeout(2000)
+                text = page.evaluate('document.body.innerText')
                 if text and len(text.strip()) > 80:
                     return True, text.strip()
                 if _detect_auth_wall(text):
@@ -67,6 +67,17 @@ def _pw_fetch(url, timeout=30):
                 return False, f"Short text ({len(text or '')} chars)"
     except Exception as e:
         return False, str(e)[:120]
+    finally:
+        try:
+            if page:
+                page.close()
+        except Exception:
+            pass
+        try:
+            if b:
+                b.close()
+        except Exception:
+            pass
 
 
 def fetch_description(url, use_playwright=False):
@@ -198,6 +209,16 @@ def cmd_status():
     print(f"  next: {s['next_step']}", file=sys.stderr)
 
 
+def cmd_retry_skipped():
+    c = get_conn()
+    c.execute("UPDATE jobs SET stage='extracted', error=NULL WHERE stage='skipped'")
+    c.commit()
+    count = c.rowcount
+    print(f"UNSKIPPED:{count}", file=sys.stderr)
+    if count:
+        print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
+
+
 def cmd_retry(use_playwright=True):
     state = load()
     failed = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "failed"]
@@ -253,6 +274,7 @@ def cmd_open(*jids):
         except Exception:
             pass
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
+        p.close()
         b.close()
         print("Opened. Close tab when done.", file=sys.stderr)
     else:
@@ -263,14 +285,14 @@ def _parse_count():
     if "--count" in sys.argv:
         i = sys.argv.index("--count")
         if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
-            print("Warning: --count requires a number, using all pending", file=sys.stderr)
-            return None
+            print("Warning: --count requires a number, defaulting to 3", file=sys.stderr)
+            return 3
         return int(sys.argv[i + 1])
-    return None
+    return 3
 
 
 def main():
-    subcommands = {"admit", "reject", "flag", "open", "retry", "status"}
+    subcommands = {"admit", "reject", "flag", "open", "retry", "retry-skipped", "status"}
     if len(sys.argv) > 1 and sys.argv[1] in subcommands:
         cmd = sys.argv[1]
         if cmd == "admit":
@@ -283,6 +305,8 @@ def main():
             cmd_open(*sys.argv[2:])
         elif cmd == "retry":
             cmd_retry(use_playwright='--curl' not in sys.argv)
+        elif cmd == "retry-skipped":
+            cmd_retry_skipped()
         elif cmd == "status":
             cmd_status()
     elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):

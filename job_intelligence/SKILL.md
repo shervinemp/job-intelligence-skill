@@ -25,12 +25,13 @@
 | `python3 extract.py reject <jid>` | Skip the extracted job | — |
 | `python3 extract.py review [--count N]` | Show N staged emails for manual URL picking | Pick URLs → `submit <tid> '<json>'` |
 | `python3 extract.py submit <tid> '<json>'` | Save manually picked URLs | — |
-| `python3 fetch.py` | Fetch all descriptions (Playwright) | `admit`/`reject`/`flag` each |
+| `python3 fetch.py` | Fetch descriptions (default 3, use `--count N`) | `admit`/`reject`/`flag` each |
 | `python3 fetch.py admit <jid>` | Mark job as described | — |
 | `python3 fetch.py reject <jid>` | Skip (garbage/closed) | — |
 | `python3 fetch.py flag <jid>` | Mark auth wall | — |
 | `python3 fetch.py open [<jid>]` | Open in Chrome | View, close tab, decide |
 | `python3 fetch.py retry` | Retry failed fetches | Same admit/reject |
+| `python3 fetch.py retry-skipped` | Reset all skipped jobs back to extracted | — |
 | `python3 fetch.py --refresh` | Re-fetch described URLs | Same admit/reject/flag |
 | `python3 tailor.py [--count N] [--no-open]` | Gemini crafts CV | `done`/`skip`/`redo` |
 | `python3 tailor.py done <jid>` | Mark applied, create .url shortcut | — |

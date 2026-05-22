@@ -4,6 +4,7 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -34,14 +35,14 @@ def _load_query():
             for line in f:
                 line = line.strip()
                 if line.startswith("GMAIL_SEARCH_QUERY="):
-                    return line[len("GMAIL_SEARCH_QUERY="):].strip().strip('"').strip("'")
+                    return line[len("GMAIL_SEARCH_QUERY="):].strip()
     return os.environ.get("GMAIL_SEARCH_QUERY", "label:Jobs OR from:linkedin OR from:indeed OR subject:job")
 
 
 def _run_search(query):
     r = subprocess.run(
-        [sys.executable, GMAIL_CLI, "gmail", "search"] + query.split() + ["--all", "--json"],
-        capture_output=True, timeout=120,
+        [sys.executable, GMAIL_CLI, "gmail", "search"] + shlex.split(query) + ["--all", "--json"],
+        capture_output=True, timeout=180,
     )
     if r.returncode != 0:
         err = r.stderr.decode("utf-8", errors="replace").strip()
@@ -112,6 +113,7 @@ def _fetch_one(tid):
 
 def stage_emails():
     staged_ids = set(setting_get("staged_ids", []))
+    skipped_ids = set(setting_get("skipped_ids", []))
 
     pending = search_threads_pending()
     if not pending:
@@ -121,6 +123,7 @@ def stage_emails():
     print(f"Fetching {len(pending)} threads ({_POOL_SIZE} workers)...", file=sys.stderr)
 
     results = []
+    new_skipped = []
     with ThreadPoolExecutor(max_workers=_POOL_SIZE) as pool:
         futures = {pool.submit(_fetch_one, tid): tid for tid, *_ in pending}
         done = 0
@@ -129,6 +132,8 @@ def stage_emails():
             tid, text = future.result()
             if text and re.search(r'\b(job|jobs)\b', text.lower()):
                 results.append((tid, text))
+            else:
+                new_skipped.append(tid)
             if done % 50 == 0 or done == len(pending):
                 print(f"  {done}/{len(pending)} fetched ({len(results)} ok)", file=sys.stderr)
 
@@ -138,8 +143,8 @@ def stage_emails():
         new_staged.append(tid)
 
     setting_set("staged_ids", new_staged)
-    filtered = len(pending) - len(results)
-    print(f"\nStaging complete. Staged: {len(results)}{f', Filtered (no job/jobs): {filtered}' if filtered else ''}", file=sys.stderr)
+    setting_set("skipped_ids", list(skipped_ids | set(new_skipped)))
+    print(f"\nStaging complete. Staged: {len(results)}, Skipped (no job/jobs): {len(new_skipped)}", file=sys.stderr)
 
 
 if __name__ == "__main__":
@@ -162,6 +167,7 @@ if __name__ == "__main__":
     if refresh:
         search_threads_clear()
         setting_set("staged_ids", [])
+        setting_set("skipped_ids", [])
 
     query = _load_query()
     if days:
