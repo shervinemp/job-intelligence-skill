@@ -101,7 +101,7 @@ def save_description(jid, text):
     desc_save(jid, text[:MAX_DESC_LEN])
 
 
-def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False):
+def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbose=False):
     state = load()
     stage = "described" if refresh else "extracted"
     pending = [(jid, e) for jid, e in state["jobs"].items()
@@ -120,7 +120,8 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False):
         ok, result = fetch_description(url, use_playwright=use_playwright)
         if ok:
             save_description(jid, result)
-            snippet = re.sub(r'\s+', ' ', result[:200].replace('\r', '')).strip()
+            limit = 2000 if verbose else 200
+            snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
             print(f"DESC:{jid}:{snippet}")
             auth_walls.remove(jid)
             fetched += 1
@@ -143,6 +144,8 @@ def cmd_flag(*jids):
         auth_walls.add(jid, url, entry.get("title",""), entry.get("company",""))
         count += 1
     print(f"FLAGGED:{count}", file=sys.stderr)
+    if count:
+        print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
 def cmd_admit(*jids):
@@ -153,6 +156,8 @@ def cmd_admit(*jids):
             advance(state["jobs"][jid], "described")
             count += 1
     print(f"ADMITTED:{count}", file=sys.stderr)
+    if count:
+        print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
 def cmd_reject(*jids):
@@ -163,6 +168,8 @@ def cmd_reject(*jids):
             advance(state["jobs"][jid], "skipped", error="garbage")
             count += 1
     print(f"REJECTED:{count}", file=sys.stderr)
+    if count:
+        print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
 def cmd_status():
@@ -274,6 +281,7 @@ def main():
             use_playwright='--curl' not in sys.argv,
             force='--force' in sys.argv,
             refresh='--refresh' in sys.argv,
+            verbose='--verbose' in sys.argv,
         )
 
 

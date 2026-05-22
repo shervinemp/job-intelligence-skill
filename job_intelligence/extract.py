@@ -56,6 +56,7 @@ def cmd_submit(tid, jobs_json):
         extracted_ids.append(tid)
         setting_set(EXTRACTED_IDS_KEY, extracted_ids)
     print(f"SUBMIT:{tid}:{count}", file=sys.stderr)
+    print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
 def cmd_reset():

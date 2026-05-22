@@ -110,6 +110,7 @@ def generate_tailored_docs(job_entry):
 
     return True, {
         "response_path": f"db://{job_id}/gemini_response.txt",
+        "text": output[:2000],
         "scripts": saved_scripts,
         "strategy_path": strategy_path,
         "notes": "; ".join(notes),
@@ -147,11 +148,13 @@ def cmd_craft(count=1, no_open=False):
                     response_path=result.get("response_path"),
                     scripts=result.get("scripts", []),
                 )
-                if count == 1 and not no_open:
+                if count == 1:
                     print(f"  COMPLETE {jid}", file=sys.stderr)
-                    _cmd_ready(jid)
-                elif no_open:
-                    print(f"  COMPLETE {jid} (--no-open, use 'ready {jid}' later)", file=sys.stderr)
+                    text = result.get("text", "")
+                    if text:
+                        print(f"\n---RESPONSE---\n{text}\n---", file=sys.stderr)
+                    if not no_open:
+                        _cmd_ready(jid)
                 else:
                     scripts_str = ", ".join(result.get("scripts", [])) if result.get("scripts") else "no scripts"
                     print(f"  Complete -> {scripts_str}", file=sys.stderr)
@@ -285,6 +288,8 @@ def cmd_skip(*job_ids):
         else:
             print(f"Job not found: {job_id}", file=sys.stderr)
     print(f"SKIP:{count}", file=sys.stderr)
+    if count:
+        print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
 def cmd_done(*job_ids):
@@ -311,6 +316,8 @@ def cmd_done(*job_ids):
                 pass
         count += 1
     print(f"DONE:{count}", file=sys.stderr)
+    if count:
+        print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
 def cmd_redo(job_id):
@@ -331,6 +338,7 @@ def cmd_redo(job_id):
         f"Redo: {entry.get('title')} @ {entry.get('company')} ({old_stage} -> described)",
         file=sys.stderr,
     )
+    print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
 def cmd_reset(job_id=None, hard=False):
