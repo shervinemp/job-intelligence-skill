@@ -27,7 +27,7 @@ _FOOTER_MARKS = [
 
 def _strip_footer(text):
     """Remove everything from the last footer marker onwards, but only if it's in the last 30%."""
-    cutoff = len(text) * 0.7
+    cutoff = len(text) * 0.3
     lower = text.lower()
     best = len(text)
     for mark in _FOOTER_MARKS:
