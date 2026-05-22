@@ -6,7 +6,6 @@ import os
 import re
 import subprocess
 import sys
-import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 
@@ -65,11 +64,8 @@ def clean_html(html):
 
     html = re.sub(r'<[^>]+>', ' ', html)
     text = unescape(html)
-    text = ''.join(c for c in text if unicodedata.category(c) not in ('Cf', 'Cc', 'Mn') or c == '\n')
+    text = ''.join(c for c in text if c == '\n' or (c.isascii() and c.isprintable()))
     text = _strip_footer(text)
-    # Strip lines that are mostly unicode filler characters (spacer noise)
-    lines = [l for l in text.split('\n') if sum(1 for c in l if unicodedata.category(c) == 'Cf') / max(len(l), 1) < 0.3]
-    text = '\n'.join(lines)
     text = re.sub(r'\s+', ' ', text)
     text = text.encode('utf-8', errors='replace').decode('utf-8').strip()
     return text[:3000]
