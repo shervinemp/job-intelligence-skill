@@ -560,7 +560,6 @@ async function dump(page) {
     });
 
     await deleteChat(page, convTitle);
-    await page.close();
     process.exit(0);
   } catch (e) {
     console.error(e.message);
