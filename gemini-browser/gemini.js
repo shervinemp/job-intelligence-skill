@@ -136,12 +136,35 @@ async function ensureMode(page) {
   try { count = await modeBtn().count({ timeout: 2000 }); } catch (e) { count = 0; }
   if (count === 0) return { status: 'failed', reason: 'mode button not found' };
 
+  // Check for rate limit in page body BEFORE opening picker
+  const bodyLimit = await page.evaluate(() => {
+    const body = document.body.innerText;
+    const patterns = [
+      /usage.*(?:limit|cap).*reached/i, /rate limit/i, /too many requests/i,
+      /try again later/i, /maximum number.*(?:message|request)/i, /limit.*reset/i,
+      /you.*ran.*out/i, /out.*of.*requests/i, /quota.*exceeded/i,
+      /upgrade to.*pro/i, /pro.*(?:usage|limit).*reset/i
+    ];
+    for (const p of patterns) {
+      const m = body.match(p);
+      if (m) {
+        const resetMatch = body.match(/(?:resets?\s+at?\s+)?(.+?(?:\d{1,2}:\d{2}|[ap]m|minutes|hours))/i);
+        return { timedOut: true, resetsAt: resetMatch ? resetMatch[1].trim() : 'unknown' };
+      }
+    }
+    return { timedOut: false };
+  });
+  if (bodyLimit.timedOut) {
+    await page.keyboard.press('Escape'); await wait(500);
+    return { status: 'timedOut', resetsAt: bodyLimit.resetsAt };
+  }
+
   await modeBtn().click();
   await wait(2000);
 
-  // Check for rate limit inside the picker (disabled mode option with "Limit resets" text)
+  // Check inside the picker for disabled option with "Limit resets" text
   const limitInPicker = await page.evaluate(() => {
-    const items = document.querySelectorAll('[data-test-id^="bard-mode-option-"]');
+    const items = document.querySelectorAll('[data-test-id^="bard-mode-option-"], gem-menu-item');
     for (const item of items) {
       const text = (item.textContent || '').trim();
       if (/limit resets/i.test(text)) {
