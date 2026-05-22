@@ -52,7 +52,9 @@ def clean_html(html):
             return ""
         seen_urls.add(url)
         if len(url) > 200:
-            url = url[:80]
+            parts = url.split('://', 1)
+            if len(parts) == 2:
+                url = parts[0] + '://' + parts[1][:60] + '...'
         text = re.sub(r'<[^>]+>', '', match.group(2).strip())
         if not text or len(text) < 2:
             return f" {url}"
