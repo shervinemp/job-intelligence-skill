@@ -27,33 +27,6 @@ Job Description:
 {job_description}"""
 
 
-_CLOSED_SIGNALS = [
-    "no longer accepting", "this job has closed", "job posting closed",
-    "position has been filled", "this position has been filled",
-    "we are no longer accepting", "has been closed",
-    "job has been filled", "this job is no longer",
-]
-
-
-def _check_freshness(url):
-    """Quick curl check: if the page says the job is closed, return False."""
-    try:
-        r = subprocess.run(
-            ["curl", "-s", "-L", "--max-time", "10",
-             "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", url],
-            capture_output=True, timeout=15
-        )
-        if r.returncode != 0:
-            return True
-        text = r.stdout.decode('utf-8', errors='replace').lower()
-        for signal in _CLOSED_SIGNALS:
-            if signal in text:
-                return False
-    except Exception:
-        pass
-    return True
-
-
 def generate_tailored_docs(job_entry):
     job = job_entry
     url = job.get("url", "")
@@ -62,9 +35,6 @@ def generate_tailored_docs(job_entry):
 
     if not description:
         return False, "No job description found — run fetch.py first"
-
-    if not _check_freshness(url):
-        return False, "JOB_CLOSED"
 
     title_clean = job.get("title", "Unknown").split("·")[0].split("\u00b7")[0].strip()
     desc_clean = description[:5000]
@@ -164,14 +134,9 @@ def cmd_batch(count=1):
             print(f"  Complete -> {scripts_str}", file=sys.stderr)
             processed += 1
         else:
-            err = str(result)
-            if err == "JOB_CLOSED":
-                advance(entry, "skipped", error="closed")
-                print(f"  Closed: {jid}", file=sys.stderr)
-            else:
-                advance(entry, "failed", error=err)
-                print(f"  Failed: {err}", file=sys.stderr)
-                failed_count += 1
+            advance(entry, "failed", error=str(result))
+            print(f"  Failed: {result}", file=sys.stderr)
+            failed_count += 1
         save(state)
     print(f"\nDone. Processed: {processed}, Failed: {failed_count}", file=sys.stderr)
 
@@ -328,19 +293,14 @@ def cmd_run_all(no_open=False):
                 print(f"  COMPLETE {jid}", file=sys.stderr)
                 cmd_ready(jid)
         else:
+            advance(entry, "failed", error=str(result)[:200])
+            save(state)
             err_str = str(result)[:120]
-            if err_str == "JOB_CLOSED":
-                advance(entry, "skipped", error="closed")
-                save(state)
-                print(f"  CLOSED {jid}", file=sys.stderr)
+            if "RATE_LIMIT" in err_str:
+                reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
+                print(f"  RATE_LIMIT {jid} — resets {reset_time}", file=sys.stderr)
             else:
-                advance(entry, "failed", error=str(result)[:200])
-                save(state)
-                if "RATE_LIMIT" in err_str:
-                    reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
-                    print(f"  RATE_LIMIT {jid} — resets {reset_time}", file=sys.stderr)
-                else:
-                    print(f"  FAILED {jid} {err_str}", file=sys.stderr)
+                print(f"  FAILED {jid} {err_str}", file=sys.stderr)
     except Exception as e:
         advance(entry, "failed", error=str(e)[:200])
         save(state)
@@ -428,6 +388,52 @@ def cmd_reset(job_id=None, hard=False):
     print(f"Reset {len(targets)} jobs ({mode}).", file=sys.stderr)
 
 
+def _verify_fetch(url):
+    """Fetch page text via curl. Returns text or None on failure.
+    Short responses likely mean a sign-in wall — caller treats those as unverifiable."""
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "-L", "--max-time", "10",
+             "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", url],
+            capture_output=True, timeout=15
+        )
+        if r.returncode == 0 and len(r.stdout) > 100:
+            text = re.sub(r'<script[^>]*>.*?</script>', '', r.stdout.decode('utf-8', errors='replace'), flags=re.DOTALL)
+            text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
+            text = re.sub(r'<[^>]+>', '\n', text)
+            text = re.sub(r'\n\s*\n', '\n\n', text)
+            text = text.strip()
+            if len(text) > 80:
+                return text[:500]
+        return "(sign-in wall or empty)"
+    except Exception:
+        return None
+
+
+def cmd_verify(count=None):
+    """Re-fetch described job URLs and print VERIFY lines for LLM to judge freshness."""
+    state = load()
+    described = [
+        (jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described"
+    ]
+    if not described:
+        print("NO_PENDING_VERIFY", file=sys.stderr)
+        return
+    if count:
+        described = described[:count]
+    for jid, entry in described:
+        url = entry.get("url", "")
+        print(f"FILE {jid}", file=sys.stderr)
+        print(f"VERIFY:{jid}:{entry.get('title','')[:40]} @ {entry.get('company','')[:20]}", file=sys.stderr)
+        text = _verify_fetch(url)
+        if text:
+            print(text)
+        else:
+            print("(fetch failed)")
+        print()
+    print("---\nRead VERIFY lines above. Skip closed jobs, then run run-all.", file=sys.stderr)
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 tailor.py <command> [args]", file=sys.stderr)
@@ -455,6 +461,7 @@ def main():
         print("  reset --all [--hard]   Mass reset all jobs", file=sys.stderr)
         print("  retry                  Retry all failed", file=sys.stderr)
         print("  skip <job_id>          Skip a job", file=sys.stderr)
+        print("  verify [--count N]     Re-fetch described URLs for LLM freshness check", file=sys.stderr)
         print("  list-gems              List gems", file=sys.stderr)
         sys.exit(1)
 
@@ -494,6 +501,13 @@ def main():
         hard = "--hard" in sys.argv
         job_id = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "--hard" else None
         cmd_reset(job_id=job_id, hard=hard)
+    elif command == "verify":
+        count = None
+        if "--count" in sys.argv:
+            idx = sys.argv.index("--count")
+            if idx + 1 < len(sys.argv):
+                count = int(sys.argv[idx + 1])
+        cmd_verify(count)
     elif command == "list-gems":
         list_gems()
     else:
