@@ -134,10 +134,14 @@ def cmd_craft(count=1, no_open=False):
     for jid, entry in described[:count]:
         title = entry.get("title", "?")
         company = entry.get("company", "?")
+        url = entry.get("url", "")
         if count > 1:
             print(f"\nProcessing: {title} @ {company}", file=sys.stderr)
         else:
             print(f"\nJOB {jid} {title} @ {company}", file=sys.stderr)
+            print(f"URL: {url}")
+            RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
+            print(f"DIR: {RESULTS_DIR}/{jid}")
 
         try:
             success, result = generate_tailored_docs(entry)
