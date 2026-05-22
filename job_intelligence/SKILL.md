@@ -2,7 +2,7 @@
 
 ## Loop
 
-`python3 db.py stats` → decide:
+`python3 extract.py status` → decide:
 
 | Stage | Action |
 |-------|--------|
@@ -30,9 +30,9 @@ Only real job URLs get fetched. No regex, no link chasing.
 
 ## Fetch
 
-`python3 fetch.py run --count 30` → fetches descriptions via Playwright (reuses Chrome session if running on port 9222) or curl fallback.
+`python3 fetch.py run --count 30` → fetches descriptions via Playwright or curl.
 
-fetch.py no longer chases links on the page — it fetches the exact URL given, nothing else.
+Chrome is managed by `lib/chrome_manager.py` — connects to running Chrome via CDP, auto-starts if down, persists profile at `~/.openclaw/chrome-profile/`.
 
 ## DESC review
 
@@ -47,7 +47,7 @@ fetch.py no longer chases links on the page — it fetches the exact URL given, 
 
 ## Flagged jobs
 
-`fetch.py flag jid` → records to `needs_auth.json`.  
+`fetch.py flag jid` → records to `~/.openclaw/needs_auth.json` (persistent).  
 `python3 fetch.py open` → opens visible browser → human logs in → close browser → auto-retries all flagged jobs.
 
 Sessions persist — log in once, lasts forever.
@@ -70,7 +70,7 @@ Results go to `~/.openclaw/results/{jid}/`:
 
 ## Never touch
 
-`lib/` `tools/` `data/` `stage/` `results/` `profile.json` `secrets.json`
+`lib/` `data/` `stage/` `results/` `profile.json` `secrets.json`
 
 ## Recovery
 
@@ -79,4 +79,5 @@ Results go to `~/.openclaw/results/{jid}/`:
 | `invalid_grant` | `gmail-cli auth add email` |
 | `TIMEOUT` | `tailor.py retry` |
 | Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="C:\Users\sherv\.openclaw\chrome-profile"','--remote-debugging-port=9222'` |
-| DB crash | `tools/recover_jobs.py` |
+| DB crash | `extract.py reset` |
+| Rate limited | `tailor.py retry` (after reset time) |
