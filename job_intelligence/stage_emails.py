@@ -58,11 +58,14 @@ def clean_html(html):
                 if budget > 0:
                     cut = qs[:budget]
                     last = cut.rfind('&')
-                    url = base + '?' + (cut[:last] if last > 0 else cut) + '...'
+                    if last > 0:
+                        url = base + '?' + cut[:last]
+                    else:
+                        url = base + '?' + cut
                 else:
-                    url = base + '?...'
+                    url = base + '?'
             else:
-                url = url[:150] + '...'
+                url = url[:150]
         text = re.sub(r'<[^>]+>', '', match.group(2).strip())
         if not text or len(text) < 2:
             return f" {url}"
