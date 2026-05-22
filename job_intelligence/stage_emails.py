@@ -27,8 +27,8 @@ def clean_html(html):
 
 def stage_emails(search_results_path):
     if not os.path.exists(search_results_path):
-        print(f"Error: {search_results_path} not found.", file=sys.stderr)
-        return
+        print(f"Error: {search_results_path} not found. Run gmail-cli search first.", file=sys.stderr)
+        sys.exit(1)
 
     with open(search_results_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
