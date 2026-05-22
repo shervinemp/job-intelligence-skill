@@ -25,9 +25,20 @@ const fs = require('fs');
 const os = require('os');
 
 const SESSION = path.join(__dirname, 'session.json');
-const CDP = 'http://127.0.0.1:9222';
-const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const CHROME_PROFILE = path.join(os.homedir(), '.openclaw', 'chrome-profile');
+
+// Load config from chrome_manager (Python module writes this on import)
+let CHROME_PATH, CHROME_PROFILE, CDP;
+const configPath = path.join(os.homedir(), '.openclaw', 'chrome-config.json');
+try {
+  const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  CHROME_PATH = cfg.CHROME_PATH;
+  CHROME_PROFILE = cfg.CHROME_PROFILE;
+  CDP = cfg.CDP_URL;
+} catch (e) {
+  CHROME_PATH = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  CHROME_PROFILE = path.join(os.homedir(), '.openclaw', 'chrome-profile');
+  CDP = 'http://127.0.0.1:9222';
+}
 
 function loadGemId() {
   const envPath = path.join(__dirname, '..', 'job_intelligence', '.env');

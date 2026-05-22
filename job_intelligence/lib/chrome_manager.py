@@ -2,8 +2,12 @@
 
 All components (fetch, tailor, apply, gemini.js) use this module instead of
 managing their own profile paths and CDP connections.
+
+On import, writes ~/.openclaw/chrome-config.json so Node.js tools (gemini.js)
+can read the same paths.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -113,3 +117,17 @@ def session_ok(url, check_text="Sign in", timeout=15):
             b.close()
         except Exception:
             pass
+
+
+# On import, write a JSON config that Node tools (gemini.js) can read
+_CONFIG_PATH = os.path.join(os.path.dirname(CHROME_PROFILE), "chrome-config.json")
+try:
+    with open(_CONFIG_PATH, "w") as f:
+        json.dump({
+            "CHROME_PATH": CHROME_PATH,
+            "CHROME_PROFILE": CHROME_PROFILE,
+            "CDP_PORT": CDP_PORT,
+            "CDP_URL": CDP_URL,
+        }, f, indent=2)
+except Exception:
+    pass
