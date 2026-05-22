@@ -55,7 +55,15 @@ def call_gemini_node(*args, timeout_seconds=600, **kwargs):
                     content = f.read().strip()
                 if len(content) > 50:
                     return True, content
-            return False, result.stderr.strip() or f"Exit code {result.returncode}"
+            stderr = result.stderr.strip()
+            try:
+                err = json.loads(stderr)
+                if err.get("error") == "RATE_LIMIT":
+                    reset = err.get("resetsAt", "unknown")
+                    return False, f"RATE_LIMIT:{reset}"
+            except (json.JSONDecodeError, AttributeError):
+                pass
+            return False, stderr or f"Exit code {result.returncode}"
         return True, result.stdout
     except subprocess.TimeoutExpired:
         if output_file and os.path.exists(output_file):

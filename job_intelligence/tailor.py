@@ -293,7 +293,11 @@ def cmd_run_all(no_open=False):
             advance(entry, "failed", error=str(result)[:200])
             save(state)
             err_str = str(result)[:120]
-            print(f"  FAILED {jid} {err_str}", file=sys.stderr)
+            if "RATE_LIMIT" in err_str:
+                reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
+                print(f"  RATE_LIMIT {jid} — resets {reset_time}", file=sys.stderr)
+            else:
+                print(f"  FAILED {jid} {err_str}", file=sys.stderr)
     except Exception as e:
         advance(entry, "failed", error=str(e)[:200])
         save(state)
