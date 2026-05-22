@@ -56,6 +56,12 @@ Sessions persist — log in once, lasts forever.
 
 `pipeline.py step` → `STEP:tailor OK jid` → ask human "Apply?"
 
+Results go to `~/.openclaw/results/{jid}/`:
+- `gemini_response.txt` — full Gemini output (includes gen.py Python script)
+- `script.py` — extracted Python script that generates the PDF
+- `{jid}.url` — shortcut to the job posting (double-click to open)
+- Generated PDF(s) from running script.py
+
 | Human | Run |
 |-------|-----|
 | yes | `apply.py auto jid` or `tailor.py ready jid` then `tailor.py done jid` |

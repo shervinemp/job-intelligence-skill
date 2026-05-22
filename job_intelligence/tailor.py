@@ -3,6 +3,7 @@
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -62,7 +63,8 @@ def generate_tailored_docs(job_entry):
         job_description=desc_clean,
     )
 
-    app_dir = os.path.join(tempfile.gettempdir(), "job_intelligence", job_id)
+    RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
+    app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
     success, output = call_gemini_node(
         [prompt, "--app-dir", app_dir], timeout_seconds=600
@@ -227,7 +229,8 @@ def cmd_ready(job_id=None):
             webbrowser.open(url)
             print(f"Opening: {url}", file=sys.stderr)
 
-        tmp_dir = os.path.join(tempfile.gettempdir(), "job_intelligence", jid)
+        RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
+        tmp_dir = os.path.join(RESULTS_DIR, jid)
         os.makedirs(tmp_dir, exist_ok=True)
         files = app_list(jid)
         for f in files:
@@ -303,11 +306,24 @@ def cmd_done(*job_ids):
         return
     state = load()
     count = 0
+    RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
     for job_id in job_ids:
         if job_id not in state.get("jobs", {}):
             print(f"Job not found: {job_id}", file=sys.stderr)
             continue
         advance(state["jobs"][job_id], "applied", applied_at=datetime.now().isoformat())
+
+        # Create .url shortcut to the job posting
+        job_url = state["jobs"][job_id].get("url", "")
+        if job_url:
+            url_path = os.path.join(RESULTS_DIR, job_id, f"{job_id}.url")
+            try:
+                os.makedirs(os.path.dirname(url_path), exist_ok=True)
+                with open(url_path, "w") as f:
+                    f.write(f"[InternetShortcut]\nURL={job_url}\n")
+            except Exception:
+                pass
+
         count += 1
     save(state)
     print(f"DONE:{count}", file=sys.stderr)
