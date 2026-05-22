@@ -6,7 +6,6 @@ Controls Gemini custom gems via real Chrome session (no API key). Playwright con
 | File | Purpose |
 |------|---------|
 | `gemini.js` | Main entry — activate gem, send prompt, read response |
-| `session.json` | Saved auth cookies (auto-generated after `--login`) |
 
 ## Usage
 ### Prerequisite

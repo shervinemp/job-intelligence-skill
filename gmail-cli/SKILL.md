@@ -1,25 +1,25 @@
 ---
 name: gmail-cli
 description: Gmail CLI for job pipeline (secure Python replacement for gog).
-metadata: {}
+metadata: {"clawdbot":{"emoji":"🐍","requires":{"bins":["python"]}}}
 ---
 
 # gmail-cli
 
-Replaces gog with the Google Gmail API directly. Supports the Gmail + Auth subset needed by the job pipeline.
+`skills/gmail-cli/gmail_cli.py` — uses Google Gmail API directly. Supports the Gmail + Auth subset needed by the job intelligence pipeline.
 
 ## Setup (once)
-- `gmail-cli auth credentials /path/to/client_secret.json`
-- `gmail-cli auth add you@gmail.com`
-- `gmail-cli auth list`
+- `python3 skills/gmail-cli/gmail_cli.py auth credentials /path/to/client_secret.json`
+- `python3 skills/gmail-cli/gmail_cli.py auth add you@gmail.com`
+- `python3 skills/gmail-cli/gmail_cli.py auth list`
 
 ## Commands
-- `gmail-cli gmail search '<query>' --all -j`
-- `gmail-cli gmail get <messageId>`
-- `gmail-cli auth credentials <path>`
-- `gmail-cli auth add <email>`
-- `gmail-cli auth list`
-- `gmail-cli auth remove <email>`
+- `python3 skills/gmail-cli/gmail_cli.py gmail search '<query>' --all -j`
+- `python3 skills/gmail-cli/gmail_cli.py gmail get <messageId>`
+- `python3 skills/gmail-cli/gmail_cli.py auth credentials <path>`
+- `python3 skills/gmail-cli/gmail_cli.py auth add <email>`
+- `python3 skills/gmail-cli/gmail_cli.py auth list`
+- `python3 skills/gmail-cli/gmail_cli.py auth remove <email>`
 
 ## Notes
 - Tokens stored at `~/.config/gmail-cli/tokens/<email>.json`
