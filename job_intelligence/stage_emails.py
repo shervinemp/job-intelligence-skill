@@ -15,6 +15,30 @@ GMAIL_CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gmai
 _POOL_SIZE = 8
 
 
+_FOOTER_MARKS = [
+    "unsubscribe", "manage your", "you are receiving this",
+    "you received this email", "you're receiving this", "this email was intended",
+    "view in browser", "view this email", "all rights reserved",
+    "help centre", "email was sent to", "if you don't want",
+    "if you prefer not", "to stop receiving", "privacy policy",
+    "terms of service", "terms of use",
+]
+
+
+def _strip_footer(text):
+    """Remove everything from the last footer marker onwards, but only if it's in the last 30%."""
+    cutoff = len(text) * 0.7
+    lower = text.lower()
+    best = len(text)
+    for mark in _FOOTER_MARKS:
+        idx = lower.find(mark, int(cutoff))
+        if idx != -1 and idx < best:
+            best = idx
+    if best < len(text):
+        text = text[:best]
+    return text.strip()
+
+
 def clean_html(html):
     html = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
     html = re.sub(r'<img[^>]*\ssrc=["\'][^"\']*(?:track|pixel|spacer|beacon|open)[^"\']*["\'][^>]*/?>', '', html, flags=re.IGNORECASE)
@@ -36,6 +60,7 @@ def clean_html(html):
     html = re.sub(r'<[^>]+>', ' ', html)
     text = unescape(html)
     text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
+    text = _strip_footer(text)
     text = re.sub(r'\s+', ' ', text)
     text = text.encode('utf-8', errors='replace').decode('utf-8').strip()
     return text[:3000]
