@@ -120,7 +120,6 @@ def cmd_run(count=None, use_playwright=True, force=False):
                 auth_walls.add(jid, url, title, company)
             advance(entry, "failed", error=str(result))
             failed += 1
-        save(state)
     print(f"FETCHED:{fetched} FAILED:{failed}", file=sys.stderr)
 
 
@@ -135,7 +134,6 @@ def cmd_flag(*jids):
         url = entry.get("url", "")
         auth_walls.add(jid, url, entry.get("title",""), entry.get("company",""))
         count += 1
-    save(state)
     print(f"FLAGGED:{count}", file=sys.stderr)
 
 
@@ -146,7 +144,6 @@ def cmd_admit(*jids):
         if jid in state.get("jobs", {}) and desc_exists(jid):
             advance(state["jobs"][jid], "described")
             count += 1
-    save(state)
     print(f"ADMITTED:{count}", file=sys.stderr)
 
 
@@ -157,7 +154,6 @@ def cmd_reject(*jids):
         if jid in state.get("jobs", {}):
             advance(state["jobs"][jid], "skipped", error="garbage")
             count += 1
-    save(state)
     print(f"REJECTED:{count}", file=sys.stderr)
 
 
@@ -198,7 +194,6 @@ def cmd_retry(use_playwright=True):
             if result == "auth_wall":
                 auth_walls.add(jid, entry.get("url", ""), entry.get("title", ""), entry.get("company", ""))
             advance(entry, "failed", error=str(result))
-        save(state)
     print(f"RETRY:{fetched}", file=sys.stderr)
 
 
@@ -257,7 +252,6 @@ def cmd_open():
             entry_obj = state["jobs"][jid]
             if entry_obj.get("stage") == "failed":
                 advance(entry_obj, "extracted", error=None)
-    save(state)
     cmd_run(count=50, use_playwright=True, force=True)
 
 

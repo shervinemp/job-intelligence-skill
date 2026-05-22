@@ -338,7 +338,6 @@ def cmd_auto(jid):
         if jid in state.get("jobs", {}):
             advance(state["jobs"][jid], "applied",
                     applied_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
-            save(state)
 
 
 def cmd_batch(count=1):
@@ -358,8 +357,7 @@ def cmd_batch(count=1):
             if jid in state.get("jobs", {}):
                 advance(state["jobs"][jid], "applied",
                         applied_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
-                save(state)
-            applied += 1
+                applied += 1
         else:
             bailed += 1
     print(f"APPLIED:{applied} BAILED:{bailed}", file=sys.stderr)

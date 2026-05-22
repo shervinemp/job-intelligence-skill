@@ -125,7 +125,6 @@ def cmd_batch(count=1):
                 response_path=result.get("response_path"),
                 scripts=result.get("scripts", []),
             )
-            save(state)
             scripts_str = (
                 ", ".join(result.get("scripts", []))
                 if result.get("scripts")
@@ -137,7 +136,6 @@ def cmd_batch(count=1):
             advance(entry, "failed", error=str(result))
             print(f"  Failed: {result}", file=sys.stderr)
             failed_count += 1
-        save(state)
     print(f"\nDone. Processed: {processed}, Failed: {failed_count}", file=sys.stderr)
 
 
@@ -178,7 +176,6 @@ def cmd_retry():
     processed = 0
     for job_id, entry in failed:
         advance(entry, "described")
-        save(state)
         success, result = generate_tailored_docs(entry)
         if success:
             advance(
@@ -192,7 +189,6 @@ def cmd_retry():
         else:
             advance(entry, "failed", error=str(result))
             print(f"  {job_id}: retry failed - {result}", file=sys.stderr)
-        save(state)
     print(f"\nRetry complete. Succeeded: {processed}/{len(failed)}", file=sys.stderr)
 
 
@@ -208,7 +204,6 @@ def cmd_skip(*job_ids):
             count += 1
         else:
             print(f"Job not found: {job_id}", file=sys.stderr)
-    save(state)
     print(f"SKIP:{count}", file=sys.stderr)
 
 
@@ -283,7 +278,6 @@ def cmd_run_all(no_open=False):
                 response_path=result.get("response_path"),
                 scripts=result.get("scripts", []),
             )
-            save(state)
             if no_open:
                 print(
                     f"  COMPLETE {jid} (--no-open, use 'ready {jid}' later)",
@@ -294,7 +288,6 @@ def cmd_run_all(no_open=False):
                 cmd_ready(jid)
         else:
             advance(entry, "failed", error=str(result)[:200])
-            save(state)
             err_str = str(result)[:120]
             if "RATE_LIMIT" in err_str:
                 reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
@@ -303,7 +296,6 @@ def cmd_run_all(no_open=False):
                 print(f"  FAILED {jid} {err_str}", file=sys.stderr)
     except Exception as e:
         advance(entry, "failed", error=str(e)[:200])
-        save(state)
         print(f"  ERROR {jid} {str(e)[:120]}", file=sys.stderr)
 
 
@@ -332,7 +324,6 @@ def cmd_done(*job_ids):
                 pass
 
         count += 1
-    save(state)
     print(f"DONE:{count}", file=sys.stderr)
 
 
@@ -350,7 +341,6 @@ def cmd_redo(job_id):
         print(f"Job is {old_stage} - cannot redo", file=sys.stderr)
         return
     advance(entry, "described", error=None)
-    save(state)
     print(
         f"Redo: {entry.get('title')} @ {entry.get('company')} ({old_stage} -> described)",
         file=sys.stderr,
@@ -383,7 +373,6 @@ def cmd_reset(job_id=None, hard=False):
         advance(entry, to_stage, error=None, response_path=None, scripts=[])
         print(f"  {jid}: {old} -> {to_stage}", file=sys.stderr)
 
-    save(state)
     mode = "hard" if hard else "soft"
     print(f"Reset {len(targets)} jobs ({mode}).", file=sys.stderr)
 
