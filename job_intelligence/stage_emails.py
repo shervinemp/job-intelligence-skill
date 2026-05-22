@@ -52,20 +52,10 @@ def clean_html(html):
             return ""
         seen_urls.add(url)
         if len(url) > 150:
-            if '?' in url:
-                base, qs = url.split('?', 1)
-                budget = 150 - len(base) - 1
-                if budget > 0:
-                    cut = qs[:budget]
-                    last = cut.rfind('&')
-                    if last > 0:
-                        url = base + '?' + cut[:last]
-                    else:
-                        url = base + '?' + cut
-                else:
-                    url = base + '?'
-            else:
-                url = url[:150]
+            cut = url[:150]
+            last = cut.rfind('&')
+            if last > 0:
+                url = cut[:last]
         text = re.sub(r'<[^>]+>', '', match.group(2).strip())
         if not text or len(text) < 2:
             return f" {url}"
