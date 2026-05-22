@@ -61,6 +61,9 @@ def clean_html(html):
     text = unescape(html)
     text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
     text = _strip_footer(text)
+    # Strip lines that are mostly unicode filler characters (spacer noise)
+    lines = [l for l in text.split('\n') if sum(1 for c in l if ord(c) in (0x034f, 0x00ad)) / max(len(l), 1) < 0.3]
+    text = '\n'.join(lines)
     text = re.sub(r'\s+', ' ', text)
     text = text.encode('utf-8', errors='replace').decode('utf-8').strip()
     return text[:3000]
