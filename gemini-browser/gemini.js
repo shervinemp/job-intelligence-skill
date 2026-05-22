@@ -367,7 +367,7 @@ async function read(page, timeout = 360000) {
     if (!el) el = document.querySelector('structured-content-container .container');
     if (el) {
       let t = (el.innerText || el.textContent || '').trim();
-      if (t.length > 10) return t.substring(0, 8000);
+      if (t.length > 10) return t.substring(0, 50000);
     }
 
     const lines = (document.body.innerText || '').split('\n').filter(l => l.trim());
@@ -384,7 +384,7 @@ async function read(page, timeout = 360000) {
       const code = (cb.textContent || '').trim();
       if (code.length > 50) text += '\n```python\n' + code + '\n```\n\n';
     }
-    return text.substring(0, 8000);
+    return text.substring(0, 50000);
   });
   if (resp && resp.length > 10) {
     log(`${Math.round((Date.now() - start) / 1000)}s (${resp.length}b)`);

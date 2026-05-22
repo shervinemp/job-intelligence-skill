@@ -3,16 +3,14 @@
 import hashlib
 import os
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 import webbrowser
 from datetime import datetime
 
-from lib.db import load, save, advance, get_failed
+from lib.db import load, save, advance, get_failed, pipeline_status
 from lib.db import (
-    desc_get, desc_exists, desc_save, app_save, app_get, app_list, get_job,
+    desc_get, app_save, app_get, app_list,
 )
 from lib.call_gemini import (
     call_gemini_node,
@@ -104,7 +102,7 @@ def generate_tailored_docs(job_entry):
     }
 
 
-def cmd_run(count=1):
+def cmd_batch(count=1):
     state = load()
     described = [
         (jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described"
@@ -144,16 +142,21 @@ def cmd_run(count=1):
 
 
 def cmd_status():
-    from lib.db import STAGES
-    state = load()
-    if not state.get("jobs"):
+    s = pipeline_status()
+    if not s["jobs"]:
         print("No jobs in state. Run extract first.", file=sys.stderr)
         return
-    print(f"Jobs: {len(state['jobs'])} total", file=sys.stderr)
-    for s in STAGES:
-        c = state['stages'].get(s, 0)
+    print(f"Jobs: {s['jobs']} total", file=sys.stderr)
+    for stage in ["extracted", "described", "tailored", "applied", "skipped", "failed"]:
+        c = s["stages"].get(stage, 0)
         if c:
-            print(f"  {s}: {c}")
+            print(f"  {stage}: {c}", file=sys.stderr)
+    if s["staged"]["pending"]:
+        print(f"  staged (pending extraction): {s['staged']['pending']}", file=sys.stderr)
+    if s["auth_walls"]["count"]:
+        domains = " ".join(s["auth_walls"]["domains"])
+        print(f"  auth walls: {s['auth_walls']['count']} ({domains})", file=sys.stderr)
+    print(f"  next: {s['next_step']}", file=sys.stderr)
 
 
 def cmd_resume(job_id):
@@ -390,11 +393,11 @@ def main():
         print("Usage: python3 tailor.py <command> [args]", file=sys.stderr)
         print("Commands:", file=sys.stderr)
         print(
-            "  run [--count N]        Process N described jobs (default: 1)",
+            "  batch [--count N]      Process N described jobs (default: 1)",
             file=sys.stderr,
         )
         print(
-            "  run-all                Process next described job, hand off",
+            "  run-all                Process next described job with handoff",
             file=sys.stderr,
         )
         print("  status                 Show pipeline state", file=sys.stderr)
@@ -417,13 +420,13 @@ def main():
 
     command = sys.argv[1]
 
-    if command == "run":
+    if command == "batch":
         count = 1
         if "--count" in sys.argv:
             idx = sys.argv.index("--count")
             if idx + 1 < len(sys.argv):
                 count = int(sys.argv[idx + 1])
-        cmd_run(count)
+        cmd_batch(count)
     elif command == "status":
         cmd_status()
     elif command == "resume":

@@ -74,9 +74,12 @@ def stage_emails(search_results_path):
 
 
 if __name__ == "__main__":
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results_new.json")
-    if not os.path.exists(SEARCH_RESULTS):
-        SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results.json")
+    if len(sys.argv) > 1:
+        SEARCH_RESULTS = sys.argv[1]
+    else:
+        SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+        SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results_new.json")
+        if not os.path.exists(SEARCH_RESULTS):
+            SEARCH_RESULTS = os.path.join(SCRIPT_DIR, "..", "..", "search_results.json")
 
     stage_emails(SEARCH_RESULTS)

@@ -538,81 +538,13 @@ def add_job(job_data):
         ),
     )
     conn.commit()
+    company_name = job_data.get("company", "")
+    if company_name and company_name != "Unknown":
+        try:
+            company_upsert(company_name)
+        except Exception:
+            pass
     return jid
-
-
-def advance_job(jid, new_stage, **updates):
-    conn = get_conn()
-    sets = ["stage=?", "updated_at=?"]
-    vals = [new_stage, datetime.now().isoformat()]
-    for k, v in updates.items():
-        if k == "scripts" and isinstance(v, list):
-            v = json.dumps(v)
-        sets.append(f"{k}=?")
-        vals.append(v)
-    vals.append(jid)
-    conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
-    conn.commit()
-
-
-def get_job(jid):
-    conn = get_conn()
-    r = conn.execute(f"SELECT {_JOBS_COLS} FROM jobs WHERE id=?", (jid,)).fetchone()
-    return _row_to_job(r) if r else None
-
-
-def get_jobs_by_stage(stage):
-    conn = get_conn()
-    rows = conn.execute(
-        f"SELECT {_JOBS_COLS} FROM jobs WHERE stage=? ORDER BY created_at", (stage,)
-    ).fetchall()
-    return [(r["id"], _row_to_job(r)) for r in rows]
-
-
-def next_pending_job():
-    conn = get_conn()
-    r = conn.execute(
-        f"SELECT {_JOBS_COLS} FROM jobs WHERE stage='described' LIMIT 1"
-    ).fetchone()
-    return (r["id"], _row_to_job(r)) if r else (None, None)
-
-
-def get_failed_jobs():
-    conn = get_conn()
-    rows = conn.execute(
-        f"SELECT {_JOBS_COLS} FROM jobs WHERE stage='failed' ORDER BY created_at"
-    ).fetchall()
-    return [(r["id"], _row_to_job(r)) for r in rows]
-
-
-def search_jobs(query, stage=None, limit=50):
-    conn = get_conn()
-    clauses = []
-    params = []
-    if query:
-        clauses.append("(title LIKE ? OR company LIKE ? OR location LIKE ?)")
-        q = f"%{query}%"
-        params.extend([q, q, q])
-    if stage:
-        clauses.append("stage=?")
-        params.append(stage)
-    where = " AND ".join(clauses) if clauses else "1"
-    rows = conn.execute(
-        f"SELECT {_JOBS_COLS} FROM jobs WHERE {where} ORDER BY created_at DESC LIMIT ?",
-        params + [limit],
-    ).fetchall()
-    return [(_row_to_job(r)) for r in rows]
-
-
-def job_count():
-    return get_conn().execute("SELECT COUNT(*) as c FROM jobs").fetchone()["c"]
-
-
-def job_count_by_stage():
-    rows = get_conn().execute(
-        "SELECT stage, COUNT(*) as cnt FROM jobs GROUP BY stage ORDER BY stage"
-    ).fetchall()
-    return {r["stage"]: r["cnt"] for r in rows}
 
 
 # ── Salary/remote parsing helpers ──
@@ -1076,6 +1008,40 @@ def next_pending(state):
 
 def get_failed(state):
     return get_failed_jobs()
+
+
+def pipeline_status():
+    from .auth_walls import count as auth_count, domains as auth_domains
+    state = load_state()
+    staged_total = stage_count()
+    extracted_ids = setting_get("extracted_ids", [])
+    pending_staged = max(0, staged_total - len(extracted_ids))
+    auth_n = auth_count()
+    auth_d = auth_domains()
+
+    next_step = ""
+    if pending_staged > 0:
+        next_step = f"extract.py step --count {min(5, pending_staged)}"
+    elif state["stages"].get("extracted", 0) > 0:
+        next_step = "fetch.py run --count 10"
+    elif state["stages"].get("described", 0) > 0:
+        next_step = "tailor.py run-all"
+    elif state["stages"].get("tailored", 0) > 0:
+        next_step = "tailor.py ready (review then done)"
+    elif state["stages"].get("failed", 0) > 0:
+        next_step = "fetch.py retry or tailor.py retry"
+    elif auth_n > 0:
+        next_step = "fetch.py open"
+    else:
+        next_step = "all done — run gmail search"
+
+    return {
+        "jobs": len(state["jobs"]),
+        "stages": state["stages"],
+        "staged": {"total": staged_total, "pending": pending_staged},
+        "auth_walls": {"count": auth_n, "domains": auth_d},
+        "next_step": next_step,
+    }
 
 
 def close():

@@ -16,7 +16,7 @@ import re
 import sys
 
 from lib.db import stage_list_all, stage_count, setting_get, setting_set
-from lib.db import add_job, load
+from lib.db import add_job, pipeline_status
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 EXTRACTED_IDS_KEY = "extracted_ids"
@@ -73,14 +73,6 @@ def cmd_step(count=1):
     print("  python3 extract.py submit <tid> '<json>'", file=sys.stderr)
 
 
-def _mark_extracted(tid, count):
-    extracted_ids = setting_get(EXTRACTED_IDS_KEY, [])
-    if tid not in extracted_ids:
-        extracted_ids.append(tid)
-        setting_set(EXTRACTED_IDS_KEY, extracted_ids)
-    print(f"EXTRACTED:{tid}:{count}", file=sys.stderr)
-
-
 def cmd_reset():
     """Reset extraction state and clear stale jobs from old regex extraction."""
     from lib.db import get_conn
@@ -101,15 +93,16 @@ def cmd_reset():
 
 
 def cmd_status():
-    total = stage_count()
-    extracted_ids = setting_get(EXTRACTED_IDS_KEY, [])
-    pending = total - len(extracted_ids)
-    print(f"Staged: {total} | Extracted: {len(extracted_ids)} | Pending: {pending}", file=sys.stderr)
-    state = load()
-    for s in ["extracted", "described", "tailored", "applied", "skipped", "failed"]:
-        c = state.get("stages", {}).get(s, 0)
+    s = pipeline_status()
+    print(f"Staged: {s['staged']['total']} | Extracted: {s['staged']['total'] - s['staged']['pending']} | Pending: {s['staged']['pending']}", file=sys.stderr)
+    for stage in ["extracted", "described", "tailored", "applied", "skipped", "failed"]:
+        c = s["stages"].get(stage, 0)
         if c:
-            print(f"  {s}: {c}", file=sys.stderr)
+            print(f"  {stage}: {c}", file=sys.stderr)
+    if s["auth_walls"]["count"]:
+        domains = " ".join(s["auth_walls"]["domains"])
+        print(f"  auth walls: {s['auth_walls']['count']} ({domains})", file=sys.stderr)
+    print(f"  next: {s['next_step']}", file=sys.stderr)
 
 
 def main():

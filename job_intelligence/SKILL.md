@@ -1,22 +1,25 @@
 # Job Intelligence Pipeline
 
-## Loop
+## Loop (unified status)
 
-`python3 extract.py status` → decide:
+Any of `extract.py status`, `fetch.py status`, `tailor.py status`, or `db.py stats` shows
+the full picture including the next command to run:
 
-| Stage | Action |
+| Block | Action |
 |-------|--------|
-| `EXTRACT:N` | `python3 extract.py run --count 10` → LLM reviews emails → `extract.py submit` → `fetch.py run --count 30` → read DESC: lines → admit / reject |
-| `FETCH:N` | `python3 tailor.py run-all` → tailor 1 job → ask human |
-| `FAILED:N` | `python3 fetch.py retry` or ask human |
-| `AUTH:d1+d2` | `python3 fetch.py open` → human logs in → close browser → auto-retries |
-| all zero | tell human "all done, new search?" |
+| `staged pending` | `python3 extract.py step --count N` → agent reads → `extract.py submit <tid> '<json>'` |
+| `extracted:N` | `python3 fetch.py run --count 10` → read DESC lines → admit / reject |
+| `described:N` | `python3 tailor.py run-all` → tailor 1 job → ask human |
+| `tailored:N` | `tailor.py ready` (review) → `tailor.py done <jid>` |
+| `failed:N` | `python3 fetch.py retry` or `tailor.py retry` |
+| `auth walls:N` | `python3 fetch.py open` → human logs in → close browser → auto-retries |
+| all zero | run gmail search → `stage_emails.py [search_results.json]` |
 
 ## Extraction (LLM-driven)
 
-`extract.py step --count N` prints staged emails → LLM reads → `extract.py submit <tid> '<json>'` saves job URLs.
+`extract.py step --count N` prints staged emails → agent reads → `extract.py submit <tid> '<json>'` saves job URLs.
 
-The LLM decides which URLs are actual job postings. During extraction, filter by:
+Filter:
 
 | Rule | Do |
 |------|----|
@@ -26,13 +29,13 @@ The LLM decides which URLs are actual job postings. During extraction, filter by
 | US-based, on-site only | Exclude |
 | Location unclear | Fetch description then decide |
 
-Only real job URLs get fetched. No regex, no link chasing.
-
 ## Fetch
 
-`python3 fetch.py run --count 30` → fetches descriptions via Playwright or curl.
+`python3 fetch.py run --count 30` → curl (default) or Playwright.
+Add `--curl` to skip Playwright. Add `--force` to re-fetch existing descriptions.
 
-Chrome is managed by `lib/chrome_manager.py` — connects to running Chrome via CDP, auto-starts if down, persists profile at `~/.openclaw/chrome-profile/`.
+Chrome managed by `lib/chrome_manager.py` — connects via CDP, auto-starts if down, persists profile at `~/.openclaw/chrome-profile/`.
+Auth-walled jobs are tracked per-jid in `~/.openclaw/needs_auth.json`; failed retries preserve the entry.
 
 ## DESC review
 
@@ -54,10 +57,12 @@ Sessions persist — log in once, lasts forever.
 
 ## Tailor
 
-`tailor.py run-all` → `STEP:tailor OK jid` → ask human "Apply?"
+`tailor.py run-all` → `JOB {jid} {title} @ {company}` → ask human.
+
+`tailor.py batch --count N` — process N described jobs silently (no handoff).
 
 Results go to `~/.openclaw/results/{jid}/`:
-- `gemini_response.txt` — full Gemini output (includes gen.py Python script)
+- `gemini_response.txt` — full Gemini output
 - `script.py` — extracted Python script that generates the PDF
 - `{jid}.url` — shortcut to the job posting (double-click to open)
 - Generated PDF(s) from running script.py
@@ -70,7 +75,7 @@ Results go to `~/.openclaw/results/{jid}/`:
 
 ## Never touch
 
-`lib/` `data/` `stage/` `results/` `profile.json` `secrets.json`
+`lib/` `tools/` `data/` `stage/` `results/` `profile.json` `secrets.json`
 
 ## Recovery
 
@@ -78,6 +83,7 @@ Results go to `~/.openclaw/results/{jid}/`:
 |--------|------|
 | `invalid_grant` | `gmail-cli auth add email` |
 | `TIMEOUT` | `tailor.py retry` |
+| `RATE_LIMIT` | `tailor.py retry` (after reset time) |
 | Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="C:\Users\sherv\.openclaw\chrome-profile"','--remote-debugging-port=9222'` |
 | DB crash | `extract.py reset` |
-| Rate limited | `tailor.py retry` (after reset time) |
+| Auth wall retry failed | Run `fetch.py open` again (jid still in `needs_auth.json`) |

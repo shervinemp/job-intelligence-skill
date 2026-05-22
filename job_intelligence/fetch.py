@@ -1,36 +1,12 @@
 """fetch.py — Fetch job descriptions. SLM reviews DESC lines, admits or rejects."""
-import hashlib, json, os, subprocess, sys, time, re, tempfile
+import os, subprocess, sys, time, re
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-from datetime import datetime
-from pathlib import Path
-from urllib.parse import urlparse
-from lib.db import load, save, advance
-from lib.db import desc_save, desc_exists, desc_get, get_jobs_by_stage, get_job
+from lib.db import load, save, advance, pipeline_status
+from lib.db import desc_save, desc_exists
 from lib.chrome_manager import CHROME_PROFILE as BROWSER_PROFILE, connect
+from lib import auth_walls
 
 MAX_DESC_LEN = 8000
-
-NEEDS_AUTH_PATH = os.path.join(os.path.expanduser('~'), '.openclaw', 'needs_auth.json')
-
-
-def _record_auth_wall(jid, url, title, company):
-    entries = []
-    existing_jids = set()
-    if os.path.exists(NEEDS_AUTH_PATH):
-        try:
-            with open(NEEDS_AUTH_PATH, "r", encoding="utf-8") as f:
-                entries = json.load(f)
-                existing_jids = {e.get("jid") for e in entries}
-        except (json.JSONDecodeError, IOError):
-            entries = []
-    if jid in existing_jids:
-        return
-    domain = urlparse(url).netloc
-    entries.append({"jid": jid, "url": url, "domain": domain, "title": title, "company": company})
-    with open(NEEDS_AUTH_PATH, "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2)
-
-
 
 
 def _pw_fetch(url, timeout=30):
@@ -65,14 +41,9 @@ def _pw_fetch(url, timeout=30):
         return False, str(e)[:120]
 
 
-# _pw_chase is an alias for _pw_fetch (both use chrome_manager)
-def _pw_chase(url, timeout=30):
-    return _pw_fetch(url, timeout)
-
-
 def fetch_description(url, use_playwright=False):
     if use_playwright:
-        ok, text = _pw_chase(url)
+        ok, text = _pw_fetch(url)
         if ok:
             return True, text
         if text == "auth_wall":
@@ -122,10 +93,11 @@ def cmd_run(count=None, use_playwright=True, force=False):
             save_description(jid, result)
             snippet = re.sub(r'\s+', ' ', result[:200].replace('\r', '')).strip()
             print(f"DESC:{jid}:{snippet}")
+            auth_walls.remove(jid)
             fetched += 1
         else:
             if result == "auth_wall":
-                _record_auth_wall(jid, url, title, company)
+                auth_walls.add(jid, url, title, company)
             advance(entry, "failed", error=str(result))
             failed += 1
         save(state)
@@ -141,7 +113,7 @@ def cmd_flag(*jids):
         if not entry:
             continue
         url = entry.get("url", "")
-        _record_auth_wall(jid, url, entry.get("title",""), entry.get("company",""))
+        auth_walls.add(jid, url, entry.get("title",""), entry.get("company",""))
         count += 1
     save(state)
     print(f"FLAGGED:{count}", file=sys.stderr)
@@ -170,24 +142,21 @@ def cmd_reject(*jids):
 
 
 def cmd_status():
-    from lib.db import STAGES
-    state = load()
-    if not state.get("jobs"):
-        print("No jobs in state.", file=sys.stderr)
+    s = pipeline_status()
+    if not s["jobs"]:
+        print("No jobs in state. Run extract first.", file=sys.stderr)
         return
-    for s in STAGES:
-        c = state['stages'].get(s, 0)
+    print(f"Jobs: {s['jobs']} total", file=sys.stderr)
+    for stage in ["extracted", "described", "tailored", "applied", "skipped", "failed"]:
+        c = s["stages"].get(stage, 0)
         if c:
-            print(f"  {s}: {c}")
-    if os.path.exists(NEEDS_AUTH_PATH):
-        try:
-            import json
-            entries = json.load(open(NEEDS_AUTH_PATH))
-            domains = sorted(set(e.get("domain", "?") for e in entries))
-            if domains:
-                print(f"  auth: {' '.join(domains)}")
-        except Exception:
-            pass
+            print(f"  {stage}: {c}", file=sys.stderr)
+    if s["staged"]["pending"]:
+        print(f"  staged (pending extraction): {s['staged']['pending']}", file=sys.stderr)
+    if s["auth_walls"]["count"]:
+        domains = " ".join(s["auth_walls"]["domains"])
+        print(f"  auth walls: {s['auth_walls']['count']} ({domains})", file=sys.stderr)
+    print(f"  next: {s['next_step']}", file=sys.stderr)
 
 
 def cmd_retry(use_playwright=True):
@@ -203,10 +172,11 @@ def cmd_retry(use_playwright=True):
             save_description(jid, result)
             snippet = re.sub(r'\s+', ' ', result[:200].replace('\r', '')).strip()
             print(f"DESC:{jid}:{entry.get('title','')[:40]}:{snippet}")
+            auth_walls.remove(jid)
             fetched += 1
         else:
             if result == "auth_wall":
-                _record_auth_wall(jid, entry.get("url", ""), entry.get("title", ""), entry.get("company", ""))
+                auth_walls.add(jid, entry.get("url", ""), entry.get("title", ""), entry.get("company", ""))
             advance(entry, "failed", error=str(result))
         save(state)
     print(f"RETRY:{fetched}", file=sys.stderr)
@@ -215,12 +185,7 @@ def cmd_retry(use_playwright=True):
 def cmd_open():
     """Open single visible browser tab for the first flagged job. Browser stays open 5min."""
     from playwright.sync_api import sync_playwright
-    entries = []
-    if os.path.exists(NEEDS_AUTH_PATH):
-        try:
-            entries = json.load(open(NEEDS_AUTH_PATH))
-        except Exception:
-            pass
+    entries = auth_walls.list_all()
     if not entries:
         print("NO_AUTH_WALLS", file=sys.stderr)
         return
@@ -228,9 +193,8 @@ def cmd_open():
     entry = entries[0]
     url = entry.get("url", "https://linkedin.com")
     print(f"OPENING: {entry.get('title','')[:40]} @ {entry.get('company','')[:20]}", file=sys.stderr)
-    print("Log in, close browser. Pipeline auto-retries after.", file=sys.stderr)
+    print("Log in, close browser. Pipeline will retry flagged jobs after.", file=sys.stderr)
 
-    # Try connecting to an existing Chrome first (e.g. Gemini browser already running)
     b, ctx = connect()
     if ctx is not None:
         p = ctx.pages[0] if ctx.pages else ctx.new_page()
@@ -247,7 +211,7 @@ def cmd_open():
             except Exception:
                 break
             time.sleep(1)
-        pw.stop()
+        b.close()
     else:
         with sync_playwright() as spw:
             b = spw.chromium.launch_persistent_context(
@@ -267,7 +231,6 @@ def cmd_open():
                     break
                 time.sleep(1)
             b.close()
-    os.remove(NEEDS_AUTH_PATH)
     print("LOGIN_DONE — retrying flagged jobs", file=sys.stderr)
     cmd_run(count=30, use_playwright=True, force=True)
 
@@ -277,7 +240,7 @@ def main():
         print("Usage: python3 fetch.py <cmd> [args]", file=sys.stderr)
         print("Commands: run, admit, reject, flag, open, status, retry", file=sys.stderr)
         sys.exit(1)
-    use_pw = '--curl' not in sys.argv  # playwright is default
+    use_pw = '--curl' not in sys.argv
     force = '--force' in sys.argv
     cmd = sys.argv[1]
     if cmd == "run":
