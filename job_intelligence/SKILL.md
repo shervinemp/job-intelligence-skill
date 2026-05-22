@@ -14,9 +14,19 @@
 
 ## Extraction (LLM-driven)
 
-`extract.py run --count N` prints staged emails with all URLs → LLM (via gemini.js) reads and returns which URLs are actual job postings → `extract.py submit <tid> '<json>'` saves them.
+`extract.py step --count N` prints staged emails → LLM reads → `extract.py submit <tid> '<json>'` saves job URLs.
 
-The LLM decides from the URL alone — no regex, no link chasing. Only real job URLs get fetched.
+The LLM decides which URLs are actual job postings. During extraction, filter by:
+
+| Rule | Do |
+|------|----|
+| Canada-based (Toronto, Ottawa, Vancouver, etc.) | Include |
+| Remote / work-from-home | Include |
+| Quebec in-office (requires French / permits) | Exclude |
+| US-based, on-site only | Exclude |
+| Location unclear | Fetch description then decide |
+
+Only real job URLs get fetched. No regex, no link chasing.
 
 ## Fetch
 
@@ -62,5 +72,5 @@ Sessions persist — log in once, lasts forever.
 |--------|------|
 | `invalid_grant` | `gmail-cli auth add email` |
 | `TIMEOUT` | `tailor.py retry` |
-| Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="CHROME_PROFILE"','--remote-debugging-port=9222'` |
-| DB crash | `extract.py reset` or restore from backup |
+| Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="C:\Users\sherv\.openclaw\chrome-profile"','--remote-debugging-port=9222'` |
+| DB crash | `tools/recover_jobs.py` |
