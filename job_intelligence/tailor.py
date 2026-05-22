@@ -27,6 +27,33 @@ Job Description:
 {job_description}"""
 
 
+_CLOSED_SIGNALS = [
+    "no longer accepting", "this job has closed", "job posting closed",
+    "position has been filled", "this position has been filled",
+    "we are no longer accepting", "has been closed",
+    "job has been filled", "this job is no longer",
+]
+
+
+def _check_freshness(url):
+    """Quick curl check: if the page says the job is closed, return False."""
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "-L", "--max-time", "10",
+             "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", url],
+            capture_output=True, timeout=15
+        )
+        if r.returncode != 0:
+            return True
+        text = r.stdout.decode('utf-8', errors='replace').lower()
+        for signal in _CLOSED_SIGNALS:
+            if signal in text:
+                return False
+    except Exception:
+        pass
+    return True
+
+
 def generate_tailored_docs(job_entry):
     job = job_entry
     url = job.get("url", "")
@@ -35,6 +62,9 @@ def generate_tailored_docs(job_entry):
 
     if not description:
         return False, "No job description found — run fetch.py first"
+
+    if not _check_freshness(url):
+        return False, "JOB_CLOSED"
 
     title_clean = job.get("title", "Unknown").split("·")[0].split("\u00b7")[0].strip()
     desc_clean = description[:5000]
@@ -134,9 +164,14 @@ def cmd_batch(count=1):
             print(f"  Complete -> {scripts_str}", file=sys.stderr)
             processed += 1
         else:
-            advance(entry, "failed", error=str(result))
-            print(f"  Failed: {result}", file=sys.stderr)
-            failed_count += 1
+            err = str(result)
+            if err == "JOB_CLOSED":
+                advance(entry, "skipped", error="closed")
+                print(f"  Closed: {jid}", file=sys.stderr)
+            else:
+                advance(entry, "failed", error=err)
+                print(f"  Failed: {err}", file=sys.stderr)
+                failed_count += 1
         save(state)
     print(f"\nDone. Processed: {processed}, Failed: {failed_count}", file=sys.stderr)
 
@@ -293,14 +328,19 @@ def cmd_run_all(no_open=False):
                 print(f"  COMPLETE {jid}", file=sys.stderr)
                 cmd_ready(jid)
         else:
-            advance(entry, "failed", error=str(result)[:200])
-            save(state)
             err_str = str(result)[:120]
-            if "RATE_LIMIT" in err_str:
-                reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
-                print(f"  RATE_LIMIT {jid} — resets {reset_time}", file=sys.stderr)
+            if err_str == "JOB_CLOSED":
+                advance(entry, "skipped", error="closed")
+                save(state)
+                print(f"  CLOSED {jid}", file=sys.stderr)
             else:
-                print(f"  FAILED {jid} {err_str}", file=sys.stderr)
+                advance(entry, "failed", error=str(result)[:200])
+                save(state)
+                if "RATE_LIMIT" in err_str:
+                    reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
+                    print(f"  RATE_LIMIT {jid} — resets {reset_time}", file=sys.stderr)
+                else:
+                    print(f"  FAILED {jid} {err_str}", file=sys.stderr)
     except Exception as e:
         advance(entry, "failed", error=str(e)[:200])
         save(state)

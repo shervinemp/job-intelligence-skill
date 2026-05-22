@@ -51,7 +51,12 @@ Auth-walled jobs are tracked per-jid in `~/.openclaw/needs_auth.json`; failed re
 ## Flagged jobs
 
 `fetch.py flag jid` → records to `~/.openclaw/needs_auth.json` (persistent).  
+
+Auth walls are also auto-detected during `_pw_fetch`: if the page returns short text with sign-in/login keywords, it's flagged as an auth wall without manual intervention.
+
 `python3 fetch.py open` → opens visible browser → human logs in → close browser → auto-retries all flagged jobs.
+
+Stale entries (jobs already past `extracted`/`failed` stage) are ignored; `cmd_open` resets `failed` auth-walled jobs to `extracted` before retry.
 
 Sessions persist — log in once, lasts forever.
 
@@ -60,6 +65,9 @@ Sessions persist — log in once, lasts forever.
 `tailor.py run-all` → `JOB {jid} {title} @ {company}` → ask human.
 
 `tailor.py batch --count N` — process N described jobs silently (no handoff).
+
+Before calling Gemini, `tailor.py` re-fetches the job URL via curl.
+If the page says "no longer accepting" or similar, the job is auto-skipped (`CLOSED`).
 
 Results go to `~/.openclaw/results/{jid}/`:
 - `gemini_response.txt` — full Gemini output
