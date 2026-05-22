@@ -198,6 +198,30 @@ async function ensureMode(page) {
   return { status: 'ok' };
 }
 
+async function checkMode(page) {
+  const modeBtn = () => page.locator('[data-test-id="bard-mode-menu-button"]').first();
+  let count;
+  try { count = await modeBtn().count({ timeout: 2000 }); } catch (e) { count = 0; }
+  if (count === 0) return { activeTier: 'Unknown' };
+
+  const text = await modeBtn().textContent();
+  const isExtended = await page.evaluate(() => {
+    const btn = document.querySelector('[data-test-id="bard-mode-menu-button"]');
+    if (!btn) return false;
+    const list = btn.querySelectorAll('span, div');
+    for (const el of list) {
+      if ((el.textContent || '').includes('Extended')) return true;
+    }
+    return false;
+  });
+
+  let activeTier = 'Flash';
+  if (text.includes('Pro')) activeTier = 'Pro';
+  if (text.includes('Flash-Lite') || text.includes('Lite')) activeTier = 'Flash-Lite';
+
+  return { activeTier, thinkingLevel: isExtended ? 'Extended' : 'Standard' };
+}
+
 // ─── Main ────────────────────────────────────────────────
 
 (async () => {
