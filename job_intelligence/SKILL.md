@@ -7,7 +7,7 @@
 | Stage | Action |
 |-------|--------|
 | `EXTRACT:N` | `python3 extract.py run --count 10` → LLM reviews emails → `extract.py submit` → `fetch.py run --count 30` → read DESC: lines → admit / reject |
-| `FETCH:N` | `python3 pipeline.py step` → tailor 1 job → ask human |
+| `FETCH:N` | `python3 tailor.py run-all` → tailor 1 job → ask human |
 | `FAILED:N` | `python3 fetch.py retry` or ask human |
 | `AUTH:d1+d2` | `python3 fetch.py open` → human logs in → close browser → auto-retries |
 | all zero | tell human "all done, new search?" |
@@ -54,7 +54,7 @@ Sessions persist — log in once, lasts forever.
 
 ## Tailor
 
-`pipeline.py step` → `STEP:tailor OK jid` → ask human "Apply?"
+`tailor.py run-all` → `STEP:tailor OK jid` → ask human "Apply?"
 
 Results go to `~/.openclaw/results/{jid}/`:
 - `gemini_response.txt` — full Gemini output (includes gen.py Python script)

@@ -179,6 +179,15 @@ def cmd_status():
         c = state['stages'].get(s, 0)
         if c:
             print(f"  {s}: {c}")
+    if os.path.exists(NEEDS_AUTH_PATH):
+        try:
+            import json
+            entries = json.load(open(NEEDS_AUTH_PATH))
+            domains = sorted(set(e.get("domain", "?") for e in entries))
+            if domains:
+                print(f"  auth: {' '.join(domains)}")
+        except Exception:
+            pass
 
 
 def cmd_retry(use_playwright=True):
