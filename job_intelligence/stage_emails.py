@@ -65,7 +65,7 @@ def clean_html(html):
 
     html = re.sub(r'<[^>]+>', ' ', html)
     text = unescape(html)
-    text = ''.join(c for c in text if unicodedata.category(c) not in ('Cf', 'Cc') or c == '\n')
+    text = ''.join(c for c in text if unicodedata.category(c) not in ('Cf', 'Cc', 'Mn') or c == '\n')
     text = _strip_footer(text)
     # Strip lines that are mostly unicode filler characters (spacer noise)
     lines = [l for l in text.split('\n') if sum(1 for c in l if unicodedata.category(c) == 'Cf') / max(len(l), 1) < 0.3]
