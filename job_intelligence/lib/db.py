@@ -547,6 +547,80 @@ def add_job(job_data):
     return jid
 
 
+def advance_job(jid, new_stage, **updates):
+    conn = get_conn()
+    sets = ["stage=?", "updated_at=?"]
+    vals = [new_stage, datetime.now().isoformat()]
+    for k, v in updates.items():
+        if k == "scripts" and isinstance(v, list):
+            v = json.dumps(v)
+        sets.append(f"{k}=?")
+        vals.append(v)
+    vals.append(jid)
+    conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
+    conn.commit()
+
+
+def get_job(jid):
+    conn = get_conn()
+    r = conn.execute(f"SELECT {_JOBS_COLS} FROM jobs WHERE id=?", (jid,)).fetchone()
+    return _row_to_job(r) if r else None
+
+
+def get_jobs_by_stage(stage):
+    conn = get_conn()
+    rows = conn.execute(
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE stage=? ORDER BY created_at", (stage,)
+    ).fetchall()
+    return [(r["id"], _row_to_job(r)) for r in rows]
+
+
+def next_pending_job():
+    conn = get_conn()
+    r = conn.execute(
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE stage='described' LIMIT 1"
+    ).fetchone()
+    return (r["id"], _row_to_job(r)) if r else (None, None)
+
+
+def get_failed_jobs():
+    conn = get_conn()
+    rows = conn.execute(
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE stage='failed' ORDER BY created_at"
+    ).fetchall()
+    return [(r["id"], _row_to_job(r)) for r in rows]
+
+
+def search_jobs(query, stage=None, limit=50):
+    conn = get_conn()
+    clauses = []
+    params = []
+    if query:
+        clauses.append("(title LIKE ? OR company LIKE ? OR location LIKE ?)")
+        q = f"%{query}%"
+        params.extend([q, q, q])
+    if stage:
+        clauses.append("stage=?")
+        params.append(stage)
+    where = " AND ".join(clauses) if clauses else "1"
+    rows = conn.execute(
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE {where} ORDER BY created_at DESC LIMIT ?",
+        params + [limit],
+    ).fetchall()
+    return [(_row_to_job(r)) for r in rows]
+
+
+def job_count():
+    return get_conn().execute("SELECT COUNT(*) as c FROM jobs").fetchone()["c"]
+
+
+def job_count_by_stage():
+    rows = get_conn().execute(
+        "SELECT stage, COUNT(*) as cnt FROM jobs GROUP BY stage ORDER BY stage"
+    ).fetchall()
+    return {r["stage"]: r["cnt"] for r in rows}
+
+
 # ── Salary/remote parsing helpers ──
 
 def _parse_salary_min(salary_text):
