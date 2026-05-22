@@ -30,7 +30,8 @@
 
 | Value | Include |
 |-------|---------|
-| Canada-based (Toronto, Ottawa, Vancouver, etc.; on-site or hybrid) | Yes |
+| Ontario-based (Toronto, Ottawa, Oakville, Mississauga, Waterloo, etc.) | Yes — preferred |
+| Other Canada-based (Vancouver, Calgary, etc.; on-site or hybrid) | Yes |
 | Remote / work-from-home (any country) | Yes |
 | Quebec in-office | No |
 | US on-site only | No |
