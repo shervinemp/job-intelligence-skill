@@ -724,11 +724,11 @@ def pipeline_status():
 
     next_step = ""
     if pending_staged > 0:
-        next_step = f"extract.py step --count {min(5, pending_staged)}"
+        next_step = f"extract.py --count {min(5, pending_staged)}"
     elif state["stages"].get("extracted", 0) > 0:
-        next_step = "fetch.py run --count 10"
+        next_step = "fetch.py --count 10"
     elif state["stages"].get("described", 0) > 0:
-        next_step = "tailor.py run-all"
+        next_step = "tailor.py"
     elif state["stages"].get("tailored", 0) > 0:
         next_step = "tailor.py ready (review then done)"
     elif state["stages"].get("failed", 0) > 0:

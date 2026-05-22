@@ -1,13 +1,10 @@
-"""extract.py — LLM-driven extraction. Uses gemini.js to identify job URLs from
-staged emails and extract structured job data from fetched pages.
+"""extract.py — Review staged emails, pick job URLs, save to DB.
 
 Usage:
-  extract.py step [--count N]    Process N staged emails (LLM identifies URLs →
-                                    fetches → LLM extracts jobs → saves to DB)
-  extract.py run [--count N]     Print staged emails for manual LLM review
-  extract.py submit <tid> <json> Save LLM results manually
-  extract.py status              Extraction status
-  extract.py reset               Reset extraction state (clear stale jobs)
+  extract.py [--count N]        Show N staged emails to pick URLs from (default: 1)
+  extract.py submit <tid> <json>  Save extracted jobs from an email
+  extract.py reset               Clear all jobs and start fresh
+  extract.py status              Pipeline status
 """
 
 import json
@@ -22,26 +19,21 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 EXTRACTED_IDS_KEY = "extracted_ids"
 
 
-def _extract_urls(text):
-    return list(set(re.findall(r'https?://[^\s<>"\'\]\)]+', text)))
-
-
-def cmd_run(count=None):
+def cmd_review(count):
     pending_ids = set(setting_get(EXTRACTED_IDS_KEY, []))
     all_staged = stage_list_all()
     pending = [(tid, content) for tid, content in all_staged if tid not in pending_ids]
     if not pending:
         print("ALL_EXTRACTED", file=sys.stderr)
         return
-    if count:
-        pending = pending[:count]
+    pending = pending[:count]
     for tid, content in pending:
-        urls = _extract_urls(content)
         print(f"FILE {tid}", file=sys.stderr)
-        print(f"URLS {json.dumps(urls)}", file=sys.stderr)
         print(f"---BEGIN EMAIL---", file=sys.stderr)
         print(content, file=sys.stderr)
         print(f"---END EMAIL---", file=sys.stderr)
+    print("\n---\nRead the FILE content above. Identify job URLs, then call:", file=sys.stderr)
+    print("  python3 extract.py submit <tid> '<json>'", file=sys.stderr)
 
 
 def cmd_submit(tid, jobs_json):
@@ -66,15 +58,7 @@ def cmd_submit(tid, jobs_json):
     print(f"SUBMIT:{tid}:{count}", file=sys.stderr)
 
 
-def cmd_step(count=1):
-    """Print staged email content for LLM to process. Agent reads via stderr, calls submit."""
-    cmd_run(count=count)
-    print("\n---\nRead the FILE content above. Identify job URLs. Then call:", file=sys.stderr)
-    print("  python3 extract.py submit <tid> '<json>'", file=sys.stderr)
-
-
 def cmd_reset():
-    """Reset extraction state and clear stale jobs from old regex extraction."""
     from lib.db import get_conn
     c = get_conn()
     c.execute("PRAGMA foreign_keys=OFF")
@@ -94,7 +78,8 @@ def cmd_reset():
 
 def cmd_status():
     s = pipeline_status()
-    print(f"Staged: {s['staged']['total']} | Extracted: {s['staged']['total'] - s['staged']['pending']} | Pending: {s['staged']['pending']}", file=sys.stderr)
+    p = s['staged']['total'] - s['staged']['pending']
+    print(f"Staged: {s['staged']['total']} | Extracted: {p} | Pending: {s['staged']['pending']}", file=sys.stderr)
     for stage in ["extracted", "described", "tailored", "applied", "skipped", "failed"]:
         c = s["stages"].get(stage, 0)
         if c:
@@ -106,49 +91,25 @@ def cmd_status():
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 extract.py <cmd> [args]", file=sys.stderr)
-        print("Commands:", file=sys.stderr)
-        print("  step [--count N]     Print staged emails for LLM to identify job URLs", file=sys.stderr)
-        print("  run [--count N]      Print staged emails for manual review", file=sys.stderr)
-        print("  submit <tid> <json>  Submit job URLs. JSON array of objects with url, title, company", file=sys.stderr)
-        print("  reset                Clear state and start fresh", file=sys.stderr)
-        print("  status               Extraction status", file=sys.stderr)
-        sys.exit(1)
-
-    cmd = sys.argv[1]
-
-    if cmd == "step":
+    subcommands = {"submit", "reset", "status"}
+    if len(sys.argv) > 1 and sys.argv[1] in subcommands:
+        cmd = sys.argv[1]
+        if cmd == "submit":
+            if len(sys.argv) < 4:
+                print("Usage: python3 extract.py submit <tid> '<json>'", file=sys.stderr)
+                sys.exit(1)
+            cmd_submit(sys.argv[2], sys.argv[3])
+        elif cmd == "reset":
+            cmd_reset()
+        elif cmd == "status":
+            cmd_status()
+    else:
         count = 1
         if "--count" in sys.argv:
             i = sys.argv.index("--count")
             if i + 1 < len(sys.argv):
                 count = int(sys.argv[i + 1])
-        cmd_step(count=count)
-
-    elif cmd == "run":
-        count = None
-        if "--count" in sys.argv:
-            i = sys.argv.index("--count")
-            if i + 1 < len(sys.argv):
-                count = int(sys.argv[i + 1])
-        cmd_run(count=count)
-
-    elif cmd == "submit":
-        if len(sys.argv) < 4:
-            print("Usage: python3 extract.py submit <tid> '<json>'", file=sys.stderr)
-            sys.exit(1)
-        cmd_submit(sys.argv[2], sys.argv[3])
-
-    elif cmd == "reset":
-        cmd_reset()
-
-    elif cmd == "status":
-        cmd_status()
-
-    else:
-        print(f"Unknown: {cmd}", file=sys.stderr)
-        sys.exit(1)
+        cmd_review(count)
 
 
 if __name__ == "__main__":

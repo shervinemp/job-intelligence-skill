@@ -1,4 +1,18 @@
-"""tailor.py — Generate tailored CV + cover letter PDFs via Gemini Web."""
+"""tailor.py — Tailor CVs via Gemini Web.
+
+Usage:
+  tailor.py [--count N] [--no-open]   Craft N described jobs (default: 1 with handoff)
+  tailor.py done <jid> [jid...]       Mark job(s) as applied
+  tailor.py skip <jid> [jid...]       Skip job(s)
+  tailor.py redo <jid>                Re-tailor a job
+  tailor.py retry                     Retry all failed
+  tailor.py reset <jid> [--hard]      Reset a job to described or extracted
+  tailor.py reset --all [--hard]      Mass reset
+  tailor.py ready [<jid>]             Open URL + files for a tailored job
+  tailor.py resume <jid>              Show application files
+  tailor.py status                    Pipeline status
+  tailor.py list-gems                 List Gemini gems
+"""
 
 import hashlib
 import os
@@ -8,7 +22,7 @@ import sys
 import webbrowser
 from datetime import datetime
 
-from lib.db import load, save, advance, get_failed, pipeline_status
+from lib.db import load, advance, get_failed, pipeline_status
 from lib.db import (
     desc_get, app_save, app_get, app_list,
 )
@@ -102,41 +116,62 @@ def generate_tailored_docs(job_entry):
     }
 
 
-def cmd_batch(count=1):
+def cmd_craft(count=1, no_open=False):
     state = load()
     described = [
         (jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described"
     ]
     if not described:
-        print("No described jobs. Run fetch.py first.", file=sys.stderr)
-        sys.exit(1)
+        failed_count = state["stages"].get("failed", 0)
+        if failed_count:
+            print(f"NO_PENDING ({failed_count} failed, use 'retry')", file=sys.stderr)
+        else:
+            print(f"ALL_DONE", file=sys.stderr)
+        return
 
     processed = failed_count = 0
     for jid, entry in described[:count]:
-        print(
-            f"\nProcessing: {entry.get('title')} @ {entry.get('company')}",
-            file=sys.stderr,
-        )
-        success, result = generate_tailored_docs(entry)
-        if success:
-            advance(
-                entry,
-                "tailored",
-                response_path=result.get("response_path"),
-                scripts=result.get("scripts", []),
-            )
-            scripts_str = (
-                ", ".join(result.get("scripts", []))
-                if result.get("scripts")
-                else "no scripts"
-            )
-            print(f"  Complete -> {scripts_str}", file=sys.stderr)
-            processed += 1
+        title = entry.get("title", "?")
+        company = entry.get("company", "?")
+        if count > 1:
+            print(f"\nProcessing: {title} @ {company}", file=sys.stderr)
         else:
-            advance(entry, "failed", error=str(result))
-            print(f"  Failed: {result}", file=sys.stderr)
+            print(f"\nJOB {jid} {title} @ {company}", file=sys.stderr)
+
+        try:
+            success, result = generate_tailored_docs(entry)
+            if success:
+                advance(
+                    entry,
+                    "tailored",
+                    response_path=result.get("response_path"),
+                    scripts=result.get("scripts", []),
+                )
+                if count == 1 and not no_open:
+                    print(f"  COMPLETE {jid}", file=sys.stderr)
+                    _cmd_ready(jid)
+                elif no_open:
+                    print(f"  COMPLETE {jid} (--no-open, use 'ready {jid}' later)", file=sys.stderr)
+                else:
+                    scripts_str = ", ".join(result.get("scripts", [])) if result.get("scripts") else "no scripts"
+                    print(f"  Complete -> {scripts_str}", file=sys.stderr)
+                processed += 1
+            else:
+                advance(entry, "failed", error=str(result)[:200])
+                err_str = str(result)[:120]
+                if "RATE_LIMIT" in err_str:
+                    reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
+                    print(f"  RATE_LIMIT {jid} — resets {reset_time}", file=sys.stderr)
+                else:
+                    print(f"  FAILED {jid} {err_str}", file=sys.stderr)
+                failed_count += 1
+        except Exception as e:
+            advance(entry, "failed", error=str(e)[:200])
+            print(f"  ERROR {jid} {str(e)[:120]}", file=sys.stderr)
             failed_count += 1
-    print(f"\nDone. Processed: {processed}, Failed: {failed_count}", file=sys.stderr)
+
+    if count > 1:
+        print(f"\nDone. Crafted: {processed}, Failed: {failed_count}", file=sys.stderr)
 
 
 def cmd_status():
@@ -155,6 +190,51 @@ def cmd_status():
         domains = " ".join(s["auth_walls"]["domains"])
         print(f"  auth walls: {s['auth_walls']['count']} ({domains})", file=sys.stderr)
     print(f"  next: {s['next_step']}", file=sys.stderr)
+
+
+def _cmd_ready(job_id):
+    state = load()
+    if not state.get("jobs"):
+        return
+    entry = state["jobs"].get(job_id)
+    if not entry:
+        return
+    url = entry.get("url", "")
+    if url:
+        webbrowser.open(url)
+        print(f"Opening: {url}", file=sys.stderr)
+    RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
+    tmp_dir = os.path.join(RESULTS_DIR, job_id)
+    os.makedirs(tmp_dir, exist_ok=True)
+    files = app_list(job_id)
+    for f in files:
+        content = app_get(job_id, f["filename"])
+        if content:
+            fpath = os.path.join(tmp_dir, f["filename"])
+            with open(fpath, "w", encoding="utf-8") as fh:
+                fh.write(content)
+    if os.path.exists(tmp_dir):
+        subprocess.run(["explorer", tmp_dir], shell=True)
+        print(f"Folder: {tmp_dir}", file=sys.stderr)
+    print(f"\nReady: {entry.get('title')} @ {entry.get('company')}", file=sys.stderr)
+
+
+def cmd_ready(job_id=None):
+    state = load()
+    if not state.get("jobs"):
+        return
+    targets = []
+    for jid, entry in state["jobs"].items():
+        if job_id and jid == job_id:
+            targets = [(jid, entry)]
+            break
+        elif not job_id and entry.get("stage") == "tailored":
+            targets.append((jid, entry))
+    if not targets:
+        print("Job not found" if job_id else "No tailored jobs", file=sys.stderr)
+        return
+    for jid, entry in targets:
+        _cmd_ready(jid)
 
 
 def cmd_resume(job_id):
@@ -207,98 +287,6 @@ def cmd_skip(*job_ids):
     print(f"SKIP:{count}", file=sys.stderr)
 
 
-def cmd_ready(job_id=None):
-    state = load()
-    if not state.get("jobs"):
-        return
-    targets = []
-    for jid, entry in state["jobs"].items():
-        if job_id and jid == job_id:
-            targets = [(jid, entry)]
-            break
-        elif not job_id and entry.get("stage") == "tailored":
-            targets.append((jid, entry))
-    if not targets:
-        print("Job not found" if job_id else "No tailored jobs", file=sys.stderr)
-        return
-    for jid, entry in targets:
-        url = entry.get("url", "")
-        if url:
-            webbrowser.open(url)
-            print(f"Opening: {url}", file=sys.stderr)
-
-        RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
-        tmp_dir = os.path.join(RESULTS_DIR, jid)
-        os.makedirs(tmp_dir, exist_ok=True)
-        files = app_list(jid)
-        for f in files:
-            content = app_get(jid, f["filename"])
-            if content:
-                fpath = os.path.join(tmp_dir, f["filename"])
-                with open(fpath, "w", encoding="utf-8") as fh:
-                    fh.write(content)
-
-        if os.path.exists(tmp_dir):
-            subprocess.run(["explorer", tmp_dir], shell=True)
-            print(f"Folder: {tmp_dir}", file=sys.stderr)
-
-        print(
-            f"\nReady: {entry.get('title')} @ {entry.get('company')}", file=sys.stderr
-        )
-
-
-def cmd_run_all(no_open=False):
-    state = load()
-    if not state.get("jobs"):
-        print("STATE_EMPTY", file=sys.stderr)
-        return
-
-    described = [
-        (jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described"
-    ]
-    if not described:
-        failed_count = state["stages"].get("failed", 0)
-        if failed_count:
-            print(f"NO_PENDING ({failed_count} failed, use 'retry')", file=sys.stderr)
-        else:
-            print(f"ALL_DONE", file=sys.stderr)
-        return
-
-    jid, entry = described[0]
-    title = entry.get("title", "?")
-    company = entry.get("company", "?")
-    print(f"\nJOB {jid} {title} @ {company}", file=sys.stderr)
-
-    try:
-        success, result = generate_tailored_docs(entry)
-        if success:
-            advance(
-                entry,
-                "tailored",
-                response_path=result.get("response_path"),
-                scripts=result.get("scripts", []),
-            )
-            if no_open:
-                print(
-                    f"  COMPLETE {jid} (--no-open, use 'ready {jid}' later)",
-                    file=sys.stderr,
-                )
-            else:
-                print(f"  COMPLETE {jid}", file=sys.stderr)
-                cmd_ready(jid)
-        else:
-            advance(entry, "failed", error=str(result)[:200])
-            err_str = str(result)[:120]
-            if "RATE_LIMIT" in err_str:
-                reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
-                print(f"  RATE_LIMIT {jid} — resets {reset_time}", file=sys.stderr)
-            else:
-                print(f"  FAILED {jid} {err_str}", file=sys.stderr)
-    except Exception as e:
-        advance(entry, "failed", error=str(e)[:200])
-        print(f"  ERROR {jid} {str(e)[:120]}", file=sys.stderr)
-
-
 def cmd_done(*job_ids):
     if not job_ids:
         print("Usage: python3 tailor.py done <jid1> [jid2 ...]", file=sys.stderr)
@@ -312,7 +300,6 @@ def cmd_done(*job_ids):
             continue
         advance(state["jobs"][job_id], "applied", applied_at=datetime.now().isoformat())
 
-        # Create .url shortcut to the job posting
         job_url = state["jobs"][job_id].get("url", "")
         if job_url:
             url_path = os.path.join(RESULTS_DIR, job_id, f"{job_id}.url")
@@ -322,7 +309,6 @@ def cmd_done(*job_ids):
                     f.write(f"[InternetShortcut]\nURL={job_url}\n")
             except Exception:
                 pass
-
         count += 1
     print(f"DONE:{count}", file=sys.stderr)
 
@@ -352,7 +338,6 @@ def cmd_reset(job_id=None, hard=False):
     if not state.get("jobs"):
         print("No jobs.", file=sys.stderr)
         return
-
     if job_id == "--all":
         targets = list(state["jobs"].items())
     elif job_id:
@@ -361,147 +346,54 @@ def cmd_reset(job_id=None, hard=False):
             return
         targets = [(job_id, state["jobs"][job_id])]
     else:
-        print(
-            "Usage: python3 tailor.py reset <jid> [--hard] | --all [--hard]",
-            file=sys.stderr,
-        )
+        print("Usage: python3 tailor.py reset <jid> [--hard] | --all [--hard]", file=sys.stderr)
         return
-
     to_stage = "extracted" if hard else "described"
     for jid, entry in targets:
         old = entry.get("stage", "?")
         advance(entry, to_stage, error=None, response_path=None, scripts=[])
         print(f"  {jid}: {old} -> {to_stage}", file=sys.stderr)
-
     mode = "hard" if hard else "soft"
     print(f"Reset {len(targets)} jobs ({mode}).", file=sys.stderr)
 
 
-def _verify_fetch(url):
-    """Fetch page text via curl. Returns text or None on failure.
-    Short responses likely mean a sign-in wall — caller treats those as unverifiable."""
-    try:
-        r = subprocess.run(
-            ["curl", "-s", "-L", "--max-time", "10",
-             "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", url],
-            capture_output=True, timeout=15
-        )
-        if r.returncode == 0 and len(r.stdout) > 100:
-            text = re.sub(r'<script[^>]*>.*?</script>', '', r.stdout.decode('utf-8', errors='replace'), flags=re.DOTALL)
-            text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
-            text = re.sub(r'<[^>]+>', '\n', text)
-            text = re.sub(r'\n\s*\n', '\n\n', text)
-            text = text.strip()
-            if len(text) > 80:
-                return text[:500]
-        return "(sign-in wall or empty)"
-    except Exception:
-        return None
-
-
-def cmd_verify(count=None):
-    """Re-fetch described job URLs and print VERIFY lines for LLM to judge freshness."""
-    state = load()
-    described = [
-        (jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described"
-    ]
-    if not described:
-        print("NO_PENDING_VERIFY", file=sys.stderr)
-        return
-    if count:
-        described = described[:count]
-    for jid, entry in described:
-        url = entry.get("url", "")
-        print(f"FILE {jid}", file=sys.stderr)
-        print(f"VERIFY:{jid}:{entry.get('title','')[:40]} @ {entry.get('company','')[:20]}", file=sys.stderr)
-        text = _verify_fetch(url)
-        if text:
-            print(text)
-        else:
-            print("(fetch failed)")
-        print()
-    print("---\nRead VERIFY lines above. Skip closed jobs, then run run-all.", file=sys.stderr)
+def _parse_count():
+    if "--count" in sys.argv:
+        i = sys.argv.index("--count")
+        if i + 1 < len(sys.argv):
+            return int(sys.argv[i + 1])
+    return None
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 tailor.py <command> [args]", file=sys.stderr)
-        print("Commands:", file=sys.stderr)
-        print(
-            "  batch [--count N]      Process N described jobs (default: 1)",
-            file=sys.stderr,
-        )
-        print(
-            "  run-all                Process next described job with handoff",
-            file=sys.stderr,
-        )
-        print("  status                 Show pipeline state", file=sys.stderr)
-        print("  resume <job_id>        Show application files", file=sys.stderr)
-        print(
-            "  ready [job_id]         Open URL + folder for tailored job",
-            file=sys.stderr,
-        )
-        print("  done <job_id>          Mark job as applied", file=sys.stderr)
-        print("  redo <job_id>          Re-tailor a job (described)", file=sys.stderr)
-        print(
-            "  reset <jid> [--hard]   Re-tailor (soft) or re-fetch+re-tailor (hard)",
-            file=sys.stderr,
-        )
-        print("  reset --all [--hard]   Mass reset all jobs", file=sys.stderr)
-        print("  retry                  Retry all failed", file=sys.stderr)
-        print("  skip <job_id>          Skip a job", file=sys.stderr)
-        print("  verify [--count N]     Re-fetch described URLs for LLM freshness check", file=sys.stderr)
-        print("  list-gems              List gems", file=sys.stderr)
-        sys.exit(1)
-
-    command = sys.argv[1]
-
-    if command == "batch":
-        count = 1
-        if "--count" in sys.argv:
-            idx = sys.argv.index("--count")
-            if idx + 1 < len(sys.argv):
-                count = int(sys.argv[idx + 1])
-        cmd_batch(count)
-    elif command == "status":
-        cmd_status()
-    elif command == "resume":
-        job_id = sys.argv[2] if len(sys.argv) > 2 else None
-        if not job_id:
-            print("Usage: python3 tailor.py resume <job_id>", file=sys.stderr)
-        else:
-            cmd_resume(job_id)
-    elif command == "retry":
-        cmd_retry()
-    elif command == "skip":
-        cmd_skip(*sys.argv[2:])
-    elif command == "ready":
-        job_id = sys.argv[2] if len(sys.argv) > 2 else None
-        cmd_ready(job_id)
-    elif command == "run-all":
-        no_open = "--no-open" in sys.argv
-        cmd_run_all(no_open=no_open)
-    elif command == "done":
-        cmd_done(*sys.argv[2:])
-    elif command == "redo":
-        job_id = sys.argv[2] if len(sys.argv) > 2 else None
-        cmd_redo(job_id)
-    elif command == "reset":
-        hard = "--hard" in sys.argv
-        job_id = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "--hard" else None
-        cmd_reset(job_id=job_id, hard=hard)
-    elif command == "verify":
-        count = None
-        if "--count" in sys.argv:
-            idx = sys.argv.index("--count")
-            if idx + 1 < len(sys.argv):
-                count = int(sys.argv[idx + 1])
-        cmd_verify(count)
-    elif command == "list-gems":
-        list_gems()
+    subcommands = {"done", "skip", "redo", "retry", "reset", "status", "resume", "ready", "list-gems"}
+    if len(sys.argv) > 1 and sys.argv[1] in subcommands:
+        cmd = sys.argv[1]
+        if cmd == "done":
+            cmd_done(*sys.argv[2:])
+        elif cmd == "skip":
+            cmd_skip(*sys.argv[2:])
+        elif cmd == "redo":
+            cmd_redo(sys.argv[2] if len(sys.argv) > 2 else None)
+        elif cmd == "retry":
+            cmd_retry()
+        elif cmd == "reset":
+            hard = "--hard" in sys.argv
+            job_id = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "--hard" else None
+            cmd_reset(job_id=job_id, hard=hard)
+        elif cmd == "status":
+            cmd_status()
+        elif cmd == "resume":
+            cmd_resume(sys.argv[2] if len(sys.argv) > 2 else None)
+        elif cmd == "ready":
+            cmd_ready(sys.argv[2] if len(sys.argv) > 2 else None)
+        elif cmd == "list-gems":
+            list_gems()
     else:
-        print(f"Unknown command: {command}", file=sys.stderr)
-        sys.exit(1)
+        cmd_craft(
+            count=_parse_count() or 1,
+            no_open="--no-open" in sys.argv,
+        )
 
 
 if __name__ == "__main__":

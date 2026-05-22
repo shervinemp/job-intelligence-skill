@@ -1,13 +1,22 @@
-"""fetch.py — Fetch job descriptions. SLM reviews DESC lines, admits or rejects."""
+"""fetch.py — Fetch job descriptions. SLM reviews DESC lines, admits or rejects.
+
+Usage:
+  fetch.py [--count N] [--curl] [--force] [--refresh]
+  fetch.py admit <jid> [jid...]
+  fetch.py reject <jid> [jid...]
+  fetch.py flag <jid> [jid...]
+  fetch.py open [<jid>]
+  fetch.py retry
+  fetch.py status
+"""
 import os, subprocess, sys, time, re
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-from lib.db import load, save, advance, pipeline_status
+from lib.db import load, advance, pipeline_status
 from lib.db import desc_save, desc_exists
 from lib.chrome_manager import CHROME_PROFILE as BROWSER_PROFILE, connect
 from lib import auth_walls
 
 MAX_DESC_LEN = 8000
-
 
 _AUTH_SIGNALS = [
     "sign in", "sign in to view", "sign in to see", "sign in to continue",
@@ -26,7 +35,6 @@ def _detect_auth_wall(text):
 
 
 def _pw_fetch(url, timeout=30):
-    """Fetch a URL via Playwright. Uses chrome_manager for CDP or fallback."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -93,10 +101,11 @@ def save_description(jid, text):
     desc_save(jid, text[:MAX_DESC_LEN])
 
 
-def cmd_run(count=None, use_playwright=True, force=False):
+def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False):
     state = load()
+    stage = "described" if refresh else "extracted"
     pending = [(jid, e) for jid, e in state["jobs"].items()
-               if e.get("stage") == "extracted" and (force or not desc_exists(jid))]
+               if e.get("stage") == stage and (force or not desc_exists(jid))]
     if count:
         pending = pending[:count]
     if not pending:
@@ -124,7 +133,6 @@ def cmd_run(count=None, use_playwright=True, force=False):
 
 
 def cmd_flag(*jids):
-    """Mark jobs as needing human attention (auth wall, cookie wall, etc.) without rejecting. Stays at extracted."""
     state = load()
     count = 0
     for jid in jids:
@@ -197,94 +205,76 @@ def cmd_retry(use_playwright=True):
     print(f"RETRY:{fetched}", file=sys.stderr)
 
 
-def cmd_open():
-    """Open visible Chrome tab for the first flagged job. Waits for user to close tab, then retries all."""
-    from playwright.sync_api import sync_playwright
-    entries = auth_walls.list_all()
-    if not entries:
-        print("NO_AUTH_WALLS", file=sys.stderr)
-        return
-
-    entry = entries[0]
-    url = entry.get("url", "https://linkedin.com")
-    print(f"OPENING: {entry.get('title','')[:40]} @ {entry.get('company','')[:20]}", file=sys.stderr)
-    print("Log in, close the tab. Pipeline retries flagged jobs after.", file=sys.stderr)
-
+def cmd_open(*jids):
+    if jids:
+        jid = jids[0]
+        state = load()
+        entry = state.get("jobs", {}).get(jid)
+        if not entry:
+            print(f"Job not found: {jid}", file=sys.stderr)
+            return
+        url = entry.get("url", "")
+        print(f"Opening {entry.get('title','')[:40]} @ {entry.get('company','')[:20]}", file=sys.stderr)
+    else:
+        entries = auth_walls.list_all()
+        if entries:
+            url = entries[0].get("url", "https://linkedin.com")
+            print(f"Opening: {entries[0].get('title','')[:40]} @ {entries[0].get('company','')[:20]}", file=sys.stderr)
+        else:
+            state = load()
+            for jid, e in state.get("jobs", {}).items():
+                if e.get("stage") in ("extracted", "described"):
+                    url = e.get("url", "")
+                    print(f"Opening {e.get('title','')[:40]} @ {e.get('company','')[:20]}", file=sys.stderr)
+                    break
+            else:
+                print("No jobs to open.", file=sys.stderr)
+                return
     b, ctx = connect()
-    if ctx is not None:
+    if ctx:
         p = ctx.new_page()
-        p.goto(url, wait_until="domcontentloaded", timeout=30000)
-        p.wait_for_timeout(2000)
         try:
             p.bring_to_front()
         except Exception:
             pass
-        for _ in range(300):
-            try:
-                if p.is_closed():
-                    break
-            except Exception:
-                break
-            time.sleep(1)
+        p.goto(url, wait_until="domcontentloaded", timeout=30000)
         b.close()
+        print("Opened. Close tab when done.", file=sys.stderr)
     else:
-        with sync_playwright() as spw:
-            b = spw.chromium.launch_persistent_context(
-                BROWSER_PROFILE, headless=False, no_viewport=True,
-            )
-            p = b.new_page()
-            p.goto(url, wait_until="domcontentloaded", timeout=30000)
-            p.wait_for_timeout(2000)
-            for _ in range(300):
-                try:
-                    if not p.is_closed():
-                        break
-                except Exception:
-                    break
-                time.sleep(1)
-            b.close()
-    print("LOGIN_DONE — retrying flagged jobs", file=sys.stderr)
+        print("Could not open Chrome.", file=sys.stderr)
 
-    state = load()
-    for e in entries:
-        jid = e.get("jid")
-        if jid and jid in state.get("jobs", {}):
-            entry_obj = state["jobs"][jid]
-            if entry_obj.get("stage") == "failed":
-                advance(entry_obj, "extracted", error=None)
-    cmd_run(count=50, use_playwright=True, force=True)
+
+def _parse_count():
+    if "--count" in sys.argv:
+        i = sys.argv.index("--count")
+        if i + 1 < len(sys.argv):
+            return int(sys.argv[i + 1])
+    return None
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 fetch.py <cmd> [args]", file=sys.stderr)
-        print("Commands: run, admit, reject, flag, open, status, retry", file=sys.stderr)
-        sys.exit(1)
-    use_pw = '--curl' not in sys.argv
-    force = '--force' in sys.argv
-    cmd = sys.argv[1]
-    if cmd == "run":
-        count = None
-        if "--count" in sys.argv:
-            i = sys.argv.index("--count")
-            if i + 1 < len(sys.argv):
-                count = int(sys.argv[i + 1])
-        cmd_run(count=count, use_playwright=use_pw, force=force)
-    elif cmd == "admit":
-        cmd_admit(*sys.argv[2:])
-    elif cmd == "flag":
-        cmd_flag(*sys.argv[2:])
-    elif cmd == "open":
-        cmd_open()
-    elif cmd == "reject":
-        cmd_reject(*sys.argv[2:])
-    elif cmd == "status":
-        cmd_status()
-    elif cmd == "retry":
-        cmd_retry(use_playwright=use_pw)
+    subcommands = {"admit", "reject", "flag", "open", "retry", "status"}
+    if len(sys.argv) > 1 and sys.argv[1] in subcommands:
+        cmd = sys.argv[1]
+        if cmd == "admit":
+            cmd_admit(*sys.argv[2:])
+        elif cmd == "reject":
+            cmd_reject(*sys.argv[2:])
+        elif cmd == "flag":
+            cmd_flag(*sys.argv[2:])
+        elif cmd == "open":
+            cmd_open(*sys.argv[2:])
+        elif cmd == "retry":
+            cmd_retry(use_playwright='--curl' not in sys.argv)
+        elif cmd == "status":
+            cmd_status()
     else:
-        print(f"Unknown: {cmd}", file=sys.stderr)
-        sys.exit(1)
+        cmd_fetch(
+            count=_parse_count(),
+            use_playwright='--curl' not in sys.argv,
+            force='--force' in sys.argv,
+            refresh='--refresh' in sys.argv,
+        )
 
 
 if __name__ == "__main__":

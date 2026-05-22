@@ -1,97 +1,59 @@
 # Job Intelligence Pipeline
 
-## Loop (unified status)
+## Pipeline
 
-Any of `extract.py status`, `fetch.py status`, `tailor.py status`, or `db.py stats` shows
-the full picture including the next command to run:
+| I run | What happens | What I do |
+|-------|-------------|-----------|
+| `extract.py [--count N]` | Prints staged emal, extracts URLs | Pick URLs → `submit <tid> '<json>'` |
+| `fetch.py [--count N] [--curl] [--force]` | Fetches descriptions for extracted jobs | `admit`/`reject`/`flag` each |
+| `fetch.py --refresh [--count N]` | Re-fetches described URLs (freshness check) | Same admit/reject/flag |
+| `fetch.py admit <jid>` | Mark job as described | — |
+| `fetch.py reject <jid>` | Mark job as skipped (garbage/closed) | — |
+| `fetch.py flag <jid>` | Mark auth wall (save to needs_auth.json) | — |
+| `fetch.py open [<jid>]` | Open job URL in Chrome tab, return immediately | View, close tab, decide |
+| `fetch.py retry` | Retry failed fetches | Same admit/reject |
+| `tailor.py [--count N] [--no-open]` | Gemini crafts CV for next described job(s) | `done`/`skip`/`redo` |
+| `tailor.py done <jid>` | Mark as applied, create .url shortcut | — |
+| `tailor.py skip <jid>` | Skip | — |
+| `tailor.py redo <jid>` | Reset described for re-tailor | — |
+| `tailor.py retry` | Retry failed tailor jobs | — |
+| `tailor.py ready [<jid>]` | Open URL + files folder | — |
+| `tailor.py resume <jid>` | List application files | — |
+| `tailor.py reset <jid> [--hard]` | Reset to described or extracted | — |
+| `tailor.py reset --all [--hard]` | Mass reset | — |
+| `status` | Unified status + next command | Follow `next:` hint |
 
-| Block | Action |
-|-------|--------|
-| `staged pending` | `python3 extract.py step --count N` → agent reads → `extract.py submit <tid> '<json>'` |
-| `extracted:N` | `python3 fetch.py run --count 10` → read DESC lines → admit / reject |
-| `described:N` | `python3 tailor.py run-all` → tailor 1 job → ask human |
-| `tailored:N` | `tailor.py ready` (review) → `tailor.py done <jid>` |
-| `failed:N` | `python3 fetch.py retry` or `tailor.py retry` |
-| `auth walls:N` | `python3 fetch.py open` → human logs in → close browser → auto-retries |
-| all zero | run gmail search → `stage_emails.py [search_results.json]` |
+## Extraction rules
 
-## Extraction (LLM-driven)
+| Value | Include |
+|-------|---------|
+| Canada-based (Toronto, Ottawa, Vancouver, etc.) | Yes |
+| Remote / work-from-home | Yes |
+| Quebec in-office | No |
+| US on-site only | No |
+| Unclear location | Fetch description, then decide |
 
-`extract.py step --count N` prints staged emails → agent reads → `extract.py submit <tid> '<json>'` saves job URLs.
+## Auth walls
 
-Filter:
+Detected automatically in `fetch.py` — short page text with sign-in keywords gets flagged.  
+`fetch.py flag <jid>` — manual flag.  
+`fetch.py open [<jid>]` — open in Chrome (uses persistent session), returns immediately.  
+Stale entries (job already progressed past extracted/failed) are auto-pruned.
 
-| Rule | Do |
-|------|----|
-| Canada-based (Toronto, Ottawa, Vancouver, etc.) | Include |
-| Remote / work-from-home | Include |
-| Quebec in-office (requires French / permits) | Exclude |
-| US-based, on-site only | Exclude |
-| Location unclear | Fetch description then decide |
+## Output directory
 
-## Fetch
-
-`python3 fetch.py run --count 30` → curl (default) or Playwright.
-Add `--curl` to skip Playwright. Add `--force` to re-fetch existing descriptions.
-
-Chrome managed by `lib/chrome_manager.py` — connects via CDP, auto-starts if down, persists profile at `~/.openclaw/chrome-profile/`.
-Auth-walled jobs are tracked per-jid in `~/.openclaw/needs_auth.json`; failed retries preserve the entry.
-
-## DESC review
-
-`DESC:jid:first512chars` per job:
-
-| Content | Do |
-|---------|-----|
-| job `Title @ Company` + description | `python3 fetch.py admit jid` |
-| "This job has closed" | `python3 fetch.py reject jid` |
-| sign-in / cookie / needs human eyes | `python3 fetch.py flag jid` → stays at extracted |
-| garbage (no job) | `python3 fetch.py reject jid` |
-
-## Flagged jobs
-
-`fetch.py flag jid` → records to `~/.openclaw/needs_auth.json` (persistent).  
-
-Auth walls are also auto-detected during `_pw_fetch`: if the page returns short text with sign-in/login keywords, it's flagged as an auth wall without manual intervention.
-
-`python3 fetch.py open` → opens visible browser → human logs in → close browser → auto-retries all flagged jobs.
-
-Stale entries (jobs already past `extracted`/`failed` stage) are ignored; `cmd_open` resets `failed` auth-walled jobs to `extracted` before retry.
-
-Sessions persist — log in once, lasts forever.
-
-## Tailor
-
-`tailor.py run-all` → `JOB {jid} {title} @ {company}` → ask human.
-
-`tailor.py batch --count N` — process N described jobs silently (no handoff).
-
-Before calling Gemini, `tailor.py` re-fetches the job URL via curl.
-If the page says "no longer accepting" or similar, the job is auto-skipped (`CLOSED`).
-
-Results go to `~/.openclaw/results/{jid}/`:
+`~/.openclaw/results/{jid}/`:
 - `gemini_response.txt` — full Gemini output
-- `script.py` — extracted Python script that generates the PDF
-- `{jid}.url` — shortcut to the job posting (double-click to open)
-- Generated PDF(s) from running script.py
-
-| Human | Run |
-|-------|-----|
-| yes | `apply.py auto jid` or `tailor.py ready jid` then `tailor.py done jid` |
-| skip | `tailor.py skip jid` |
-| redo | `tailor.py redo jid` |
-
-## Never touch
-
-`lib/` `tools/` `data/` `stage/` `results/` `profile.json` `secrets.json`
+- `script.py` — extracted Python script for PDF
+- `{jid}.url` — shortcut to job posting
+- `*.pdf` — generated CV/cover letter
 
 ## Recovery
 
 | Signal | Fix |
 |--------|------|
 | `invalid_grant` | `gmail-cli auth add email` |
-| `TIMEOUT` | `tailor.py retry` |
-| `RATE_LIMIT` | `tailor.py retry` (after reset time) |
-| Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="C:\Users\sherv\.openclaw\chrome-profile"','--remote-debugging-port=9222'` |
+| `TIMEOUT` / `RATE_LIMIT` | `tailor.py retry` |
+| Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="~/.openclaw/chrome-profile"','--remote-debugging-port=9222'` |
 | DB crash | `extract.py reset` |
-| Auth wall retry failed | Run `fetch.py open` again (jid still in `needs_auth.json`) |
+| Auth wall stuck | `fetch.py open` + `fetch.py --refresh` |
