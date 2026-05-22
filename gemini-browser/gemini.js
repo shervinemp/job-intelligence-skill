@@ -256,6 +256,25 @@ async function checkMode(page) {
 
 // ─── Gem Navigation ──────────────────────────────────────
 
+const _LIMIT_PATTERNS = [
+  /usage.*(?:limit|cap).*reached/i, /rate limit/i, /too many requests/i,
+  /try again later/i, /maximum number.*(?:message|request)/i, /limit.*reset/i,
+  /you.*ran.*out/i, /out.*of.*requests/i, /quota.*exceeded/i,
+  /upgrade to.*pro/i, /pro.*(?:usage|limit).*reset/i,
+  /limit.*reached/i, /gemini.*(?:can't|unable|not available)/i
+];
+
+function _checkLimitInText(text) {
+  for (const p of _LIMIT_PATTERNS) {
+    const m = text.match(p);
+    if (m) {
+      const resetMatch = text.match(/(?:resets?\s+at?\s+)?(.+?(?:\d{1,2}:\d{2}|[ap]m|minutes|hours))/i);
+      return { timedOut: true, resetsAt: resetMatch ? resetMatch[1].trim() : 'unknown' };
+    }
+  }
+  return { timedOut: false };
+}
+
 async function openGem(page, gemUrl) {
   const url = gemUrl || GEM;
   log(`Navigating to: ${url}`);
@@ -266,18 +285,28 @@ async function openGem(page, gemUrl) {
     die(`Gem not found at ${url}. Response: ${body.substring(0, 100)}`);
   }
 
-  for (let i = 0; i < 6; i++) {
+  // Check for rate limit immediately after page load
+  const bodyText = await page.evaluate(() => document.body.innerText);
+  const limit = _checkLimitInText(bodyText);
+  if (limit.timedOut) return limit;
+
+  for (let i = 0; i < 4; i++) {
     const hasInput = await page.evaluate(() => !!document.querySelector('[contenteditable="true"]'));
     if (hasInput) break;
+    // Check again each iteration in case a blocking overlay appeared
+    const t = await page.evaluate(() => document.body.innerText);
+    const l = _checkLimitInText(t);
+    if (l.timedOut) return l;
     await wait(2000);
   }
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 4; i++) {
     const hasConvs = await page.evaluate(() => document.querySelectorAll('[data-test-id="conversation"]').length > 0);
     if (hasConvs) break;
     await wait(2000);
   }
-  await wait(2000);
+  await wait(1000);
   try { await page.bringToFront(); } catch (e) { }
+  return { timedOut: false };
 }
 
 // ─── Prompt ──────────────────────────────────────────────
@@ -470,7 +499,11 @@ async function dump(page) {
 
     if (!opts.prompt) die('Usage: node gemini.js "your prompt"');
 
-    await openGem(page, opts.gem);
+    let og = await openGem(page, opts.gem);
+    if (og.timedOut) {
+      const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: og.resetsAt || 'unknown' });
+      console.error(out); process.exit(2);
+    }
 
     const modeSet = await ensureMode(page);
     if (modeSet.status === 'timedOut') {
@@ -487,7 +520,11 @@ async function dump(page) {
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) {
         log(`Retry ${attempt + 1}...`);
-        await openGem(page, opts.gem);
+        og = await openGem(page, opts.gem);
+        if (og.timedOut) {
+          const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: og.resetsAt || 'unknown' });
+          console.error(out); process.exit(2);
+        }
         const retrySet = await ensureMode(page);
         if (retrySet.status === 'timedOut') {
           const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: retrySet.resetsAt || 'unknown' });
