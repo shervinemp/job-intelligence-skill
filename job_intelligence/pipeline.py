@@ -3,7 +3,7 @@
 import json, os, sys, subprocess
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
-NEEDS_AUTH_PATH = os.path.join(SKILL_DIR, "needs_auth.json")
+NEEDS_AUTH_PATH = os.path.join(os.path.expanduser('~'), '.openclaw', 'needs_auth.json')
 
 
 def _run(*args, **kw):
