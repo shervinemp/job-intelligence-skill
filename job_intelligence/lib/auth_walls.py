@@ -49,11 +49,34 @@ def remove(jid):
         _write(entries)
 
 
+def prune():
+    """Remove entries where the job has progressed past extracted/failed in the DB."""
+    try:
+        from .db import load, desc_exists
+        state = load()
+        entries = _read()
+        before = len(entries)
+        clean = []
+        for e in entries:
+            jid = e.get("jid")
+            if jid and jid in state.get("jobs", {}):
+                stage = state["jobs"][jid].get("stage")
+                if stage not in ("extracted", "failed"):
+                    continue
+            clean.append(e)
+        if len(clean) != before:
+            _write(clean)
+    except Exception:
+        pass
+
+
 def list_all():
+    prune()
     return _read()
 
 
 def count():
+    prune()
     return len(_read())
 
 
