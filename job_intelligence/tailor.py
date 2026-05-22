@@ -368,8 +368,10 @@ def cmd_reset(job_id=None, hard=False):
 def _parse_count():
     if "--count" in sys.argv:
         i = sys.argv.index("--count")
-        if i + 1 < len(sys.argv):
-            return int(sys.argv[i + 1])
+        if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
+            print("Warning: --count requires a number, using default 1", file=sys.stderr)
+            return None
+        return int(sys.argv[i + 1])
     return None
 
 
@@ -397,11 +399,14 @@ def main():
             cmd_ready(sys.argv[2] if len(sys.argv) > 2 else None)
         elif cmd == "list-gems":
             list_gems()
-    else:
+    elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
         cmd_craft(
             count=_parse_count() or 1,
             no_open="--no-open" in sys.argv,
         )
+    else:
+        print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

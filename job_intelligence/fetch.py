@@ -134,6 +134,9 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
 
 
 def cmd_flag(*jids):
+    if not jids:
+        print("Usage: python3 fetch.py flag <jid> [jid...]", file=sys.stderr)
+        return
     state = load()
     count = 0
     for jid in jids:
@@ -254,8 +257,10 @@ def cmd_open(*jids):
 def _parse_count():
     if "--count" in sys.argv:
         i = sys.argv.index("--count")
-        if i + 1 < len(sys.argv):
-            return int(sys.argv[i + 1])
+        if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
+            print("Warning: --count requires a number, using all pending", file=sys.stderr)
+            return None
+        return int(sys.argv[i + 1])
     return None
 
 
@@ -275,7 +280,7 @@ def main():
             cmd_retry(use_playwright='--curl' not in sys.argv)
         elif cmd == "status":
             cmd_status()
-    else:
+    elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
         cmd_fetch(
             count=_parse_count(),
             use_playwright='--curl' not in sys.argv,
@@ -283,6 +288,9 @@ def main():
             refresh='--refresh' in sys.argv,
             verbose='--verbose' in sys.argv,
         )
+    else:
+        print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

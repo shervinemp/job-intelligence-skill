@@ -67,9 +67,11 @@ def cmd_reset():
     c.execute("DELETE FROM job_documents")
     c.execute("DELETE FROM jobs")
     c.execute("DELETE FROM companies")
+    c.execute("DELETE FROM stages")
     c.execute("PRAGMA foreign_keys=ON")
     c.commit()
     setting_set(EXTRACTED_IDS_KEY, [])
+    setting_set("staged_ids", [])
     import shutil
     res_dir = os.path.join(SKILL_DIR, "results")
     if os.path.exists(res_dir):
@@ -104,13 +106,19 @@ def main():
             cmd_reset()
         elif cmd == "status":
             cmd_status()
-    else:
+    elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
         count = 1
         if "--count" in sys.argv:
             i = sys.argv.index("--count")
-            if i + 1 < len(sys.argv):
+            if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
+                print("Warning: --count requires a number, using default 1", file=sys.stderr)
+            else:
                 count = int(sys.argv[i + 1])
         cmd_review(count)
+    else:
+        print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
+        print("Usage: python3 extract.py [--count N] | submit <tid> '<json>' | reset | status", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
