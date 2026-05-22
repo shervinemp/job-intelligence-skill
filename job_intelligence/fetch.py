@@ -136,7 +136,7 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
         ok, result = fetch_description(url, use_playwright=use_playwright)
         if ok:
             save_description(jid, result)
-            limit = 2000 if verbose else 200
+            limit = 2000 if verbose else 500
             snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
             print(f"DESC:{jid}:{snippet}")
             auth_walls.remove(jid)
@@ -210,10 +210,10 @@ def cmd_status():
 
 
 def cmd_retry_skipped():
-    c = get_conn()
-    c.execute("UPDATE jobs SET stage='extracted', error=NULL WHERE stage='skipped'")
-    c.commit()
-    count = c.rowcount
+    conn = get_conn()
+    cur = conn.execute("UPDATE jobs SET stage='extracted', error=NULL WHERE stage='skipped'")
+    conn.commit()
+    count = cur.rowcount
     print(f"UNSKIPPED:{count}", file=sys.stderr)
     if count:
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
