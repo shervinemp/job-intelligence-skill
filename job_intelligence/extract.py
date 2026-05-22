@@ -118,7 +118,7 @@ def main():
         print("Commands:", file=sys.stderr)
         print("  step [--count N]     Print staged emails for LLM to identify job URLs", file=sys.stderr)
         print("  run [--count N]      Print staged emails for manual review", file=sys.stderr)
-        print("  submit <tid> <json>  Submit job URLs. JSON: [{"url":"...","title":"...","company":"..."}]", file=sys.stderr)
+        print("  submit <tid> <json>  Submit job URLs. JSON array of objects with url, title, company", file=sys.stderr)
         print("  reset                Clear state and start fresh", file=sys.stderr)
         print("  status               Extraction status", file=sys.stderr)
         sys.exit(1)
