@@ -308,13 +308,23 @@ async function read(page, timeout = 360000) {
 
 // ─── Delete last conversation ──────────────────────────
 
-async function deleteChat(page) {
+async function deleteChat(page, convTitle) {
   try {
     await wait(2000);
 
-    // Cross-check: verify we're on the gem page
+    // Verify we're on the gem page
     const onGem = await page.evaluate(() => location.href.includes('/gem/'));
     if (!onGem) { log('deleteChat: not on gem page'); return; }
+
+    // Cross-check: verify conversation hasn't changed since we captured it
+    if (convTitle) {
+      const match = await page.evaluate((title) => {
+        const conv = document.querySelector('[data-test-id="conversation"]');
+        if (!conv) return false;
+        return (conv.textContent || '').trim().substring(0, 40) === title;
+      }, convTitle);
+      if (!match) { log('deleteChat: conversation mismatch, skipping'); return; }
+    }
 
     const moreBtn = await page.evaluate(() => {
       const first = document.querySelector('[data-test-id="conversation"]');
@@ -449,7 +459,13 @@ async function dump(page) {
       } catch (e) { log(`app-dir write failed: ${e.message}`); }
     }
 
-    await deleteChat(page);
+    // Capture conversation title right before delete (no navigation between now and deleteChat)
+    const convTitle = await page.evaluate(() => {
+      const el = document.querySelector('[data-test-id="conversation"]');
+      return el ? (el.textContent || '').trim().substring(0, 40) : null;
+    });
+
+    await deleteChat(page, convTitle);
     await page.close();
     process.exit(0);
   } catch (e) {
