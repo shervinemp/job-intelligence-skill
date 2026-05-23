@@ -103,6 +103,7 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                     add_job({"url": job_url, "title": parsed["title"], "company": parsed["company"],
                              "location": parsed["location"], "source": "LinkedIn", "source_url": job_url})
                     card.click()
+                    page.wait_for_timeout(500)
                     try:
                         page.wait_for_function(
                             "document.querySelector('.job-details-jobs-unified-top-card__job-title')?.innerText?.trim()?.length > 0",
