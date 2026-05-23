@@ -406,7 +406,8 @@ async function deleteChat(page, convTitle) {
       const match = await page.evaluate((title) => {
         const conv = document.querySelector('[data-test-id="conversation"]');
         if (!conv) return false;
-        return (conv.textContent || '').trim().substring(0, 40) === title;
+        const text = (conv.textContent || '').replace(/\s+/g, ' ').trim().substring(0, 40);
+        return text === title;
       }, convTitle);
       if (!match) { log('deleteChat: conversation mismatch, skipping'); return; }
     }
@@ -556,7 +557,8 @@ async function dump(page) {
 
     const convTitle = await page.evaluate(() => {
       const el = document.querySelector('[data-test-id="conversation"]');
-      return el ? (el.textContent || '').trim().substring(0, 40) : null;
+      const raw = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      return el ? raw.substring(0, 40) : null;
     });
 
     await deleteChat(page, convTitle);
