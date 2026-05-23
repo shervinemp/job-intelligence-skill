@@ -4,10 +4,8 @@
 Usage:
   python3 linkedin.py [--url <url>] [--max N] [--list]
 
-Default: Canada-wide job search results.
-Scrapes card data (title, company, location), clicks each to extract full
-description from the right pane. Adds to DB as 'extracted' with description
-pre-saved — skips fetch.py, goes straight to admit/reject then tailor.py.
+Scrapes job cards, clicks each for full description, paginates for more.
+Adds to DB as 'extracted' with description pre-saved (skips fetch.py).
 """
 
 import hashlib
@@ -16,31 +14,41 @@ import re
 import sys
 import time
 
+from playwright.sync_api import TimeoutError
+
 from lib.chrome_manager import connect
-from lib.db import add_job, desc_save, get_conn
+from lib.db import add_job, desc_get, desc_save, get_conn
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_URL = "https://www.linkedin.com/jobs/search/?f_AL=true&geoId=101174742"
+DEFAULT_URL = "https://www.linkedin.com/jobs/collections/recommended/"
 
 
-def _scroll_load(page, max_cards=None):
+def _scroll_load(page, idle_timeout=3):
     last_count = 0
-    stale_rounds = 0
-    for _ in range(30):
-        page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-        time.sleep(2)
-        cards = page.query_selector_all('.job-card-container')
-        count = len(cards)
-        if max_cards and count >= max_cards:
-            return cards[:max_cards]
-        if count == last_count:
-            stale_rounds += 1
-            if stale_rounds >= 3:
-                break
-        else:
-            stale_rounds = 0
-        last_count = count
-    return cards
+    while True:
+        page.evaluate('''() => {
+            const card = document.querySelector('.job-card-container');
+            if (!card) return;
+            let el = card.parentElement;
+            while (el) {
+                const style = window.getComputedStyle(el);
+                if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+                    el.scrollTop = el.scrollHeight;
+                    el.dispatchEvent(new Event('scroll'));
+                    return;
+                }
+                el = el.parentElement;
+            }
+        }''')
+        try:
+            page.wait_for_function(
+                f"document.querySelectorAll('.job-card-container').length > {last_count}",
+                timeout=idle_timeout * 1000
+            )
+        except TimeoutError:
+            break
+        last_count = len(page.query_selector_all('.job-card-container'))
+    return page.query_selector_all('.job-card-container')
 
 
 def scrape_linkedin(page_url, max_jobs=None):
@@ -58,67 +66,62 @@ def scrape_linkedin(page_url, max_jobs=None):
             print("ERROR: Not signed in to LinkedIn.", file=sys.stderr)
             return
 
-        cards = _scroll_load(page, max_cards=max_jobs)
         count = 0
-        for card in cards:
-            try:
-                job_id = card.get_attribute('data-job-id') or ''
-                if not job_id:
-                    continue
-                job_url = f'https://www.linkedin.com/jobs/view/{job_id}/'
-
-                jid = hashlib.md5(job_url.encode()).hexdigest()[:16]
-                conn = get_conn()
-                if conn.execute("SELECT 1 FROM jobs WHERE id=?", (jid,)).fetchone():
-                    continue
-
-                el = card.query_selector('.title-text, .artdeco-entity-lockup__title a')
-                title = re.sub(r'\s+', ' ', (el.text_content() or '')).strip() if el else ''
-                # Take first segment if text is duplicated (LinkedIn puts truncated + full text)
-                if title:
-                    parts = [p.strip() for p in title.replace('\xa0', ' ').split('\n') if p.strip()]
-                    title = parts[0] if parts else title
-                el = card.query_selector('.artdeco-entity-lockup__subtitle')
-                company = (el.inner_text() or '').strip() if el else ''
-                el = card.query_selector('.artdeco-entity-lockup__caption')
-                location = (el.inner_text() or '').strip() if el else ''
-
-                add_job({
-                    "url": job_url,
-                    "title": title,
-                    "company": company,
-                    "location": location,
-                    "source": "LinkedIn",
-                    "source_url": job_url,
-                })
-
-                # Click card to load full description in right pane
-                card.click()
-                time.sleep(2)
-                pane = page.query_selector('.jobs-search__job-details--container')
-                if pane:
-                    text = pane.inner_text() or ''
-                    # Find description start — first meaningful section header
-                    desc_start = -1
-                    for marker in ['About the job', 'About the company', 'Company Description']:
-                        i = text.find(marker)
-                        if i >= 0 and (desc_start < 0 or i < desc_start):
-                            desc_start = i
-                    if desc_start >= 0:
-                        desc = text[desc_start:]
+        page_num = 0
+        while max_jobs is None or count < max_jobs:
+            page_num += 1
+            cards = _scroll_load(page)
+            if not cards:
+                break
+            for card in cards:
+                try:
+                    job_id = card.get_attribute('data-job-id') or ''
+                    if not job_id:
+                        continue
+                    job_url = f'https://www.linkedin.com/jobs/view/{job_id}/'
+                    jid = hashlib.md5(job_url.encode()).hexdigest()[:16]
+                    existing = get_conn().execute("SELECT id FROM jobs WHERE id=?", (jid,)).fetchone()
+                    if existing:
+                        if desc_get(jid):
+                            continue
+                        # Exists but no description — re-process to fill it
+                    el = card.query_selector('.title-text, .artdeco-entity-lockup__title a')
+                    title = re.sub(r'\s+', ' ', (el.text_content() or '')).strip() if el else ''
+                    if title:
+                        parts = [p.strip() for p in title.replace('\xa0', ' ').split('\n') if p.strip()]
+                        title = parts[0] if parts else title
+                    el = card.query_selector('.artdeco-entity-lockup__subtitle')
+                    company = (el.inner_text() or '').strip() if el else ''
+                    el = card.query_selector('.artdeco-entity-lockup__caption')
+                    location = (el.inner_text() or '').strip() if el else ''
+                    add_job({"url": job_url, "title": title, "company": company,
+                             "location": location, "source": "LinkedIn", "source_url": job_url})
+                    card.click()
+                    time.sleep(2)
+                    pane = page.query_selector('.jobs-search__job-details--container')
+                    if pane:
+                        desc = pane.inner_text() or ''
                         for cutoff in ['Similar jobs', 'People also viewed']:
                             ci = desc.find(cutoff)
                             if ci >= 0:
                                 desc = desc[:ci]
                         desc_save(jid, desc.strip()[:8000])
-                print(f"JOB:{jid}:{job_url}  [{title or '?'} @ {company or '?'} - {location or '?'}]")
-                count += 1
-            except Exception as e:
-                print(f"WARN: {e}", file=sys.stderr)
-                continue
+                    print(f"JOB:{jid}:{job_url}  [{title or '?'} @ {company or '?'} - {location or '?'}]")
+                    count += 1
+                except Exception as e:
+                    print(f"WARN: {e}", file=sys.stderr)
+                    continue
+
+            print(f"PAGE {page_num}: {count} total", file=sys.stderr)
+            if max_jobs and count >= max_jobs:
+                break
+            next_btn = page.query_selector('button[aria-label="View next page"]')
+            if not next_btn:
+                break
+            next_btn.click()
+            time.sleep(3)
 
         print(f"SCRAPED:{count}", file=sys.stderr)
-
     finally:
         try:
             page.close()
