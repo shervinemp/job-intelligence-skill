@@ -13,7 +13,7 @@ EXTRACTED_IDS_KEY = "extracted_ids"
 
 _SKIP_DOMAINS = {
     "linkedin.com/comm", "linkedin.com/feed", "linkedin.com/notifications",
-    "linkedin.com/mynetwork", "linkedin.com/messaging",
+    "linkedin.com/mynetwork", "linkedin.com/messaging", "t1.em.linkedin.com",
     "accounts.google.com", "github.com", "google.com",
     "facebook.com", "twitter.com", "x.com", "instagram.com",
     "youtube.com", "unsubscribe", "user-subscription",

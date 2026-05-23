@@ -10,6 +10,7 @@
 | **search + stage** | `python3 stage_emails.py [--days N]` — searches Gmail (last 14d), saves threads to DB, fetches + cleans each email | Auto: skips emails without `job`/`jobs` keyword |
 | **re-search** | `python3 stage_emails.py --refresh [--days N]` — clears cached threads, re-searches Gmail, re-stages | — |
 | **extract** | `python3 extract.py` — finds all URLs in staged emails, saves to DB | SLM: `admit`/`reject` each extracted URL |
+| **linkedin** | `python3 linkedin.py [--url <url>] [--max N]` — scrape LinkedIn jobs into pipeline | SLM: `admit`/`reject` each |
 | **fetch** | `python3 fetch.py` — visits each URL (Playwright), scrapes description | SLM: `admit`/`reject`/`flag` each description |
 | **tailor** | `python3 tailor.py [--count N]` — Gemini crafts CV | SLM: `done`/`skip`/`redo` |
 
@@ -20,6 +21,9 @@
 | `python3 stage_emails.py` | Search Gmail (last 14d), stage new threads | — |
 | `python3 stage_emails.py --refresh` | Re-search + re-stage everything | — |
 | `python3 stage_emails.py --days 30` | Override lookback to 30 days | — |
+| `python3 linkedin.py` | Scrape LinkedIn saved jobs into pipeline | `admit`/`reject` each |
+| `python3 linkedin.py --list` | Preview job cards without adding | — |
+| `python3 linkedin.py --url <url> --max 20` | Custom URL, limit to 20 | — |
 | `python3 extract.py` | Auto-extract URLs, shows `JOB:{jid}:{url}` with context | `admit`/`reject` each |
 | `python3 extract.py admit <jid>` | Keep the extracted job | — |
 | `python3 extract.py reject <jid>` | Skip the extracted job | — |
