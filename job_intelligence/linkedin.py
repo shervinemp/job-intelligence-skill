@@ -9,21 +9,18 @@ Adds to DB as 'extracted' with description pre-saved (skips fetch.py).
 """
 
 import hashlib
-import os
 import re
 import sys
-import time
 
 from playwright.sync_api import TimeoutError
 
 from lib.chrome_manager import connect
 from lib.db import add_job, desc_get, desc_save, get_conn
 
-SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_URL = "https://www.linkedin.com/jobs/collections/recommended/"
 
 
-def _scroll_load(page, idle_timeout=3):
+def _scroll_load(page, idle_timeout=5):
     last_count = 0
     while True:
         page.evaluate('''() => {
@@ -51,7 +48,20 @@ def _scroll_load(page, idle_timeout=3):
     return page.query_selector_all('.job-card-container')
 
 
-def scrape_linkedin(page_url, max_jobs=None):
+def _parse_card(card):
+    el = card.query_selector('.title-text, .artdeco-entity-lockup__title a')
+    title = re.sub(r'\s+', ' ', (el.text_content() or '')).strip() if el else ''
+    if title:
+        parts = [p.strip() for p in title.replace('\xa0', ' ').split('\n') if p.strip()]
+        title = parts[0] if parts else title
+    el = card.query_selector('.artdeco-entity-lockup__subtitle')
+    company = (el.inner_text() or '').strip() if el else ''
+    el = card.query_selector('.artdeco-entity-lockup__caption')
+    location = (el.inner_text() or '').strip() if el else ''
+    return {"title": title, "company": company, "location": location}
+
+
+def scrape_linkedin(page_url, max_jobs=None, max_pages=20):
     b, ctx = connect(timeout=30)
     if not ctx:
         print("ERROR: Could not connect to Chrome.", file=sys.stderr)
@@ -60,7 +70,10 @@ def scrape_linkedin(page_url, max_jobs=None):
     page = ctx.new_page()
     try:
         page.goto(page_url, wait_until='domcontentloaded', timeout=30000)
-        time.sleep(3)
+        try:
+            page.wait_for_selector('.job-card-container', timeout=15000)
+        except TimeoutError:
+            pass
 
         if 'Sign in' in (page.evaluate('document.body.innerText') or '')[:500]:
             print("ERROR: Not signed in to LinkedIn.", file=sys.stderr)
@@ -85,19 +98,17 @@ def scrape_linkedin(page_url, max_jobs=None):
                         if desc_get(jid):
                             continue
                         # Exists but no description — re-process to fill it
-                    el = card.query_selector('.title-text, .artdeco-entity-lockup__title a')
-                    title = re.sub(r'\s+', ' ', (el.text_content() or '')).strip() if el else ''
-                    if title:
-                        parts = [p.strip() for p in title.replace('\xa0', ' ').split('\n') if p.strip()]
-                        title = parts[0] if parts else title
-                    el = card.query_selector('.artdeco-entity-lockup__subtitle')
-                    company = (el.inner_text() or '').strip() if el else ''
-                    el = card.query_selector('.artdeco-entity-lockup__caption')
-                    location = (el.inner_text() or '').strip() if el else ''
-                    add_job({"url": job_url, "title": title, "company": company,
-                             "location": location, "source": "LinkedIn", "source_url": job_url})
+                    parsed = _parse_card(card)
+                    add_job({"url": job_url, "title": parsed["title"], "company": parsed["company"],
+                             "location": parsed["location"], "source": "LinkedIn", "source_url": job_url})
                     card.click()
-                    time.sleep(2)
+                    try:
+                        page.wait_for_function(
+                            "document.querySelector('.job-details-jobs-unified-top-card__job-title')?.innerText?.trim()?.length > 0",
+                            timeout=5000
+                        )
+                    except TimeoutError:
+                        pass
                     pane = page.query_selector('.jobs-search__job-details--container')
                     if pane:
                         desc = pane.inner_text() or ''
@@ -106,20 +117,26 @@ def scrape_linkedin(page_url, max_jobs=None):
                             if ci >= 0:
                                 desc = desc[:ci]
                         desc_save(jid, desc.strip()[:8000])
-                    print(f"JOB:{jid}:{job_url}  [{title or '?'} @ {company or '?'} - {location or '?'}]")
+                    print(f"JOB:{jid}:{job_url}  [{parsed['title'] or '?'} @ {parsed['company'] or '?'} - {parsed['location'] or '?'}]")
                     count += 1
                 except Exception as e:
                     print(f"WARN: {e}", file=sys.stderr)
                     continue
 
             print(f"PAGE {page_num}: {count} total", file=sys.stderr)
-            if max_jobs and count >= max_jobs:
+            if page_num >= max_pages:
                 break
             next_btn = page.query_selector('button[aria-label="View next page"]')
             if not next_btn:
                 break
             next_btn.click()
-            time.sleep(3)
+            try:
+                page.wait_for_function(
+                    "document.querySelectorAll('.job-card-container').length > 0",
+                    timeout=10000
+                )
+            except TimeoutError:
+                break
 
         print(f"SCRAPED:{count}", file=sys.stderr)
     finally:
@@ -141,21 +158,16 @@ def cmd_list():
     page = ctx.new_page()
     try:
         page.goto(DEFAULT_URL, wait_until='domcontentloaded', timeout=30000)
-        time.sleep(3)
+        try:
+            page.wait_for_selector('.job-card-container', timeout=15000)
+        except TimeoutError:
+            pass
         cards = _scroll_load(page)
         print(f"Found {len(cards)} job cards", file=sys.stderr)
         for card in cards[:10]:
             job_id = card.get_attribute('data-job-id') or ''
-            el = card.query_selector('.title-text, .artdeco-entity-lockup__title a')
-            title = re.sub(r'\s+', ' ', (el.text_content() or '')).strip() if el else '?'
-            if title:
-                parts = [p.strip() for p in title.replace('\xa0', ' ').split('\n') if p.strip()]
-                title = parts[0] if parts else title
-            el = card.query_selector('.artdeco-entity-lockup__subtitle')
-            company = (el.inner_text() or '').strip() if el else '?'
-            el = card.query_selector('.artdeco-entity-lockup__caption')
-            loc = (el.inner_text() or '').strip() if el else '?'
-            print(f"  {title} @ {company} ({loc}) [{job_id}]")
+            parsed = _parse_card(card)
+            print(f"  {parsed['title'] or '?'} @ {parsed['company'] or '?'} ({parsed['location'] or '?'}) [{job_id}]")
     finally:
         try:
             page.close()
