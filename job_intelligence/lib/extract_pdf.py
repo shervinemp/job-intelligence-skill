@@ -22,6 +22,10 @@ def extract_and_run(raw_output, app_dir):
         raw_output = raw_output[4:]
 
     code_blocks = re.findall(r"```python\s*(.*?)```", raw_output, re.DOTALL)
+    if not code_blocks:
+        m = re.search(r"Tailored gen\.py Script.*?\nPython\n((?:.|\n)+)", raw_output)
+        if m:
+            code_blocks = [m.group(1).strip()]
     notes = []
 
     for idx, code in enumerate(code_blocks, 1):
