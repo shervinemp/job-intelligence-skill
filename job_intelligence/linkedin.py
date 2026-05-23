@@ -2,7 +2,7 @@
 """linkedin.py — Scrape LinkedIn jobs into the pipeline.
 
 Usage:
-  python3 linkedin.py [--url <url>] [--max N] [--list]
+  python3 linkedin.py [--url <url>] [--max N] [--max-pages N] [--list]
 
 Scrapes job cards, clicks each for full description, paginates for more.
 Adds to DB as 'extracted' with description pre-saved (skips fetch.py).
@@ -18,9 +18,10 @@ from lib.chrome_manager import connect
 from lib.db import add_job, desc_get, desc_save, get_conn
 
 DEFAULT_URL = "https://www.linkedin.com/jobs/collections/recommended/"
+DEFAULT_MAX_PAGES = 20
 
 
-def _scroll_load(page, idle_timeout=5):
+def _scroll_load(page, idle_timeout=3):
     last_count = 0
     while True:
         page.evaluate('''() => {
@@ -61,7 +62,7 @@ def _parse_card(card):
     return {"title": title, "company": company, "location": location}
 
 
-def scrape_linkedin(page_url, max_jobs=None, max_pages=20):
+def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
     b, ctx = connect(timeout=30)
     if not ctx:
         print("ERROR: Could not connect to Chrome.", file=sys.stderr)
@@ -71,7 +72,7 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=20):
     try:
         page.goto(page_url, wait_until='domcontentloaded', timeout=30000)
         try:
-            page.wait_for_selector('.job-card-container', timeout=15000)
+            page.wait_for_selector('.job-card-container', timeout=8000)
         except TimeoutError:
             pass
 
@@ -105,7 +106,7 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=20):
                     try:
                         page.wait_for_function(
                             "document.querySelector('.job-details-jobs-unified-top-card__job-title')?.innerText?.trim()?.length > 0",
-                            timeout=5000
+                            timeout=3000
                         )
                     except TimeoutError:
                         pass
@@ -133,7 +134,7 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=20):
             try:
                 page.wait_for_function(
                     "document.querySelectorAll('.job-card-container').length > 0",
-                    timeout=10000
+                    timeout=5000
                 )
             except TimeoutError:
                 break
@@ -159,7 +160,7 @@ def cmd_list():
     try:
         page.goto(DEFAULT_URL, wait_until='domcontentloaded', timeout=30000)
         try:
-            page.wait_for_selector('.job-card-container', timeout=15000)
+            page.wait_for_selector('.job-card-container', timeout=8000)
         except TimeoutError:
             pass
         cards = _scroll_load(page)
@@ -182,6 +183,7 @@ def cmd_list():
 if __name__ == "__main__":
     url = DEFAULT_URL
     max_jobs = None
+    max_pages = DEFAULT_MAX_PAGES
     list_only = False
 
     args = sys.argv[1:]
@@ -193,6 +195,9 @@ if __name__ == "__main__":
         elif args[i] == '--max' and i + 1 < len(args):
             max_jobs = int(args[i + 1])
             i += 2
+        elif args[i] == '--max-pages' and i + 1 < len(args):
+            max_pages = int(args[i + 1])
+            i += 2
         elif args[i] == '--list':
             list_only = True
             i += 1
@@ -202,4 +207,4 @@ if __name__ == "__main__":
     if list_only:
         cmd_list()
     else:
-        scrape_linkedin(url, max_jobs)
+        scrape_linkedin(url, max_jobs, max_pages)
