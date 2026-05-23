@@ -395,32 +395,38 @@ async function read(page, timeout = 360000) {
 
 // ─── Delete last conversation ──────────────────────────
 
-async function deleteChat(page, convTitle) {
+async function deleteChat(page) {
   try {
-    await wait(2000);
-
-    const onGem = await page.evaluate(() => location.href.includes('/gem/'));
-    if (!onGem) { log('deleteChat: not on gem page'); return; }
-
-    if (convTitle) {
-      const match = await page.evaluate((title) => {
-        const conv = document.querySelector('[data-test-id="conversation"]');
-        if (!conv) return false;
-        const text = (conv.textContent || '').replace(/\s+/g, ' ').trim().substring(0, 40);
-        return text === title;
-      }, convTitle);
-      if (!match) { log('deleteChat: conversation mismatch, skipping'); return; }
-    }
-
-    const moreBtn = await page.evaluate(() => {
-      const first = document.querySelector('[data-test-id="conversation"]');
-      if (!first) return false;
-      first.scrollIntoView({ block: 'center' });
-      const btn = document.querySelector('button[data-test-id="actions-menu-button"]');
-      if (btn) { btn.click(); return true; }
-      return false;
+    // Extract conversation ID from current URL
+    const convId = await page.evaluate(() => {
+      const m = location.href.match(/\/gem\/[^\/]+\/([^\/\?]+)/);
+      return m ? m[1] : null;
     });
-    if (!moreBtn) { log('deleteChat: no actions button'); return; }
+    if (!convId) { log('deleteChat: could not extract conv id'); return; }
+    log(`deleteChat: targeting conv ${convId}`);
+
+    // Navigate to gem home to ensure sidebar is current
+    await page.goto(`https://gemini.google.com/gem/${GEM_ID}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await wait(3000);
+
+    // Find conversation by convId and click its actions menu
+    const clicked = await page.evaluate((cid) => {
+      const convs = document.querySelectorAll('[data-test-id="conversation"]');
+      for (const c of convs) {
+        const link = c.querySelector('a');
+        const href = link ? (link.href || '') : '';
+        const lastSegment = href.split('/').pop().split('?')[0];
+        if (lastSegment !== cid) continue;
+        c.scrollIntoView({ block: 'center' });
+        const btn = c.querySelector('button[data-test-id="actions-menu-button"]');
+        if (!btn) return 'no_button';
+        btn.click();
+        return 'ok';
+      }
+      return 'not_found';
+    }, convId);
+    if (clicked === 'not_found') { log('deleteChat: conversation not found'); return; }
+    if (clicked === 'no_button') { log('deleteChat: no actions button'); return; }
     await wait(1500);
 
     const deleteBtn = await page.$('[data-test-id="delete-button"]');
@@ -555,13 +561,8 @@ async function dump(page) {
       } catch (e) { log(`app-dir write failed: ${e.message}`); }
     }
 
-    const convTitle = await page.evaluate(() => {
-      const el = document.querySelector('[data-test-id="conversation"]');
-      const raw = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      return el ? raw.substring(0, 40) : null;
-    });
-
-    await deleteChat(page, convTitle);
+    await deleteChat(page);
+    try { await page.close(); } catch (e) { }
     process.exit(0);
   } catch (e) {
     console.error(e.message);
