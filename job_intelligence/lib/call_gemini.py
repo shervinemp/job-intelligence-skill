@@ -24,7 +24,7 @@ def _load_gem_id():
                     return m.group(1).strip()
     except Exception:
         pass
-    return "4203d06f5d81"
+    return None
 
 
 GEM_ID = _load_gem_id()

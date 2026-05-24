@@ -49,10 +49,12 @@ function loadGemId() {
       if (m) return m[1].trim();
     }
   } catch (e) { }
-  return '4203d06f5d81';
+  return null;
 }
-const GEM_ID = loadGemId();
-const GEM = `https://gemini.google.com/gem/${GEM_ID}`;
+let GEM_ID = loadGemId();
+function gemUrl() {
+  return GEM_ID ? `https://gemini.google.com/gem/${GEM_ID}` : 'https://gemini.google.com/';
+}
 
 function log(m) { console.error(`[gemini] ${m}`); }
 function die(m) { console.error(m); process.exit(1); }
@@ -62,7 +64,7 @@ function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function args() {
   const a = process.argv.slice(2);
-  let prompt = null, gem = null, action = 'prompt', outputFile = null, appDir = null, promptFile = null;
+  let prompt = null, gem = null, action = 'prompt', outputFile = null, appDir = null, promptFile = null, gemId = null;
   for (let i = 0; i < a.length; i++) {
     const v = a[i];
     if (v === '--help') {
@@ -87,6 +89,7 @@ function args() {
     else if (v === '--output' && i + 1 < a.length) outputFile = a[++i];
     else if (v === '--app-dir' && i + 1 < a.length) appDir = a[++i];
     else if (v === '--prompt-file' && i + 1 < a.length) promptFile = a[++i];
+    else if (v === '--gem-id' && i + 1 < a.length) gemId = a[++i];
     else if (!prompt) prompt = v;
   }
   return { prompt, gem, action, outputFile, appDir, promptFile };
@@ -276,16 +279,18 @@ function _checkLimitInText(text) {
 }
 
 async function openGem(page, gemUrl) {
-  const url = gemUrl || GEM;
+  const url = gemUrl || gemUrl();
+  const isGem = url.includes('/gem/');
   log(`Navigating to: ${url}`);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
-  if (!page.url().includes('/gem/')) {
+  if (isGem && !page.url().includes('/gem/')) {
     const body = await page.evaluate(() => document.body.innerText.substring(0, 200));
     die(`Gem not found at ${url}. Response: ${body.substring(0, 100)}`);
   }
+  if (!isGem) return { timedOut: false, isGem: false };
 
-  // Check for rate limit immediately after page load
+  // Gem-specific setup below
   const bodyText = await page.evaluate(() => document.body.innerText);
   const limit = _checkLimitInText(bodyText);
   if (limit.timedOut) return limit;
@@ -460,6 +465,7 @@ async function dump(page) {
 
 (async () => {
   const opts = args();
+  if (opts.gemId) GEM_ID = opts.gemId;
 
   if (opts.promptFile) {
     try { opts.prompt = fs.readFileSync(opts.promptFile, 'utf8').trim(); } catch (e) { die(`Cannot read prompt file: ${e.message}`); }
@@ -471,14 +477,14 @@ async function dump(page) {
 
   try {
     if (opts.action === 'dump') {
-      await page.goto(GEM, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
       await wait(5000);
       await dump(page); browser.close(); return;
     }
 
     if (opts.action === 'state') {
       if (!page.url().includes('/gem/')) {
-        await page.goto(GEM, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
         await wait(5000);
       }
       const mode = await checkMode(page);
