@@ -412,7 +412,7 @@ def main():
         gem = None
         if "--gem" in sys.argv:
             i = sys.argv.index("--gem")
-            if i + 1 < len(sys.argv):
+            if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
                 gem = sys.argv[i + 1]
         cmd_craft(
             count=_parse_count() or 1,
