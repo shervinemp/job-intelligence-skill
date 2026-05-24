@@ -86,16 +86,18 @@ def cmd_admit(*args):
         if len(item) == 16 and all(c in '0123456789abcdef' for c in item):
             jid = item
         else:
-            jid = add_job({"url": item, "source": "Manual", "source_url": item})
+            jid = add_job({"url": item, "source": "Manual", "source_url": item, "notes": note or ""})
             if jid:
                 print(f"JOB:{jid}:{item}")
+                jids.append(jid)
+            continue
         if jid:
             jids.append(jid)
             cur = conn.execute("SELECT stage FROM jobs WHERE id=?", (jid,))
             row = cur.fetchone()
             if row and row[0] == 'extracted':
                 conn.execute("UPDATE jobs SET stage='extracted' WHERE id=?", (jid,))
-            if note:
+            if note and row:
                 conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?",
                              (note, datetime.now().isoformat(), jid))
     conn.commit()
