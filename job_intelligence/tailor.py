@@ -77,6 +77,9 @@ def generate_tailored_docs(job_entry):
         location=job.get("location", "Unknown"),
         job_description=desc_clean,
     )
+    notes = job.get("notes", "")
+    if notes:
+        prompt += f"\n\nContext: {notes}"
 
     RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
     app_dir = os.path.join(RESULTS_DIR, job_id)

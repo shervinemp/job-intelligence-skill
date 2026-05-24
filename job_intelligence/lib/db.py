@@ -62,6 +62,7 @@ def _create_v3_tables():
             error TEXT,
             scripts TEXT NOT NULL DEFAULT '[]',
             response_path TEXT,
+            notes TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             applied_at TEXT
@@ -118,7 +119,7 @@ def _create_v3_tables():
         );
     """)
     # Add columns that might be missing on existing DBs
-    for col in ["response_path TEXT"]:
+    for col in ["response_path TEXT", "notes TEXT NOT NULL DEFAULT ''"]:
         try:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -160,10 +161,11 @@ _JOBS_COLS = (
     "id, email_id, title, company, location, url, salary,"
     "salary_min, salary_max, salary_currency, remote_status,"
     "job_type, department, source, source_url, stage, fit_score,"
-    "fit_summary, company_vibe, error, scripts, response_path, created_at, updated_at, applied_at"
+    "fit_summary, company_vibe, error, scripts, response_path,"
+    "notes, created_at, updated_at, applied_at"
 )
 
-_JOBS_Q = ",".join("?" for _ in range(25))
+_JOBS_Q = ",".join("?" for _ in range(26))
 
 
 def load_state():
@@ -215,6 +217,7 @@ def save_state(state):
                 entry.get("error"),
                 scripts or "[]",
                 entry.get("response_path"),
+                entry.get("notes", ""),
                 entry.get("created_at", now),
                 now,
                 entry.get("applied_at"),
@@ -260,6 +263,7 @@ def add_job(job_data):
             None,
             scripts or "[]",
             job_data.get("response_path"),
+            job_data.get("notes", ""),
             now,
             now,
             None,
@@ -286,6 +290,12 @@ def advance_job(jid, new_stage, **updates):
         vals.append(v)
     vals.append(jid)
     conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
+    conn.commit()
+
+
+def set_notes(jid, text):
+    conn = get_conn()
+    conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?", (text, datetime.now().isoformat(), jid))
     conn.commit()
 
 

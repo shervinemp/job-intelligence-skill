@@ -4,9 +4,10 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 
 from lib.db import stage_list_all, stage_count, setting_get, setting_set
-from lib.db import add_job, pipeline_status, get_conn, advance
+from lib.db import add_job, pipeline_status, get_conn
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 EXTRACTED_IDS_KEY = "extracted_ids"
@@ -67,12 +68,31 @@ def cmd_auto():
     print(f"EXTRACTED:{total}", file=sys.stderr)
 
 
-def cmd_admit(*jids):
+def cmd_admit(*args):
+    note = None
+    jids = []
+    i = 0
+    while i < len(args):
+        if args[i] == '--note' and i + 1 < len(args):
+            note = args[i + 1]
+            i += 2
+        else:
+            jids.append(args[i])
+            i += 1
+
     conn = get_conn()
     for jid in jids:
-        conn.execute("UPDATE jobs SET stage='extracted' WHERE id=? AND stage='extracted'", (jid,))
+        cur = conn.execute("SELECT stage FROM jobs WHERE id=?", (jid,))
+        row = cur.fetchone()
+        if row and row[0] == 'extracted':
+            conn.execute("UPDATE jobs SET stage='extracted' WHERE id=?", (jid,))
+        if note and row:
+            conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?",
+                         (note, datetime.now().isoformat(), jid))
     conn.commit()
     print(f"ADMITTED:{len(jids)}", file=sys.stderr)
+    if note:
+        print(f"  note: {note}", file=sys.stderr)
 
 
 def cmd_reject(*jids):
