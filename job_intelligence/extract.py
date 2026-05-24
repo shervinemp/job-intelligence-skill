@@ -97,7 +97,7 @@ def cmd_review(count):
         print(content, file=sys.stderr)
         print(f"---END EMAIL---", file=sys.stderr)
     print("\n---\nRead the FILE content above. Identify job URLs, then call:", file=sys.stderr)
-    print("  python3 extract.py submit <tid> '<json>'", file=sys.stderr)
+    print("  python3 extract.py submit [<tid>] '<json>'", file=sys.stderr)
 
 
 def cmd_submit(tid, jobs_json=None):
