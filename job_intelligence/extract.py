@@ -70,25 +70,34 @@ def cmd_auto():
 
 def cmd_admit(*args):
     note = None
-    jids = []
+    items = []
     i = 0
     while i < len(args):
         if args[i] == '--note' and i + 1 < len(args):
             note = args[i + 1]
             i += 2
         else:
-            jids.append(args[i])
+            items.append(args[i])
             i += 1
 
     conn = get_conn()
-    for jid in jids:
-        cur = conn.execute("SELECT stage FROM jobs WHERE id=?", (jid,))
-        row = cur.fetchone()
-        if row and row[0] == 'extracted':
-            conn.execute("UPDATE jobs SET stage='extracted' WHERE id=?", (jid,))
-        if note and row:
-            conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?",
-                         (note, datetime.now().isoformat(), jid))
+    jids = []
+    for item in items:
+        if len(item) == 16 and all(c in '0123456789abcdef' for c in item):
+            jid = item
+        else:
+            jid = add_job({"url": item, "source": "Manual", "source_url": item})
+            if jid:
+                print(f"JOB:{jid}:{item}")
+        if jid:
+            jids.append(jid)
+            cur = conn.execute("SELECT stage FROM jobs WHERE id=?", (jid,))
+            row = cur.fetchone()
+            if row and row[0] == 'extracted':
+                conn.execute("UPDATE jobs SET stage='extracted' WHERE id=?", (jid,))
+            if note:
+                conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?",
+                             (note, datetime.now().isoformat(), jid))
     conn.commit()
     print(f"ADMITTED:{len(jids)}", file=sys.stderr)
     if note:
