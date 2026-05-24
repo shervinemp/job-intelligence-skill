@@ -18,17 +18,18 @@
 
 | I run | What happens | What I do |
 |-------|-------------|-----------|
-| `python3 stage_emails.py` | Search Gmail (last 14d), stage new threads | — |
-| `python3 stage_emails.py --refresh` | Re-search + re-stage everything | — |
-| `python3 stage_emails.py --days 30` | Override lookback to 30 days | — |
+| `python3 stage_emails.py` | Search Gmail (incremental, max 14d lookback), stage new threads | — |
+| `python3 stage_emails.py --refresh` | Re-search + re-stage everything (resets lookback to 14d) | — |
+| `python3 stage_emails.py --days 30` | Override lookback to 30 days (also updates last-search marker) | — |
 | `python3 linkedin.py` | Scrape LinkedIn saved jobs into pipeline | `admit`/`reject` each |
 | `python3 linkedin.py --list` | Preview job cards without adding | — |
 | `python3 linkedin.py --url <url> --max 20` | Custom URL, limit to 20 | — |
 | `python3 extract.py` | Auto-extract URLs, shows `JOB:{jid}:{url}` with context | `admit`/`reject` each |
 | `python3 extract.py admit <jid>` | Keep the extracted job | — |
 | `python3 extract.py reject <jid>` | Skip the extracted job | — |
-| `python3 extract.py review [--count N]` | Show N staged emails for manual URL picking | Pick URLs → `submit <tid> '<json>'` |
-| `python3 extract.py submit <tid> '<json>'` | Save manually picked URLs | — |
+| `python3 extract.py review [--count N]` | Show N staged emails for manual URL picking | Pick URLs → `submit [<tid>] '<json>'` |
+| `python3 extract.py submit [<tid>] '<json>'` | Save manually picked URLs. Without tid, creates as Manual | JSON can include `"notes":"text"` for human context |
+| `python3 extract.py submit '{"url":"...","notes":"referral"}'` | Inject a manual job with a note | Job created, fetch.py picks it up |
 | `python3 fetch.py` | Fetch descriptions (default 3, use `--count N`) | `admit`/`reject`/`flag` each |
 | `python3 fetch.py admit <jid>` | Mark job as described | — |
 | `python3 fetch.py reject <jid>` | Skip (garbage/closed) | — |
@@ -56,6 +57,17 @@
 | Quebec in-office | No |
 | US on-site only | No |
 | Unclear location | Fetch description, then decide |
+
+## Notes (human context)
+
+Attach human context to any job via `submit` — referral mentions, priorities, etc.
+
+```
+python3 extract.py submit '{"url":"https://...","notes":"John can refer at Google"}'
+```
+
+`tailor.py` appends `Context: {notes}` at the end of the Gemini prompt — not a directive, just supplementary info.  
+Re-run with `"notes":""` to clear. The field survives all stage transitions.
 
 ## Auth walls
 
