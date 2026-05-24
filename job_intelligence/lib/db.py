@@ -233,6 +233,9 @@ def add_job(job_data):
     if not jid:
         return None
     if conn.execute("SELECT 1 FROM jobs WHERE id=?", (jid,)).fetchone():
+        if "notes" in job_data:
+            conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?", (job_data["notes"], datetime.now().isoformat(), jid))
+            conn.commit()
         return jid
     now = datetime.now().isoformat()
     scripts = job_data.get("scripts", [])
@@ -290,12 +293,6 @@ def advance_job(jid, new_stage, **updates):
         vals.append(v)
     vals.append(jid)
     conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
-    conn.commit()
-
-
-def set_notes(jid, text):
-    conn = get_conn()
-    conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?", (text, datetime.now().isoformat(), jid))
     conn.commit()
 
 

@@ -4,7 +4,6 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
 
 from lib.db import stage_list_all, stage_count, setting_get, setting_set
 from lib.db import add_job, pipeline_status, get_conn
@@ -68,42 +67,12 @@ def cmd_auto():
     print(f"EXTRACTED:{total}", file=sys.stderr)
 
 
-def cmd_admit(*args):
-    note = None
-    items = []
-    i = 0
-    while i < len(args):
-        if args[i] == '--note' and i + 1 < len(args):
-            note = args[i + 1]
-            i += 2
-        else:
-            items.append(args[i])
-            i += 1
-
+def cmd_admit(*jids):
     conn = get_conn()
-    jids = []
-    for item in items:
-        if len(item) == 16 and all(c in '0123456789abcdef' for c in item):
-            jid = item
-        else:
-            jid = add_job({"url": item, "source": "Manual", "source_url": item, "notes": note or ""})
-            if jid:
-                print(f"JOB:{jid}:{item}")
-                jids.append(jid)
-            continue
-        if jid:
-            jids.append(jid)
-            cur = conn.execute("SELECT stage FROM jobs WHERE id=?", (jid,))
-            row = cur.fetchone()
-            if row and row[0] == 'extracted':
-                conn.execute("UPDATE jobs SET stage='extracted' WHERE id=?", (jid,))
-            if note and row:
-                conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?",
-                             (note, datetime.now().isoformat(), jid))
+    for jid in jids:
+        conn.execute("UPDATE jobs SET stage='extracted' WHERE id=? AND stage='extracted'", (jid,))
     conn.commit()
     print(f"ADMITTED:{len(jids)}", file=sys.stderr)
-    if note:
-        print(f"  note: {note}", file=sys.stderr)
 
 
 def cmd_reject(*jids):
@@ -131,7 +100,10 @@ def cmd_review(count):
     print("  python3 extract.py submit <tid> '<json>'", file=sys.stderr)
 
 
-def cmd_submit(tid, jobs_json):
+def cmd_submit(tid, jobs_json=None):
+    if jobs_json is None:
+        jobs_json = tid
+        tid = "manual"
     if isinstance(jobs_json, str):
         jobs = json.loads(jobs_json)
     if not isinstance(jobs, list):
@@ -141,15 +113,16 @@ def cmd_submit(tid, jobs_json):
         if not job.get("url"):
             continue
         job["email_id"] = tid
-        job["source"] = "Email"
+        job["source"] = "Email" if tid != "manual" else "Manual"
         job["source_url"] = job.get("url", "")
         jid = add_job(job)
         if jid:
             count += 1
-    extracted_ids = setting_get(EXTRACTED_IDS_KEY, [])
-    if tid not in extracted_ids:
-        extracted_ids.append(tid)
-        setting_set(EXTRACTED_IDS_KEY, extracted_ids)
+    if tid != "manual":
+        extracted_ids = setting_get(EXTRACTED_IDS_KEY, [])
+        if tid not in extracted_ids:
+            extracted_ids.append(tid)
+            setting_set(EXTRACTED_IDS_KEY, extracted_ids)
     print(f"SUBMIT:{tid}:{count}", file=sys.stderr)
     print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
@@ -194,10 +167,13 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] in subcommands:
         cmd = sys.argv[1]
         if cmd == "submit":
-            if len(sys.argv) < 4:
-                print("Usage: python3 extract.py submit <tid> '<json>'", file=sys.stderr)
+            if len(sys.argv) == 3:
+                cmd_submit(sys.argv[2])
+            elif len(sys.argv) >= 4:
+                cmd_submit(sys.argv[2], sys.argv[3])
+            else:
+                print("Usage: python3 extract.py submit [<tid>] '<json>'", file=sys.stderr)
                 sys.exit(1)
-            cmd_submit(sys.argv[2], sys.argv[3])
         elif cmd == "reset":
             cmd_reset()
         elif cmd == "status":
