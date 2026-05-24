@@ -29,7 +29,6 @@ from lib.db import (
 from lib.call_gemini import (
     call_gemini_node,
     list_gems,
-    GEM_ID,
 )
 from lib.extract_pdf import extract_and_run
 
