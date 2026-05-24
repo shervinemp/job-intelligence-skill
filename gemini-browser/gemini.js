@@ -459,11 +459,14 @@ async function dump(page) {
   GEM_ID = null; // no --gem = main page
   if (opts.gemName) {
     const gemsPath = path.join(__dirname, 'gems.json');
+    let gems;
     try {
-      const gems = JSON.parse(fs.readFileSync(gemsPath, 'utf8'));
-      if (gems[opts.gemName]) GEM_ID = gems[opts.gemName];
-      else GEM_ID = opts.gemName;
-    } catch (e) { GEM_ID = opts.gemName; }
+      gems = JSON.parse(fs.readFileSync(gemsPath, 'utf8'));
+    } catch (e) {
+      die(`Can't read gems.json: ${e.message}`);
+    }
+    if (gems[opts.gemName]) GEM_ID = gems[opts.gemName];
+    else die(`Unknown gem '${opts.gemName}'. Available: ${Object.keys(gems).join(', ')}`);
   }
 
   if (opts.promptFile) {

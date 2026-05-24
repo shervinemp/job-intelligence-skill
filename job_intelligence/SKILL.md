@@ -24,12 +24,12 @@
 | `python3 linkedin.py` | Scrape LinkedIn saved jobs into pipeline | `admit`/`reject` each |
 | `python3 linkedin.py --list` | Preview job cards without adding | — |
 | `python3 linkedin.py --url <url> --max 20` | Custom URL, limit to 20 | — |
-| `python3 extract.py` | Auto-extract URLs, shows `JOB:{jid}:{url}` with context | `admit`/`reject` each |
-| `python3 extract.py admit <jid>` | Keep the extracted job | — |
+| `python3 extract.py` | Auto-extract URLs, shows `JOB:{jid}:{url}` with context | `admit --category <name> <jid>` / `reject` each |
+| `python3 extract.py admit --category <name> <jid>` | Keep job + set category. Re-run to update category or skip flag | Categories: tech, general |
+| `python3 extract.py help` | Show all options and available categories | — |
 | `python3 extract.py reject <jid>` | Skip the extracted job | — |
 | `python3 extract.py review [--count N]` | Show N staged emails for manual URL picking | Pick URLs → `submit [<tid>] '<json>'` |
-| `python3 extract.py submit [<tid>] '<json>'` | Save manually picked URLs. Without tid, creates as Manual | JSON can include `"notes":"text"` for human context |
-| `python3 extract.py submit '{"url":"...","notes":"referral"}'` | Inject a manual job with a note | Job created, fetch.py picks it up |
+| `python3 extract.py submit [<tid>] '<json>'` | Submit URLs manually. JSON must include `"category"`. | `{"url":"...","category":"tech","notes":"..."}` |
 | `python3 fetch.py` | Fetch descriptions (default 3, use `--count N`) | `admit`/`reject`/`flag` each |
 | `python3 fetch.py admit <jid>` | Mark job as described | — |
 | `python3 fetch.py reject <jid>` | Skip (garbage/closed) | — |
@@ -45,7 +45,7 @@
 | `python3 tailor.py retry` | Retry failed | — |
 | `python3 tailor.py ready [<jid>]` | Open URL + files folder | — |
 | `python3 extract.py reset` | Wipe DB, start fresh | — |
-| `status` | Unified status + next command | Follow `next:` hint |
+| `status` | Unified status + next command, includes category distribution | Follow `next:` hint |
 
 ## Extraction rules
 
@@ -68,6 +68,18 @@ python3 extract.py submit '{"url":"https://...","notes":"John can refer at Googl
 
 `tailor.py` appends `Context: {notes}` at the end of the Gemini prompt — not a directive, just supplementary info.  
 Re-run with `"notes":""` to clear. The field survives all stage transitions.
+
+## Categories
+
+Each job has a category that determines which Gemini gem handles its tailoring. Available in `categories.json`:
+
+| Category | Gem | Description |
+|----------|-----|-------------|
+| tech | optimizer | Application Optimizer gem |
+| general | (none) | Default Gemini, raw JD processing |
+
+Required on first `admit` via `--category tech <jid>`. Re-run with a different category to update.  
+`tailor.py` resolves from `categories.json` → `gems.json` → gemini.js automatically.
 
 ## Auth walls
 

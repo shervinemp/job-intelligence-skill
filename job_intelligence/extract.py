@@ -96,6 +96,11 @@ def cmd_admit(*args):
         sys.exit(1)
 
     conn = get_conn()
+    for item in jids:
+        if len(item) != 16 or not all(c in '0123456789abcdef' for c in item):
+            print(f"Invalid JID: '{item}'. JIDs are 16 hex characters.", file=sys.stderr)
+            print("Usage: extract.py admit --category <name> <jid> [jid...]", file=sys.stderr)
+            sys.exit(1)
     for jid in jids:
         row = conn.execute("SELECT stage, category FROM jobs WHERE id=?", (jid,)).fetchone()
         if not row:
