@@ -463,15 +463,16 @@ async function dump(page) {
     try {
       gems = JSON.parse(fs.readFileSync(gemsPath, 'utf8'));
     } catch (e) {
-      log(`Warning: can't read gems.json (${e.message}), using raw name`);
-      GEM_ID = opts.gemName;
+      if (e.code === 'ENOENT') {
+        log(`Warning: gems.json not found at ${gemsPath}, using raw name`);
+        GEM_ID = opts.gemName;
+      } else {
+        die(`Can't read gems.json: ${e.message}`);
+      }
     }
     if (gems) {
       if (gems[opts.gemName]) GEM_ID = gems[opts.gemName];
-      else {
-        log(`Warning: gem '${opts.gemName}' not in gems.json, using raw name`);
-        GEM_ID = opts.gemName;
-      }
+      else die(`Unknown gem '${opts.gemName}'. Available: ${Object.keys(gems).join(', ')}`);
     }
   }
 
