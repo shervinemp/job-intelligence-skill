@@ -276,10 +276,7 @@ def main():
         elif cmd == "help":
             cmd_help()
     elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
-        if "--help" in sys.argv:
-            cmd_help()
-        else:
-            cmd_auto()
+        cmd_auto()
     else:
         print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
         print("  See 'extract.py help' for usage", file=sys.stderr)
