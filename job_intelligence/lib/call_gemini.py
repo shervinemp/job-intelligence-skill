@@ -14,24 +14,10 @@ _WORKSPACE_ROOT = os.path.abspath(os.path.join(_SKILL_DIR, "..", ".."))
 GEMINI_JS = os.path.join(_WORKSPACE_ROOT, "skills", "gemini-browser", "gemini.js")
 
 
-def _load_gem_id():
-    env_path = os.path.join(_SKILL_DIR, ".env")
-    try:
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                m = re.match(r"^GEM_ID\s*=\s*(.+)$", line.strip())
-                if m:
-                    return m.group(1).strip()
-    except Exception:
-        pass
-    return None
-
-
-GEM_ID = _load_gem_id()
-
-
-def call_gemini_node(*args, timeout_seconds=600, **kwargs):
+def call_gemini_node(*args, timeout_seconds=600, gem=None, **kwargs):
     """Run gemini.js. Prompt goes via file (avoids Windows cmd length limit).
+    Args:
+        gem: gem alias or raw ID (resolved via gems.json, None = use .env default)
     Returns (success, output_or_error)."""
     output_file = os.path.join(
         tempfile.gettempdir(), f"gemini_response_{int(time.time())}.txt"
@@ -43,6 +29,8 @@ def call_gemini_node(*args, timeout_seconds=600, **kwargs):
     else:
         arg_list = list(args)
     cmd = ["node", GEMINI_JS] + arg_list
+    if gem:
+        cmd += ["--gem", gem]
     cmd += [s for k, v in kwargs.items() for s in (f"--{k}", v)]
     gemini_dir = os.path.dirname(GEMINI_JS)
     try:

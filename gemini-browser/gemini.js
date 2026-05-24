@@ -64,7 +64,7 @@ function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function args() {
   const a = process.argv.slice(2);
-  let prompt = null, gem = null, action = 'prompt', outputFile = null, appDir = null, promptFile = null, gemId = null;
+  let prompt = null, gem = null, action = 'prompt', outputFile = null, appDir = null, promptFile = null, gemName = null;
   for (let i = 0; i < a.length; i++) {
     const v = a[i];
     if (v === '--help') {
@@ -89,10 +89,10 @@ function args() {
     else if (v === '--output' && i + 1 < a.length) outputFile = a[++i];
     else if (v === '--app-dir' && i + 1 < a.length) appDir = a[++i];
     else if (v === '--prompt-file' && i + 1 < a.length) promptFile = a[++i];
-    else if (v === '--gem-id' && i + 1 < a.length) gemId = a[++i];
+    else if (v === '--gem' && i + 1 < a.length) gemName = a[++i];
     else if (!prompt) prompt = v;
   }
-  return { prompt, gem, action, outputFile, appDir, promptFile };
+  return { prompt, gem, action, outputFile, appDir, promptFile, gemName };
 }
 
 // ─── Connect ─────────────────────────────────────────────
@@ -467,7 +467,15 @@ async function dump(page) {
 
 (async () => {
   const opts = args();
-  if (opts.gemId) GEM_ID = opts.gemId;
+  GEM_ID = null; // no --gem = main page
+  if (opts.gemName) {
+    const gemsPath = path.join(__dirname, '..', 'job_intelligence', 'gems.json');
+    try {
+      const gems = JSON.parse(fs.readFileSync(gemsPath, 'utf8'));
+      if (gems[opts.gemName]) GEM_ID = gems[opts.gemName];
+      else GEM_ID = opts.gemName;
+    } catch (e) { GEM_ID = opts.gemName; }
+  }
 
   if (opts.promptFile) {
     try { opts.prompt = fs.readFileSync(opts.promptFile, 'utf8').trim(); } catch (e) { die(`Cannot read prompt file: ${e.message}`); }

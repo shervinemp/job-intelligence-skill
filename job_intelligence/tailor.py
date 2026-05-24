@@ -40,7 +40,7 @@ Job Description:
 {job_description}"""
 
 
-def generate_tailored_docs(job_entry):
+def generate_tailored_docs(job_entry, gem=None):
     job = job_entry
     url = job.get("url", "")
     job_id = hashlib.md5(url.encode()).hexdigest()[:16]
@@ -84,7 +84,7 @@ def generate_tailored_docs(job_entry):
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
     success, output = call_gemini_node(
-        [prompt, "--app-dir", app_dir], timeout_seconds=600
+        [prompt, "--app-dir", app_dir], timeout_seconds=600, gem=gem
     )
 
     if not success:
@@ -122,7 +122,7 @@ def generate_tailored_docs(job_entry):
     }
 
 
-def cmd_craft(count=1, no_open=False):
+def cmd_craft(count=1, no_open=False, gem=None):
     state = load()
     described = [
         (jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described"
@@ -149,7 +149,7 @@ def cmd_craft(count=1, no_open=False):
             print(f"DIR: {os.path.join(RESULTS_DIR, jid)}")
 
         try:
-            success, result = generate_tailored_docs(entry)
+            success, result = generate_tailored_docs(entry, gem=gem)
             if success:
                 advance(
                     entry,
@@ -409,9 +409,15 @@ def main():
         elif cmd == "list-gems":
             list_gems()
     elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
+        gem = None
+        if "--gem" in sys.argv:
+            i = sys.argv.index("--gem")
+            if i + 1 < len(sys.argv):
+                gem = sys.argv[i + 1]
         cmd_craft(
             count=_parse_count() or 1,
             no_open="--no-open" in sys.argv,
+            gem=gem,
         )
     else:
         print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
