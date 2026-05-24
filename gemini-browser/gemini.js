@@ -40,18 +40,7 @@ try {
   CDP = 'http://127.0.0.1:9222';
 }
 
-function loadGemId() {
-  const envPath = path.join(__dirname, '..', 'job_intelligence', '.env');
-  try {
-    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-    for (const line of lines) {
-      const m = line.match(/^GEM_ID\s*=\s*(.+)$/);
-      if (m) return m[1].trim();
-    }
-  } catch (e) { }
-  return null;
-}
-let GEM_ID = loadGemId();
+let GEM_ID = null;
 function gemUrl() {
   return GEM_ID ? `https://gemini.google.com/gem/${GEM_ID}` : 'https://gemini.google.com/';
 }
@@ -469,7 +458,7 @@ async function dump(page) {
   const opts = args();
   GEM_ID = null; // no --gem = main page
   if (opts.gemName) {
-    const gemsPath = path.join(__dirname, '..', 'job_intelligence', 'gems.json');
+    const gemsPath = path.join(__dirname, 'gems.json');
     try {
       const gems = JSON.parse(fs.readFileSync(gemsPath, 'utf8'));
       if (gems[opts.gemName]) GEM_ID = gems[opts.gemName];

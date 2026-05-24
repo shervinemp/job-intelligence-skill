@@ -15,6 +15,7 @@ Usage:
 """
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -49,6 +50,20 @@ def generate_tailored_docs(job_entry, gem=None):
     if not description:
         return False, "No job description found — run fetch.py first"
 
+    cat = job.get("category")
+    if not cat:
+        return False, f"No category for job {job_id} — admit with --category first"
+    cat_dir = os.path.dirname(os.path.abspath(__file__))
+    cat_path = os.path.join(cat_dir, "categories.json")
+    try:
+        with open(cat_path) as f:
+            categories = json.load(f)
+    except Exception as e:
+        return False, f"Can't read categories.json: {e}"
+    cat_info = categories.get(cat)
+    if not cat_info:
+        return False, f"Category '{cat}' not in categories.json"
+    gem = cat_info.get("gem")
     title_clean = job.get("title", "Unknown").split("·")[0].split("\u00b7")[0].strip()
     desc_clean = description[:5000]
     for bad, good in [

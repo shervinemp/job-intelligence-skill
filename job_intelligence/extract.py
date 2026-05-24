@@ -42,6 +42,16 @@ def _snippet(content, url):
     return f"...{s}..."
 
 
+def _load_categories():
+    path = os.path.join(SKILL_DIR, "categories.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Can't read categories.json: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_auto():
     pending_ids = set(setting_get(EXTRACTED_IDS_KEY, []))
     all_staged = stage_list_all()
@@ -68,10 +78,37 @@ def cmd_auto():
     print(f"EXTRACTED:{total}", file=sys.stderr)
 
 
-def cmd_admit(*jids):
+def cmd_admit(*args):
+    category = None
+    jids = []
+    i = 0
+    while i < len(args):
+        if args[i] == '--category' and i + 1 < len(args) and not args[i + 1].startswith('--'):
+            category = args[i + 1]
+            i += 2
+        else:
+            jids.append(args[i])
+            i += 1
+
+    cats = _load_categories()
+    if category and category not in cats:
+        print(f"Unknown category '{category}'. Options: {', '.join(cats)}", file=sys.stderr)
+        sys.exit(1)
+
     conn = get_conn()
     for jid in jids:
-        conn.execute("UPDATE jobs SET stage='extracted' WHERE id=? AND stage='extracted'", (jid,))
+        row = conn.execute("SELECT stage, category FROM jobs WHERE id=?", (jid,)).fetchone()
+        if not row:
+            continue
+        stage, current_cat = row
+        if stage == 'extracted':
+            conn.execute("UPDATE jobs SET stage='extracted' WHERE id=?", (jid,))
+        if current_cat is None and not category:
+            print(f"--category required for first admit. Options: {', '.join(cats)}", file=sys.stderr)
+            print("  See 'extract.py help' for usage", file=sys.stderr)
+            sys.exit(1)
+        if category:
+            conn.execute("UPDATE jobs SET category=? WHERE id=?", (category, jid))
     conn.commit()
     print(f"ADMITTED:{len(jids)}", file=sys.stderr)
 
@@ -109,6 +146,16 @@ def cmd_submit(tid, jobs_json=None):
         jobs = json.loads(jobs_json)
     if not isinstance(jobs, list):
         jobs = [jobs]
+    cats = _load_categories()
+    for job in jobs:
+        if not job.get("url"):
+            continue
+        if not job.get("category"):
+            print(f"JSON must include 'category'. Options: {', '.join(cats)}", file=sys.stderr)
+            sys.exit(1)
+        if job["category"] not in cats:
+            print(f"Unknown category '{job['category']}'. Options: {', '.join(cats)}", file=sys.stderr)
+            sys.exit(1)
     created = 0
     updated = 0
     for job in jobs:
@@ -165,14 +212,42 @@ def cmd_status():
         c = s["stages"].get(stage, 0)
         if c:
             print(f"  {stage}: {c}", file=sys.stderr)
+    conn = get_conn()
+    cat_rows = conn.execute("SELECT category, COUNT(*) FROM jobs WHERE category IS NOT NULL GROUP BY category").fetchall()
+    uncat = conn.execute("SELECT COUNT(*) FROM jobs WHERE category IS NULL").fetchone()[0]
+    if cat_rows or uncat:
+        parts = [f"{r['category']}: {r['COUNT(*)']}" for r in cat_rows]
+        if uncat:
+            parts.append(f"uncategorized: {uncat}")
+        print(f"  categories: {', '.join(parts)}", file=sys.stderr)
     if s["auth_walls"]["count"]:
         domains = " ".join(s["auth_walls"]["domains"])
         print(f"  auth walls: {s['auth_walls']['count']} ({domains})", file=sys.stderr)
     print(f"  next: {s['next_step']}", file=sys.stderr)
 
 
+def cmd_help():
+    cats = _load_categories()
+    print("Usage:", file=sys.stderr)
+    print("  admit --category <name> <jid> [jid...]   Stage job for fetching", file=sys.stderr)
+    print("  reject <jid> [jid...]                    Skip", file=sys.stderr)
+    print("  submit [<tid>] '<json>'                  JSON must include 'category'", file=sys.stderr)
+    print("  review [--count N]                       Show emails for manual picking", file=sys.stderr)
+    print("  status                                   Pipeline state", file=sys.stderr)
+    print("  reset                                    Wipe all data", file=sys.stderr)
+    print("  help                                     This message", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("Categories:", file=sys.stderr)
+    for name, info in cats.items():
+        gem = info.get("gem", "none")
+        desc = info.get("desc", "")
+        print(f"  {name} → {gem}" + (f" ({desc})" if desc else ""), file=sys.stderr)
+    print("", file=sys.stderr)
+    print("Note: --category required on first admit. Omit to update notes without changing category.", file=sys.stderr)
+
+
 def main():
-    subcommands = {"submit", "reset", "status", "admit", "reject", "review"}
+    subcommands = {"submit", "reset", "status", "admit", "reject", "review", "help"}
     if len(sys.argv) > 1 and sys.argv[1] in subcommands:
         cmd = sys.argv[1]
         if cmd == "submit":
@@ -198,11 +273,16 @@ def main():
                 if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
                     count = int(sys.argv[i + 1])
             cmd_review(count)
+        elif cmd == "help":
+            cmd_help()
     elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
-        cmd_auto()
+        if "--help" in sys.argv:
+            cmd_help()
+        else:
+            cmd_auto()
     else:
         print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
-        print("Usage: python3 extract.py [--count N] | submit | reset | status | admit | reject", file=sys.stderr)
+        print("  See 'extract.py help' for usage", file=sys.stderr)
         sys.exit(1)
 
 

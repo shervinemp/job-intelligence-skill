@@ -63,6 +63,7 @@ def _create_v3_tables():
             scripts TEXT NOT NULL DEFAULT '[]',
             response_path TEXT,
             notes TEXT NOT NULL DEFAULT '',
+            category TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             applied_at TEXT
@@ -119,11 +120,12 @@ def _create_v3_tables():
         );
     """)
     # Add columns that might be missing on existing DBs
-    for col in ["response_path TEXT", "notes TEXT NOT NULL DEFAULT ''"]:
+    for col in ["response_path TEXT", "notes TEXT NOT NULL DEFAULT ''", "category TEXT"]:
         try:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
+    c.execute("UPDATE jobs SET category='tech' WHERE category IS NULL")
 
     for idx in [
         "CREATE INDEX IF NOT EXISTS idx_jd_job ON job_documents(job_id)",
@@ -162,10 +164,10 @@ _JOBS_COLS = (
     "salary_min, salary_max, salary_currency, remote_status,"
     "job_type, department, source, source_url, stage, fit_score,"
     "fit_summary, company_vibe, error, scripts, response_path,"
-    "notes, created_at, updated_at, applied_at"
+    "notes, created_at, updated_at, applied_at, category"
 )
 
-_JOBS_Q = ",".join("?" for _ in range(26))
+_JOBS_Q = ",".join("?" for _ in range(27))
 
 
 def load_state():
@@ -221,10 +223,10 @@ def save_state(state):
                 entry.get("created_at", now),
                 now,
                 entry.get("applied_at"),
+                entry.get("category"),
             ),
         )
     conn.commit()
-
 
 def add_job(job_data):
     conn = get_conn()
@@ -270,6 +272,7 @@ def add_job(job_data):
             now,
             now,
             None,
+            job_data.get("category"),
         ),
     )
     conn.commit()

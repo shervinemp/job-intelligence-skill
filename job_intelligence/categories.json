@@ -1,0 +1,10 @@
+{
+  "tech": {
+    "gem": "optimizer",
+    "desc": "Software engineering, data, ML"
+  },
+  "general": {
+    "gem": null,
+    "desc": "Non-technical or other"
+  }
+}
