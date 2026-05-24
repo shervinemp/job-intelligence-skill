@@ -1,5 +1,6 @@
 """extract.py — Auto-extract URLs from staged emails, SLM admits/rejects."""
 
+import hashlib
 import json
 import os
 import re
@@ -115,8 +116,10 @@ def cmd_submit(tid, jobs_json=None):
         job["email_id"] = tid
         job["source"] = "Email" if tid != "manual" else "Manual"
         job["source_url"] = job.get("url", "")
+        jid_candidate = hashlib.md5(job["url"].encode()).hexdigest()[:16]
+        existing = get_conn().execute("SELECT 1 FROM jobs WHERE id=?", (jid_candidate,)).fetchone()
         jid = add_job(job)
-        if jid:
+        if jid and not existing:
             count += 1
     if tid != "manual":
         extracted_ids = setting_get(EXTRACTED_IDS_KEY, [])
