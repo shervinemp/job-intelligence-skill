@@ -1,5 +1,6 @@
 """extract.py — Auto-extract URLs from staged emails, SLM admits/rejects."""
 
+import hashlib
 import json
 import os
 import re
@@ -108,22 +109,30 @@ def cmd_submit(tid, jobs_json=None):
         jobs = json.loads(jobs_json)
     if not isinstance(jobs, list):
         jobs = [jobs]
-    count = 0
+    created = 0
+    updated = 0
     for job in jobs:
         if not job.get("url"):
             continue
         job["email_id"] = tid
         job["source"] = "Email" if tid != "manual" else "Manual"
         job["source_url"] = job.get("url", "")
+        jid_candidate = hashlib.md5(job["url"].encode()).hexdigest()[:16]
+        existing = get_conn().execute("SELECT 1 FROM jobs WHERE id=?", (jid_candidate,)).fetchone()
         jid = add_job(job)
-        if jid:
-            count += 1
+        if jid and not existing:
+            created += 1
+        if jid and existing and "notes" in job:
+            updated += 1
     if tid != "manual":
         extracted_ids = setting_get(EXTRACTED_IDS_KEY, [])
         if tid not in extracted_ids:
             extracted_ids.append(tid)
             setting_set(EXTRACTED_IDS_KEY, extracted_ids)
-    print(f"SUBMIT:{tid}:{count}", file=sys.stderr)
+    if created:
+        print(f"CREATED:{created}", file=sys.stderr)
+    if updated:
+        print(f"UPDATED:{updated}", file=sys.stderr)
     print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
