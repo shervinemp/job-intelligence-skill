@@ -402,16 +402,18 @@ async function read(page, timeout = 360000) {
 
 async function deleteChat(page) {
   try {
-    // Extract conversation ID from current URL
+    // Extract conversation ID from current URL (gem or main page)
     const convId = await page.evaluate(() => {
-      const m = location.href.match(/\/gem\/[^\/]+\/([^\/\?]+)/);
-      return m ? m[1] : null;
+      const mGem = location.href.match(/\/gem\/[^\/]+\/([^\/\?]+)/);
+      if (mGem) return mGem[1];
+      const mMain = location.href.match(/\/c\/([^\/\?]+)/);
+      return mMain ? mMain[1] : null;
     });
     if (!convId) { log('deleteChat: could not extract conv id'); return; }
     log(`deleteChat: targeting conv ${convId}`);
 
-    // Navigate to gem home to ensure sidebar is current
-    await page.goto(`https://gemini.google.com/gem/${GEM_ID}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    // Navigate to home to ensure sidebar is current
+    await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
     await wait(3000);
 
     // Find conversation by convId and click its actions menu
