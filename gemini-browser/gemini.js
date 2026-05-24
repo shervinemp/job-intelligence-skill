@@ -472,7 +472,10 @@ async function dump(page) {
     }
     if (gems) {
       if (gems[opts.gemName]) GEM_ID = gems[opts.gemName];
-      else die(`Unknown gem '${opts.gemName}'. Available: ${Object.keys(gems).join(', ')}`);
+      else {
+        log(`Warning: '${opts.gemName}' not in gems.json, using as raw ID`);
+        GEM_ID = opts.gemName;
+      }
     }
   }
 
