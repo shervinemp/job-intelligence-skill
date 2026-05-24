@@ -148,7 +148,7 @@ def stage_emails():
 
 
 if __name__ == "__main__":
-    days = 14
+    days = None
     refresh = False
     remaining = []
     i = 1
@@ -168,14 +168,21 @@ if __name__ == "__main__":
         search_threads_clear()
         setting_set("staged_ids", [])
         setting_set("skipped_ids", [])
+        setting_set("last_searched_at", None)
 
     query = _load_query()
-    if days:
-        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y/%m/%d")
-        query = f"{query} after:{cutoff}"
+    last_searched = setting_get("last_searched_at")
+    if days is None and last_searched:
+        cutoff = max(datetime.fromisoformat(last_searched), datetime.now() - timedelta(days=14))
+        days = (datetime.now() - cutoff).days
+    else:
+        days = days or 14
+        cutoff = datetime.now() - timedelta(days=days)
+    query = f"{query} after:{cutoff.strftime('%Y/%m/%d')}"
     print(f"Searching Gmail (last {days}d)", file=sys.stderr)
     data = _run_search(query)
     threads = data.get("threads", [])
     print(f"Found {len(threads)} threads.", file=sys.stderr)
     search_threads_save(threads)
+    setting_set("last_searched_at", datetime.now().isoformat())
     stage_emails()
