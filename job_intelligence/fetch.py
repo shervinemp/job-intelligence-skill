@@ -77,7 +77,7 @@ def _pw_fetch(url, timeout=30):
             print(f"WARN: page.close failed ({e})", file=sys.stderr)
 
 
-def fetch_description(url, use_playwright=False):
+def _fetch_from_url(url, use_playwright=False):
     if use_playwright:
         ok, text = _pw_fetch(url)
         if ok:
@@ -134,8 +134,7 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
         title = entry.get("title", "")
         company = entry.get("company", "")
         url = entry.get("url", "")
-        print(f"FETCH:{jid[:12]} {url[:60]}", file=sys.stderr)
-        ok, result = fetch_description(url, use_playwright=use_playwright)
+        ok, result = _fetch_from_url(url, use_playwright=use_playwright)
         if ok:
             save_description(jid, result)
             limit = 2000 if verbose else 500
@@ -242,7 +241,7 @@ def cmd_retry(use_playwright=True):
         return
     fetched = 0
     for jid, entry in failed:
-        ok, result = fetch_description(entry.get("url", ""), use_playwright=use_playwright)
+        ok, result = _fetch_from_url(entry.get("url", ""), use_playwright=use_playwright)
         if ok:
             save_description(jid, result)
             snippet = re.sub(r'\s+', ' ', result[:200].replace('\r', '')).strip()
