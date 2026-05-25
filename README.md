@@ -1,12 +1,11 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/node-20+-green?style=flat&logo=node.js&logoColor=white" alt="Node">
-  <img src="https://img.shields.io/badge/chrome-required-orange?style=flat&logo=googlechrome&logoColor=white" alt="Chrome">
+  <img src="https://img.shields.io/badge/chrome-required-orange?style=flat&logo=google-chrome&logoColor=white" alt="Chrome">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat" alt="License">
 </p>
 
 # Job Intelligence Pipeline
-
 
 Automated job discovery, description fetching, and CV tailoring — orchestrated by an SLM.
 
@@ -15,44 +14,39 @@ Automated job discovery, description fetching, and CV tailoring — orchestrated
 ## Pipeline Flow
 
 ```
-                        ┌─────────────┐
-                        │   Gmail     │
-                        │   Search    │
-                        └──────┬──────┘
-                               │
-                        ┌──────▼──────┐
-                        │  stage_em   │
-                        │  ails.py    │
-                        └──────┬──────┘
-                               │
-                        ┌──────▼──────┐    ┌─────────────┐
-                        │  extract    │    │  linkedin   │
-                        │   .py       │    │   .py       │
-                        └──────┬──────┘    └──────┬──────┘
-                               │                  │
-                               └──────┬───────────┘
-                                      │
-                               ┌──────▼──────┐
-                               │  admit  /   │
-                               │  reject     │
-                               └──────┬──────┘
-                                      │
-                               ┌──────▼──────┐
-                               │  fetch.py   │
-                               └──────┬──────┘
-                                      │
-                               ┌──────▼──────┐
-                               │  admit  /   │
-                               │  reject/flag │
-                               └──────┬──────┘
-                                      │
-                               ┌──────▼──────┐
-                               │  tailor.py  │
-                               └──────┬──────┘
-                                      │
-                               ┌──────▼──────┐
-                               │ done / skip │
-                               └─────────────┘
+                          ┌──────────────────┐
+                          │   Gmail Search   │
+                          └────────┬─────────┘
+                                   │
+                          ┌────────▼─────────┐
+                          │ stage_emails.py  │
+                          └────────┬─────────┘
+                                   │
+                          ┌────────▼─────────┐   ┌──────────────────┐
+                          │   extract.py     │   │  linkedin.py     │
+                          └────────┬─────────┘   └────────┬─────────┘
+                                   │                     │
+                                   └──────────┬──────────┘
+                                              │
+                                     ┌────────▼─────────┐
+                                     │  admit / reject  │
+                                     └────────┬─────────┘
+                                              │
+                                     ┌────────▼─────────┐
+                                     │    fetch.py       │
+                                     └────────┬─────────┘
+                                              │
+                                     ┌────────▼─────────┐
+                                     │ admit/reject/flag│
+                                     └────────┬─────────┘
+                                              │
+                                     ┌────────▼─────────┐
+                                     │   tailor.py      │
+                                     └────────┬─────────┘
+                                              │
+                                     ┌────────▼─────────┐
+                                     │   done / skip    │
+                                     └──────────────────┘
 ```
 
 ---
