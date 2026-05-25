@@ -98,6 +98,8 @@ def generate_tailored_docs(job_entry, gem=None):
     if notes:
         prompt += f"\n\nContext: {notes}"
 
+    prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
+
     RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
