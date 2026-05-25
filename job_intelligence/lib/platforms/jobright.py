@@ -1,7 +1,5 @@
 """Platform: jobright.ai — description extractor using DOM selectors."""
 
-import re
-
 
 def pre_fetch(page):
     pass
@@ -13,7 +11,9 @@ def extract_text(page):
     except Exception:
         pass
     return page.evaluate("""() => {
-      const sections = document.querySelectorAll('.index_sectionContent__prVJT');
+      const sections = document.querySelectorAll(
+        '.index_sectionContent__prVJT:not(.index_insider-connection__QtlVL)'
+      );
       if (sections.length) {
         return Array.from(sections).map(s => s.innerText).join('\\n\\n');
       }
@@ -21,13 +21,3 @@ def extract_text(page):
       if (main) return main.innerText;
       return document.body.innerText;
     }""")
-
-
-def clean(text):
-    text = re.sub(
-        r"(?im)^.*?(insider connection|email credits available|"
-        r"beyond your network|find more connections|find any email|"
-        r"from your previous company|from your school).*$\n?",
-        "", text,
-    )
-    return text.strip()
