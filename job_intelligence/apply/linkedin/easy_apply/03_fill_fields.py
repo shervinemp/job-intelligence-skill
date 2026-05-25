@@ -97,7 +97,7 @@ if os.path.isdir(results_dir):
 for f_info in fields_result:
     val = resolve(f_info["label"], profile, ca)
     if val is None:
-        if f_info["required"] and not f_info["value"]:
+        if f_info["required"] and (not f_info["value"] or f_info["value"] == "Select an option"):
             unfilled_required.append(f_info)
         continue
     
