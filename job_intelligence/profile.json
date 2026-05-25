@@ -1,0 +1,52 @@
+{
+  "resume_path": "",
+  "first_name": "Shervin",
+  "last_name": "Naseri",
+  "email": "shervin.naseri@gmail.com",
+  "phone": "+1 (343) 558-1744",
+  "location": "Ottawa, Ontario, Canada",
+  "linkedin": "https://www.linkedin.com/in/shervin-naseri-b3a016b0",
+  "github": "https://github.com/shervinemp",
+  "portfolio": "https://shervinemp.github.io/portfolio",
+  "website": "",
+  "work_experience": [
+    {
+      "title": "",
+      "company": "",
+      "start_date": "",
+      "end_date": "",
+      "current": true,
+      "description": ""
+    }
+  ],
+  "education": [
+    {
+      "degree": "",
+      "school": "",
+      "graduation": ""
+    }
+  ],
+  "skills": [],
+  "languages": [],
+  "certifications": [],
+  "common_answers": {
+    "phone": "",
+    "linkedin_url": "",
+    "portfolio_url": "",
+    "github_url": "",
+    "website_url": "",
+    "visa_sponsorship": "No",
+    "work_authorization": "",
+    "gender": "Prefer not to say",
+    "veteran_status": "I am not a protected veteran",
+    "disability_status": "I do not have a disability",
+    "how_did_you_hear": "LinkedIn",
+    "willing_to_relocate": "Yes",
+    "authorized_to_work": "Yes",
+    "require_visa": "No",
+    "current_ctc": "",
+    "expected_ctc": "",
+    "notice_period": "",
+    "cover_letter_intro": ""
+  }
+}

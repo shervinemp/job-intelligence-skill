@@ -21,20 +21,14 @@ if not page:
     print("ERROR: no LinkedIn page found", file=sys.stderr)
     sys.exit(1)
 
-# Track new pages opened
-external_url = [None]
-def on_page(new_page):
-    url = new_page.url
-    if 'linkedin.com' not in url and url != 'about:blank' and not url.startswith('chrome'):
-        external_url[0] = url
-        print(f"External page opened: {url}", file=sys.stderr)
-ctx.on('page', on_page)
+# Track pages before click for comparison
+pages_before = set(p.url for p in ctx.pages)
 
 # Click the external apply button
 clicked = page.evaluate("""() => {
     const all = document.querySelectorAll('button');
     for (const b of all) {
-        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        const aria = (b.getAttribute('aria-label') || '');
         if (aria.includes('on company website') && b.offsetParent !== null) {
             b.click();
             return true;
@@ -46,20 +40,27 @@ print(f"Clicked external button: {clicked}", file=sys.stderr)
 
 time.sleep(5)
 
-# If no new page captured, check existing pages
-if not external_url[0]:
+# Find external URL — check for new pages first, then existing pages
+external_url = None
+for p in ctx.pages:
+    url = p.url
+    if url not in pages_before and 'linkedin.com' not in url and url != 'about:blank' and not url.startswith('chrome'):
+        external_url = url
+        break
+
+if not external_url:
     for p in ctx.pages:
         url = p.url
         if 'linkedin.com' not in url and url != 'about:blank' and not url.startswith('chrome'):
-            external_url[0] = url
-            print(f"Found external page: {url}", file=sys.stderr)
+            external_url = url
+            print(f"External page found (pre-existing): {url}", file=sys.stderr)
             break
 
-if external_url[0]:
-    state["external_url"] = external_url[0]
+if external_url:
+    state["external_url"] = external_url
     with open(STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
-    print(f"External URL: {external_url[0]}", file=sys.stderr)
+    print(f"External URL: {external_url}", file=sys.stderr)
     print("NEXT: apply/linkedin/external/02_detect_platform.py", file=sys.stderr)
 else:
     print("ERROR: no external page opened", file=sys.stderr)
