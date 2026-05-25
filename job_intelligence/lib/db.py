@@ -31,6 +31,24 @@ def get_conn():
     return _conn
 
 
+def _import_legacy_auth_walls():
+    old_path = os.path.join(os.path.expanduser("~"), ".openclaw", "needs_auth.json")
+    if not os.path.exists(old_path):
+        return
+    try:
+        with open(old_path) as f:
+            entries = json.load(f)
+        conn = get_conn()
+        for e in entries:
+            jid = e.get("jid")
+            if jid:
+                conn.execute("UPDATE jobs SET auth_wall=1 WHERE id=?", (jid,))
+        conn.commit()
+        os.remove(old_path)
+    except Exception:
+        pass
+
+
 def _create_v3_tables():
     c = get_conn()
     c.executescript("""
@@ -60,6 +78,7 @@ def _create_v3_tables():
             fit_summary TEXT,
             company_vibe TEXT,
             error TEXT,
+            auth_wall INTEGER NOT NULL DEFAULT 0,
             scripts TEXT NOT NULL DEFAULT '[]',
             response_path TEXT,
             notes TEXT NOT NULL DEFAULT '',
@@ -120,12 +139,13 @@ def _create_v3_tables():
         );
     """)
     # Add columns that might be missing on existing DBs
-    for col in ["response_path TEXT", "notes TEXT NOT NULL DEFAULT ''", "category TEXT"]:
+    for col in ["response_path TEXT", "notes TEXT NOT NULL DEFAULT ''", "category TEXT", "auth_wall INTEGER NOT NULL DEFAULT 0"]:
         try:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
     c.execute("UPDATE jobs SET category='tech' WHERE category IS NULL")
+    _import_legacy_auth_walls()
 
     for idx in [
         "CREATE INDEX IF NOT EXISTS idx_jd_job ON job_documents(job_id)",

@@ -344,6 +344,22 @@ def cmd_done(*job_ids):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
+def cmd_help():
+    print("Usage:", file=sys.stderr)
+    print("  [--count N] [--no-open] [--gem GEM]     Craft CVs (default 1 with handoff)", file=sys.stderr)
+    print("  done <jid> [jid...]                      Mark applied, create .url shortcut", file=sys.stderr)
+    print("  skip <jid> [jid...]                      Skip", file=sys.stderr)
+    print("  redo <jid>                               Re-tailor from described", file=sys.stderr)
+    print("  retry                                    Retry failed", file=sys.stderr)
+    print("  reset <jid> [--hard]                     Reset to described or extracted", file=sys.stderr)
+    print("  reset --all [--hard]                     Mass reset", file=sys.stderr)
+    print("  ready [<jid>]                            Open URL + files folder", file=sys.stderr)
+    print("  resume <jid>                             Show application files", file=sys.stderr)
+    print("  status                                   Pipeline state", file=sys.stderr)
+    print("  list-gems                                List Gemini gems", file=sys.stderr)
+    print("  help                                     This message", file=sys.stderr)
+
+
 def cmd_redo(job_id):
     if not job_id:
         print("Usage: python3 tailor.py redo <job_id>", file=sys.stderr)
@@ -400,7 +416,7 @@ def _parse_count():
 
 
 def main():
-    subcommands = {"done", "skip", "redo", "retry", "reset", "status", "resume", "ready", "list-gems"}
+    subcommands = {"done", "skip", "redo", "retry", "reset", "status", "resume", "ready", "list-gems", "help"}
     if len(sys.argv) > 1 and sys.argv[1] in subcommands:
         cmd = sys.argv[1]
         if cmd == "done":
@@ -423,6 +439,8 @@ def main():
             cmd_ready(sys.argv[2] if len(sys.argv) > 2 else None)
         elif cmd == "list-gems":
             list_gems()
+        elif cmd == "help":
+            cmd_help()
     elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
         gem = None
         if "--gem" in sys.argv:
