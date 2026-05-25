@@ -536,14 +536,14 @@ async function dump(page) {
     let og = await openGem(page, opts.gem);
     if (og.timedOut) {
       const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: og.resetsAt || 'unknown' });
-      console.error(out); process.exit(2);
+      console.error(out); try { await page.close(); } catch (e) {} process.exit(2);
     }
 
     const modeSet = await ensureMode(page);
     if (modeSet.status === 'timedOut') {
       const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: modeSet.resetsAt || 'unknown' });
       console.error(out);
-      process.exit(2);
+      try { await page.close(); } catch (e) {} process.exit(2);
     }
     if (modeSet.status !== 'ok') {
       die('Could not set Flash + Extended mode.');
@@ -557,12 +557,12 @@ async function dump(page) {
         og = await openGem(page, opts.gem);
         if (og.timedOut) {
           const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: og.resetsAt || 'unknown' });
-          console.error(out); process.exit(2);
+          console.error(out); try { await page.close(); } catch (e) {} process.exit(2);
         }
         const retrySet = await ensureMode(page);
         if (retrySet.status === 'timedOut') {
           const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: retrySet.resetsAt || 'unknown' });
-          console.error(out); process.exit(2);
+          console.error(out); try { await page.close(); } catch (e) {} process.exit(2);
         }
         if (retrySet.status !== 'ok') { die('Could not set mode on retry.'); }
       }
