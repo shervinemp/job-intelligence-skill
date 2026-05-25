@@ -47,16 +47,12 @@ fields = page.evaluate("""() => {
     });
 }""")
 
-unfilled = [f for f in fields if f['required'] and (not f['value'] or f['value'] == 'Select an option')]
-if not unfilled:
-    print("No unfilled required fields", file=sys.stderr)
-    print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
-    sys.exit(0)
-
+# Process ALL text-input fields (screening questions may have wrong defaults)
+all_text_fields = [f for f in fields if f['type'] in ('text',) and f['tag'] == 'INPUT']
 filled = 0
 remaining = []
 
-for f in unfilled:
+for f in all_text_fields:
     label_lower = f['label'].lower()
     val = None
     
@@ -67,67 +63,41 @@ for f in unfilled:
             break
     
     if val is None:
-        # 2. Yes/No questions → "No"
-        if f['options'] and any(o.lower() in ('yes', 'no') for o in f['options'][:2]):
-            val = 'No'
-            # Check for specific yes/no patterns
-            if 'authorized' in label_lower or 'eligible' in label_lower:
-                val = ca.get('authorized_to_work', 'Yes')
-            elif 'visa' in label_lower or 'sponsor' in label_lower:
-                val = ca.get('require_visa', 'No')
-            elif 'disability' in label_lower:
-                val = ca.get('disability_status', 'I do not have a disability')
-            elif 'veteran' in label_lower:
-                val = ca.get('veteran_status', 'I am not a protected veteran')
-            elif 'gender' in label_lower:
-                val = ca.get('gender', 'Prefer not to say')
-    
-    if val is None and f['options']:
-        # 3. Select with options — pick second option (skip placeholder)
-        val = f['options'][1] if len(f['options']) > 1 else f['options'][0]
-    
-    if val is None:
-        # 4. Text question — use years of experience from profile if available
-        years = ca.get('years_of_experience', '')
-        if years and ('years' in label_lower or 'experience' in label_lower):
+        # 2. Years of experience questions
+        years = ca.get('years_of_experience', '') or ca.get('total_years', '')
+        if years and ('year' in label_lower or 'experience' in label_lower):
             val = years
-        else:
-            val = ''  # Model must decide
+
+    if val is None:
+        # 3. Common label patterns
+        for phrase, ca_key in {
+            "years of experience": "years_of_experience",
+            "years of work": "years_of_experience", 
+            "how many years": "years_of_experience",
+        }.items():
+            if phrase in label_lower:
+                v = ca.get(ca_key)
+                if v: val = v; break
     
-    if val:
-        sel = f"#{f['id']}" if f['id'] else f"[name=\"{f['name']}\"]"
+    if val and val != f['value']:
+        # Override the wrong default
+        sel = f"#{f['id']}" if f['id'] and not f['id'][0].isdigit() else f"[id=\"{f['id']}\"]" if f['id'] else f"[name=\"{f['name']}\"]"
         if sel and sel != '#':
             try:
                 el = page.query_selector(sel)
                 if el:
-                    if f['tag'] == 'SELECT':
-                        el.select_option(val)
-                    elif f['type'] == 'radio':
-                        # Find the radio option matching our value
-                        radios = page.evaluate(f"""(id, val) => {{
-                            const d = document.querySelector('[role="dialog"]');
-                            const radios = d.querySelectorAll('input[type="radio"]');
-                            for (const r of radios) {{
-                                const lbl = d.querySelector('label[for="'+r.id+'"]');
-                                const t = lbl ? lbl.textContent.trim().toLowerCase() : '';
-                                if (r.name === document.getElementById(id).name && t === val.toLowerCase()) {{
-                                    r.click(); return true;
-                                }}
-                            }}
-                            return false;
-                        }}""", f['id'], val)
-                    elif f['type'] == 'checkbox':
-                        if val.lower() in ('yes','true','1','on') and not el.is_checked():
-                            el.click()
-                    else:
-                        el.fill(val)
+                    el.fill(val)
                     filled += 1
                     print(f"  FILLED: '{f['label']}' -> '{val}'", file=sys.stderr)
                     continue
             except Exception as e:
                 print(f"  FAILED: '{f['label']}' ({e})", file=sys.stderr)
     
-    remaining.append(f)
+    if not val:
+        remaining.append(f)
+
+# Also handle remaining unfilled required fields (selects with bad defaults)
+unfilled = [f for f in fields if f['required'] and (not f['value'] or f['value'] == 'Select an option')]
 
 state["screening_filled"] = filled
 state["screening_remaining"] = [f"{f['label']} (options: {f['options'][:4]})" for f in remaining]
