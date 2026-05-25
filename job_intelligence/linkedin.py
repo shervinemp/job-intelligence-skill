@@ -117,7 +117,15 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                     add_job({"url": job_url, "title": parsed["title"], "company": parsed["company"],
                              "location": parsed["location"], "source": "LinkedIn", "source_url": job_url,
                              "category": "tech"})
-                    page.goto(job_url, wait_until='domcontentloaded', timeout=15000)
+                    page.locator(f'.job-card-container[data-job-id="{cd["id"]}"]').first.click()
+                    page.wait_for_timeout(500)
+                    for _ in range(3):
+                        current = page.evaluate("() => new URLSearchParams(location.search).get('currentJobId')")
+                        if current == cd['id']:
+                            break
+                        page.wait_for_timeout(1000)
+                        page.locator(f'.job-card-container[data-job-id="{cd["id"]}"]').first.click()
+                        page.wait_for_timeout(500)
                     page.wait_for_timeout(1500)
                     desc = ""
                     for _ in range(4):
