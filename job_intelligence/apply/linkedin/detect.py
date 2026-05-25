@@ -35,33 +35,29 @@ time.sleep(5)
 result = p.evaluate("""() => {
     const r = { type: 'unknown', details: {} };
     
-    // 1. Easy Apply: dialog with real content
-    const d = document.querySelector('[role="dialog"]');
-    if (d && (d.innerText || '').trim().length > 80) {
-        r.type = 'easy_apply';
-        r.details.hasDialog = true;
-        r.details.fieldCount = d.querySelectorAll('input:not([type=hidden]), select, textarea').length;
-        r.details.buttons = Array.from(d.querySelectorAll('button')).map(b => ({
-            text: (b.textContent||'').trim().slice(0,20), disabled: b.disabled
-        }));
-        return r;
-    }
-    
-    // 2. Already applied
+    // 1. Already applied: <button> with text "Applied"
     const all = document.querySelectorAll('button');
     for (const el of all) {
-        if ((el.textContent || '').trim().toLowerCase() === 'applied' && el.offsetParent !== null) {
+        if ((el.textContent || '').trim() === 'Applied' && el.offsetParent !== null) {
             r.type = 'applied'; return r;
         }
     }
     
-    // 3. External apply: element with aria-label containing "on company website"
-    const all2 = document.querySelectorAll('button, a');
-    for (const el of all2) {
-        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+    // 2. Easy Apply: <a> tag with aria-label "Easy Apply to this job"
+    const easyLinks = document.querySelectorAll('a[aria-label*="Easy Apply"]');
+    for (const a of easyLinks) {
+        if (a.offsetParent !== null) {
+            r.type = 'easy_apply';
+            return r;
+        }
+    }
+    
+    // 3. External apply: <button> with aria-label containing "on company website"
+    for (const el of all) {
+        const aria = (el.getAttribute('aria-label') || '');
         if (aria.includes('on company website') && el.offsetParent !== null) {
             r.type = 'external';
-            r.details.aria = (el.getAttribute('aria-label') || '').slice(0, 80);
+            r.details.aria = aria.slice(0, 80);
             return r;
         }
     }
