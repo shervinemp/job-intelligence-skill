@@ -19,8 +19,10 @@ for p in ctx.pages:
 if not page:
     print("ERROR: no LinkedIn page found", file=sys.stderr); sys.exit(1)
 
-# Click Submit / Send Application
+# Click Submit / Send Application (disable overlay first)
 clicked = page.evaluate("""() => {
+    const overlay = document.getElementById('interop-outlet');
+    if (overlay) overlay.style.pointerEvents = 'none';
     const d = document.querySelector('[role="dialog"]');
     if (!d) return { status: 'no_modal' };
     const btns = d.querySelectorAll('button:not([disabled])');
