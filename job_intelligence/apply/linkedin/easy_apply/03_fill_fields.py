@@ -49,7 +49,8 @@ def resolve(label, profile, ca):
         section, key = FIELD_MAP[norm]
         if section == "common_answers":
             return ca.get(key)
-        return profile.get(key) or ca.get(key)
+        lookup = key or section
+        return profile.get(lookup) or ca.get(lookup)
     # Common answers multi-word match
     for phrase, key in COMMON_FIELD_MAP.items():
         if phrase in norm:
@@ -128,6 +129,8 @@ for f_info in fields_result:
         print(f"  FILLED: '{f_info['label']}' -> '{val[:30]}'", file=sys.stderr)
     except Exception as e:
         print(f"  FAILED: '{f_info['label']}' ({e})", file=sys.stderr)
+        if f_info["required"] and (not f_info["value"] or f_info["value"] == "Select an option"):
+            unfilled_required.append(f_info)
 
 # Upload resume if available and file input exists
 if resume_path:
