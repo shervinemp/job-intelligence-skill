@@ -437,8 +437,13 @@ async function deleteChat(page) {
     await deleteBtn.click();
     await wait(1000);
 
-    const confirmBtn = page.locator('[role="dialog"] button:has-text("Delete")');
-    if (await confirmBtn.count()) await confirmBtn.click();
+    let confirmBtn = await page.$('[data-test-id="confirm-button"]');
+    if (!confirmBtn) {
+      const loc = page.locator('[role="dialog"] button:has-text("Delete")');
+      if (await loc.count() > 0) await loc.first().click();
+    } else {
+      await confirmBtn.click();
+    }
     await wait(1500);
     log('deleteChat: done');
   } catch (e) { log(`deleteChat error: ${e.message}`); }
