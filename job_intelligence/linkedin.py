@@ -118,7 +118,7 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                             pane = page.query_selector('.jobs-search__job-details--container')
                             if pane:
                                 text = (pane.inner_text() or '').strip()
-                                if len(text) > 200:
+                                if len(text) > 200 and "loading job details" not in text.lower():
                                     desc = text[:8000]
                                     break
                             time.sleep(0.5)
