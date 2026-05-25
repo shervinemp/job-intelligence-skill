@@ -62,12 +62,16 @@ def cmd_auto():
 
     total = 0
     extracted_ids = list(pending_ids)
+    conn = get_conn()
     for tid, content in pending:
         urls = _extract_urls(content)
         if not urls:
             extracted_ids.append(tid)
             continue
         for url in urls:
+            expected_jid = hashlib.md5(url.encode()).hexdigest()[:16]
+            if conn.execute("SELECT 1 FROM jobs WHERE id=?", (expected_jid,)).fetchone():
+                continue
             jid = add_job({"url": url, "email_id": tid, "source": "Email", "source_url": url})
             if jid:
                 ctx = _snippet(content, url)
@@ -188,25 +192,53 @@ def cmd_submit(tid, jobs_json=None):
     print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_reset():
-    c = get_conn()
-    c.execute("PRAGMA foreign_keys=OFF")
-    c.execute("DELETE FROM events")
-    c.execute("DELETE FROM job_documents")
-    c.execute("DELETE FROM jobs")
-    c.execute("DELETE FROM companies")
-    c.execute("DELETE FROM stages")
-    c.execute("DELETE FROM search_threads")
-    c.execute("PRAGMA foreign_keys=ON")
-    c.commit()
-    setting_set(EXTRACTED_IDS_KEY, [])
-    setting_set("staged_ids", [])
-    setting_set("skipped_ids", [])
-    import shutil
-    res_dir = os.path.join(SKILL_DIR, "results")
-    if os.path.exists(res_dir):
-        shutil.rmtree(res_dir)
-    print("Reset complete. Staged emails ready for fresh extraction.", file=sys.stderr)
+def cmd_reset(*jids):
+    conn = get_conn()
+    if not jids:
+        c = conn
+        c.execute("PRAGMA foreign_keys=OFF")
+        c.execute("DELETE FROM events")
+        c.execute("DELETE FROM job_documents")
+        c.execute("DELETE FROM jobs")
+        c.execute("DELETE FROM companies")
+        c.execute("DELETE FROM stages")
+        c.execute("DELETE FROM search_threads")
+        c.execute("PRAGMA foreign_keys=ON")
+        c.commit()
+        setting_set(EXTRACTED_IDS_KEY, [])
+        setting_set("staged_ids", [])
+        setting_set("skipped_ids", [])
+        import shutil
+        res_dir = os.path.join(SKILL_DIR, "results")
+        if os.path.exists(res_dir):
+            shutil.rmtree(res_dir)
+        print("Reset complete. Staged emails ready for fresh extraction.", file=sys.stderr)
+    else:
+        email_ids_to_remove = set()
+        for jid in jids:
+            if len(jid) != 16 or not all(c in '0123456789abcdef' for c in jid):
+                print(f"Invalid JID: '{jid}'. JIDs are 16 hex characters.", file=sys.stderr)
+                continue
+            row = conn.execute("SELECT email_id FROM jobs WHERE id=?", (jid,)).fetchone()
+            if not row:
+                print(f"Job not found: {jid}", file=sys.stderr)
+                continue
+            email_id = row["email_id"]
+            conn.execute("DELETE FROM job_documents WHERE job_id=?", (jid,))
+            conn.execute("DELETE FROM events WHERE job_id=?", (jid,))
+            conn.execute("DELETE FROM contacts WHERE job_id=?", (jid,))
+            conn.execute("DELETE FROM jobs WHERE id=?", (jid,))
+            if email_id:
+                email_ids_to_remove.add(email_id)
+        conn.commit()
+        if email_ids_to_remove:
+            extracted_ids = set(setting_get(EXTRACTED_IDS_KEY, []))
+            extracted_ids -= email_ids_to_remove
+            setting_set(EXTRACTED_IDS_KEY, list(extracted_ids))
+        print(f"RESET:{len(jids)}", file=sys.stderr)
+        s = pipeline_status()
+        if s["next_step"]:
+            print(f"  NEXT: {s['next_step']}", file=sys.stderr)
 
 
 def cmd_status():
@@ -240,6 +272,7 @@ def cmd_help():
     print("  review [--count N]                       Show emails for manual picking", file=sys.stderr)
     print("  status                                   Pipeline state", file=sys.stderr)
     print("  reset                                    Wipe all data", file=sys.stderr)
+    print("  reset <jid> [jid...]                     Delete specific job, re-extract on next run", file=sys.stderr)
     print("  help                                     This message", file=sys.stderr)
     print("", file=sys.stderr)
     print("Categories:", file=sys.stderr)
@@ -264,7 +297,7 @@ def main():
                 print("Usage: python3 extract.py submit [<tid>] '<json>'", file=sys.stderr)
                 sys.exit(1)
         elif cmd == "reset":
-            cmd_reset()
+            cmd_reset(*sys.argv[2:])
         elif cmd == "status":
             cmd_status()
         elif cmd == "admit":

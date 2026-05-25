@@ -219,6 +219,19 @@ def cmd_retry_skipped():
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
+def cmd_help():
+    print("Usage:", file=sys.stderr)
+    print("  [--count N] [--curl] [--force] [--refresh] [--verbose]   Fetch descriptions (default 3)", file=sys.stderr)
+    print("  admit <jid> [jid...]                                      Mark job as described", file=sys.stderr)
+    print("  reject <jid> [jid...]                                     Skip (garbage/closed)", file=sys.stderr)
+    print("  flag <jid> [jid...]                                       Mark as auth wall", file=sys.stderr)
+    print("  open [<jid>]                                              Open in Chrome", file=sys.stderr)
+    print("  retry                                                     Retry failed fetches", file=sys.stderr)
+    print("  retry-skipped                                             Reset all skipped back to extracted", file=sys.stderr)
+    print("  status                                                    Pipeline state", file=sys.stderr)
+    print("  help                                                      This message", file=sys.stderr)
+
+
 def cmd_retry(use_playwright=True):
     state = load()
     failed = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "failed"]
@@ -292,7 +305,7 @@ def _parse_count():
 
 
 def main():
-    subcommands = {"admit", "reject", "flag", "open", "retry", "retry-skipped", "status"}
+    subcommands = {"admit", "reject", "flag", "open", "retry", "retry-skipped", "status", "help"}
     if len(sys.argv) > 1 and sys.argv[1] in subcommands:
         cmd = sys.argv[1]
         if cmd == "admit":
@@ -309,6 +322,8 @@ def main():
             cmd_retry_skipped()
         elif cmd == "status":
             cmd_status()
+        elif cmd == "help":
+            cmd_help()
     elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
         cmd_fetch(
             count=_parse_count(),
