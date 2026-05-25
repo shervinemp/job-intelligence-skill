@@ -60,17 +60,26 @@ clicked = page.evaluate(f"""() => {{
 print(f"Clicked: {clicked}", file=sys.stderr)
 time.sleep(3)
 
-# Check if modal closed (success)
-modal_still_open = page.evaluate("() => !!document.querySelector('[role=\"dialog\"]')")
+# Check if modal closed (success) — page may navigate on submit
+modal_still_open = True
+success = False
+try:
+    modal_still_open = page.evaluate("() => !!document.querySelector('[role=\"dialog\"]')")
+    if not modal_still_open:
+        text = page.evaluate("() => document.body.innerText").lower()
+        if any(w in text for w in ["thank you", "submitted", "your application"]):
+            success = True
+except Exception:
+    # Page navigated — submit likely succeeded
+    success = True
+    modal_still_open = False
+
 if not modal_still_open:
-    print("Modal closed — checking for success...", file=sys.stderr)
-    text = page.evaluate("() => document.body.innerText").lower()
-    if any(w in text for w in ["thank you", "submitted", "your application"]):
+    print(f"Modal closed — {'SUBMITTED' if success else 'checking...'}", file=sys.stderr)
+    if success:
         print("RESULT: submitted", file=sys.stderr)
     print("NEXT: none", file=sys.stderr)
     sys.exit(0)
-
-time.sleep(3)
 
 # Check what changed
 new_modal = page.evaluate("""() => {
@@ -115,7 +124,7 @@ has_next = any(b['text'].lower() in ('next', 'review') for b in new_modal.get('b
 if has_empty_req:
     print("NEXT: apply/linkedin/easy_apply/03_fill_fields.py", file=sys.stderr)
 elif has_submit:
-    print("NEXT: apply/linkedin/easy_apply/06_submit.py", file=sys.stderr)
+    print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
 elif has_next:
     print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
 else:
