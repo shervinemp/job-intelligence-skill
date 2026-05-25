@@ -267,8 +267,8 @@ function _checkLimitInText(text) {
   return { timedOut: false };
 }
 
-async function openGem(page, gemUrl) {
-  const url = gemUrl || gemUrl();
+async function openGem(page, gemUrlParam) {
+  const url = gemUrlParam || gemUrl();
   const isGem = url.includes('/gem/');
   log(`Navigating to: ${url}`);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
