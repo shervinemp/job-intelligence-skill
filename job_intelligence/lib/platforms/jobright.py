@@ -14,9 +14,10 @@ def extract_text(page):
         pass
     return page.evaluate("""() => {
       const all = document.querySelectorAll('.index_sectionContent__prVJT');
-      const sections = Array.from(all).filter(
-        s => s.querySelector('h2.index_label__MLcbM')
-      );
+      const sections = Array.from(all).filter(s => {
+        const h2 = s.querySelector('h2.index_label__MLcbM');
+        return h2 && !h2.title.includes('Insider Connection');
+      });
       if (sections.length) {
         return sections.map(s => s.innerText).join('\\n\\n');
       }
