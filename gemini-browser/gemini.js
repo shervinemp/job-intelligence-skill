@@ -592,11 +592,11 @@ async function dump(page) {
     }
 
     await deleteChat(page);
-    try { await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }); } catch (e) { }
+    try { await page.close(); } catch (e) { }
     process.exit(0);
   } catch (e) {
     console.error(e.message);
-    try { await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }); } catch (e) { }
+    try { await page.close(); } catch (e) { }
     process.exit(1);
   }
 })();
