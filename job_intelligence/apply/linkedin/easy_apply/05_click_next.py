@@ -20,23 +20,49 @@ for p in ctx.pages:
 if not page:
     print("ERROR: no LinkedIn page found", file=sys.stderr); sys.exit(1)
 
-# Click "Next" or "Review" button
-clicked = page.evaluate("""() => {
+# Click "Next" or "Review" button using Playwright (force=true bypasses interop overlay)
+target_action = page.evaluate("""() => {
     const d = document.querySelector('[role="dialog"]');
-    if (!d) return { status: 'no_modal' };
+    if (!d) return null;
     const btns = d.querySelectorAll('button:not([disabled])');
     for (const b of btns) {
         const t = (b.textContent || '').trim().toLowerCase();
-        if (t === 'next' || t === 'review') {
-            b.click();
-            return { status: 'clicked', action: t };
+        if (t === 'next' || t === 'review' || t === 'submit application' || t === 'submit' || t === 'done') {
+            return { action: t, id: b.id, text: (b.textContent || '').trim().slice(0, 20) };
         }
     }
-    return { status: 'not_found', buttons: Array.from(btns).map(b => (b.textContent||'').trim().slice(0,20)) };
+    return null;
 }""")
-print(f"Action: {json.dumps(clicked)}", file=sys.stderr)
 
-if clicked.get('status') == 'no_modal':
+if not target_action:
+    print("No Next/Review/Submit button found", file=sys.stderr)
+    print("NEXT: none", file=sys.stderr)
+    sys.exit(1)
+
+action = target_action["action"]
+text = target_action["text"]
+print(f"Action: {action}", file=sys.stderr)
+
+# Remove interop overlay that intercepts clicks, then click the button
+clicked = page.evaluate(f"""() => {{
+    const overlay = document.getElementById('interop-outlet');
+    if (overlay) overlay.style.pointerEvents = 'none';
+    const d = document.querySelector('[role="dialog"]');
+    if (!d) return false;
+    const btns = d.querySelectorAll('button');
+    for (const b of btns) {{
+        if ((b.textContent || '').trim() === '{text}') {{
+            b.click(); return true;
+        }}
+    }}
+    return false;
+}}""")
+print(f"Clicked: {clicked}", file=sys.stderr)
+time.sleep(3)
+
+# Check if modal closed (success)
+modal_still_open = page.evaluate("() => !!document.querySelector('[role=\"dialog\"]')")
+if not modal_still_open:
     print("Modal closed — checking for success...", file=sys.stderr)
     text = page.evaluate("() => document.body.innerText").lower()
     if any(w in text for w in ["thank you", "submitted", "your application"]):
