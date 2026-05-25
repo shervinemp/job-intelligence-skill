@@ -19,8 +19,13 @@ SCRIPTS = {
     "read": "linkedin/easy_apply/02_read_state.py",
     "fill": "linkedin/easy_apply/03_fill_fields.py",
     "screen": "linkedin/easy_apply/04_screening.py",
+    "resume": "linkedin/easy_apply/04_resume.py",
     "next": "linkedin/easy_apply/05_click_next.py",
     "submit": "linkedin/easy_apply/06_submit.py",
+    "navigate": "linkedin/external/01_navigate.py",
+    "detect_platform": "linkedin/external/02_detect_platform.py",
+    "fill_external": "common/01_fill_fields.py",
+    "submit_external": "linkedin/external/03_submit.py",
 }
 
 def run_script(name, jid):
