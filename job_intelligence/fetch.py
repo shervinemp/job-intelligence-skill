@@ -71,6 +71,11 @@ def _pw_fetch(url, timeout=30):
     finally:
         try:
             if page:
+                page.goto('about:blank', wait_until='domcontentloaded', timeout=5000)
+        except Exception:
+            pass
+        try:
+            if page:
                 page.close()
         except Exception:
             pass
