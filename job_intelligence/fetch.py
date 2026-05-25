@@ -74,6 +74,11 @@ def _pw_fetch(url, timeout=30):
                 page.close()
         except Exception:
             pass
+        try:
+            if b:
+                b.close()
+        except Exception:
+            pass
 
 
 def fetch_description(url, use_playwright=False):
