@@ -115,10 +115,10 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                     for _ in range(4):
                         dl_deadline = time.time() + 5
                         while time.time() < dl_deadline:
-                            pane = page.query_selector('.jobs-search__job-details--container')
-                            if pane:
-                                text = (pane.inner_text() or '').strip()
-                                if len(text) > 200 and "loading job details" not in text.lower():
+                            desc_el = page.query_selector('#job-details .mt4')
+                            if desc_el:
+                                text = (desc_el.inner_text() or '').strip()
+                                if len(text) > 100:
                                     desc = text[:8000]
                                     break
                             time.sleep(0.5)
