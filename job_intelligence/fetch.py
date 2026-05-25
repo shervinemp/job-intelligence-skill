@@ -16,6 +16,7 @@ from lib.db import load, advance, pipeline_status, get_conn
 from lib.db import desc_save, desc_exists
 from lib.chrome_manager import CHROME_PROFILE as BROWSER_PROFILE, connect
 from lib import auth_walls
+from lib.platforms import fetch_description
 
 MAX_DESC_LEN = 8000
 
@@ -47,7 +48,7 @@ def _pw_fetch(url, timeout=30):
             page = ctx.new_page()
             page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
             page.wait_for_timeout(2000)
-            text = page.evaluate('document.body.innerText')
+            text = fetch_description(url, page)
             if text and len(text.strip()) > 80:
                 return True, text.strip()
             if _detect_auth_wall(text):
@@ -59,7 +60,7 @@ def _pw_fetch(url, timeout=30):
                 page = ctx.new_page()
                 page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
                 page.wait_for_timeout(2000)
-                text = page.evaluate('document.body.innerText')
+                text = fetch_description(url, page)
                 if text and len(text.strip()) > 80:
                     return True, text.strip()
                 if _detect_auth_wall(text):
