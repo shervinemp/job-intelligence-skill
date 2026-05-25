@@ -71,9 +71,9 @@ def _pw_fetch(url, timeout=30):
     finally:
         try:
             if page:
-                page.close()
-        except Exception:
-            print(f"WARN: page.close failed for {url}", file=sys.stderr)
+                page.close(run_before_unload=False)
+        except Exception as e:
+            print(f"WARN: page.close failed ({e})", file=sys.stderr)
         try:
             if b:
                 b.close()
