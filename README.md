@@ -33,7 +33,7 @@ Automated job discovery, description fetching, and CV tailoring — orchestrated
                                      └────────┬─────────┘
                                               │
                                      ┌────────▼─────────┐
-                                     │    fetch.py       │
+                                     │    fetch.py      │
                                      └────────┬─────────┘
                                               │
                                      ┌────────▼─────────┐
