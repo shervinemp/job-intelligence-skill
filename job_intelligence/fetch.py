@@ -123,6 +123,10 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
     stage = "described" if refresh else "extracted"
     pending = [(jid, e) for jid, e in state["jobs"].items()
                if e.get("stage") == stage and (force or not desc_exists(jid))]
+    # Skip known-broken trackers
+    pending = [(jid, e) for jid, e in pending
+               if "cts.indeed.com" not in e.get("url", "")
+               and "ca.indeed.com/pagead" not in e.get("url", "")]
     if count:
         pending = pending[:count]
     if not pending:
