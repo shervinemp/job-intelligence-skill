@@ -44,6 +44,7 @@ def _pw_fetch(url, timeout=30):
     page = b = None
     try:
         b, ctx = connect()
+        print(f"DBG: connect -> ctx={'yes' if ctx else 'no'}", file=sys.stderr)
         if ctx:
             page = ctx.new_page()
             page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
@@ -134,6 +135,7 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
         title = entry.get("title", "")
         company = entry.get("company", "")
         url = entry.get("url", "")
+        print(f"FETCH:{jid[:12]} {url[:60]}", file=sys.stderr)
         ok, result = fetch_description(url, use_playwright=use_playwright)
         if ok:
             save_description(jid, result)
