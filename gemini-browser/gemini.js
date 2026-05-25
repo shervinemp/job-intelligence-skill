@@ -154,15 +154,12 @@ async function ensureMode(page) {
   await modeBtn().click();
   await wait(2000);
 
-  // Pass 1: click Flash to trigger real state (cached values may be stale)
+  // Pass 1: click Flash to trigger real state (first open may show stale cached values)
   await page.evaluate(() => {
     const items = document.querySelectorAll('[data-test-id^="bard-mode-option-"]');
     for (const item of items) {
       const text = (item.textContent || '').trim();
       if (text.includes('Flash') && !text.includes('Lite')) {
-        if (/limit resets/i.test(text)) {
-          // Stale limit shown — still click to trigger server update
-        }
         if (!item.classList.contains('selected')) item.click();
         return;
       }
