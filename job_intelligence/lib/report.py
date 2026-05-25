@@ -1,16 +1,16 @@
-"""db.py — CLI for DB inspection, export, and pipeline management.
+"""lib/report.py — CLI for DB inspection, export, and pipeline management.
 
 Usage:
-  python3 db.py shell                     Open SQLite shell
-  python3 db.py stats                     Pipeline statistics
-  python3 db.py inspect <jid>             Full job details
-  python3 db.py search <query>            Search jobs
-  python3 db.py export json [--stage S]   Export jobs as JSON
-  python3 db.py export csv [--stage S]    Export jobs as CSV
-  python3 db.py summary [--days N]        Recent activity digest
-  python3 db.py companies [query]         List/search companies
-  python3 db.py events [--upcoming]       List events
-  python3 db.py contacts <jid>            Contacts for a job
+  python3 report.py shell                     Open SQLite shell
+  python3 report.py stats                     Pipeline statistics
+  python3 report.py inspect <jid>             Full job details
+  python3 report.py search <query>            Search jobs
+  python3 report.py export json [--stage S]   Export jobs as JSON
+  python3 report.py export csv [--stage S]    Export jobs as CSV
+  python3 report.py summary [--days N]        Recent activity digest
+  python3 report.py companies [query]         List/search companies
+  python3 report.py events [--upcoming]       List events
+  python3 report.py contacts <jid>            Contacts for a job
 """
 
 import csv
@@ -212,12 +212,12 @@ def main():
         cmd_stats()
     elif cmd == "inspect":
         if not args:
-            print("Usage: python3 db.py inspect <jid>", file=sys.stderr)
+            print("Usage: python3 report.py inspect <jid>", file=sys.stderr)
             sys.exit(1)
         cmd_inspect(args[0])
     elif cmd == "search":
         if not args:
-            print("Usage: python3 db.py search <query>", file=sys.stderr)
+            print("Usage: python3 report.py search <query>", file=sys.stderr)
             sys.exit(1)
         cmd_search(" ".join(args))
     elif cmd == "export":

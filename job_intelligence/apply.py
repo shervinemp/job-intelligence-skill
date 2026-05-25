@@ -363,9 +363,16 @@ def cmd_batch(count=1):
     print(f"APPLIED:{applied} BAILED:{bailed}", file=sys.stderr)
 
 
+def cmd_help():
+    print("Usage:", file=sys.stderr)
+    print("  auto <jid>          Auto-apply for a specific job", file=sys.stderr)
+    print("  batch [--count N]   Batch apply (default 1)", file=sys.stderr)
+    print("  help                This message", file=sys.stderr)
+
+
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python apply.py auto <jid> | batch [--count N]", file=sys.stderr)
+    if len(sys.argv) < 3 and not (len(sys.argv) == 2 and sys.argv[1] == "help"):
+        print("Usage: python apply.py auto <jid> | batch [--count N] | help", file=sys.stderr)
         sys.exit(1)
     cmd = sys.argv[1]
     if cmd == "auto":
@@ -377,6 +384,8 @@ def main():
             if i + 1 < len(sys.argv):
                 count = int(sys.argv[i + 1])
         cmd_batch(count)
+    elif cmd == "help":
+        cmd_help()
     else:
         print(f"Unknown: {cmd}", file=sys.stderr)
         sys.exit(1)
