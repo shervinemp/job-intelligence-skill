@@ -18,6 +18,7 @@ _SKIP_DOMAINS = {
     "accounts.google.com", "github.com", "google.com",
     "facebook.com", "twitter.com", "x.com", "instagram.com",
     "youtube.com", "unsubscribe", "user-subscription",
+    "cts.indeed.com", "ca.indeed.com/pagead",
 }
 
 
