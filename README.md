@@ -1,11 +1,57 @@
-# Job Intelligence Skill
+# Job Intelligence Pipeline
 
-Pipeline for automated job discovery, description fetching, and CV tailoring. Replaces the compromised `gog` CLI with a Python Gmail API client.
+> Automated job discovery, description fetching, and CV tailoring — orchestrated by SLM.
+
+```
+                         ┌──────────┐
+                         │  Gmail   │
+                         │  Search  │
+                         └────┬─────┘
+                              │
+                         ┌────▼─────┐
+                         │  stage_  │
+                         │ emails   │
+                         └────┬─────┘
+                              │
+                         ┌────▼─────┐     ┌──────────┐
+                         │ extract  │────▶│ linkedin │
+                         │   .py    │     │   .py    │
+                         └────┬─────┘     └────┬─────┘
+                              │                │
+                         ┌────▼─────┐          │
+                         │  admit / │◀─────────┘
+                         │  reject  │
+                         └────┬─────┘
+                              │
+                         ┌────▼─────┐
+                         │  fetch   │
+                         │   .py    │
+                         └────┬─────┘
+                              │
+                         ┌────▼─────┐
+                         │  admit / │
+                         │reject/flg│
+                         └────┬─────┘
+                              │
+                         ┌────▼─────┐
+                         │  tailor  │
+                         │   .py    │
+                         └────┬─────┘
+                              │
+                         ┌────▼─────┐
+                         │  done /  │
+                         │   skip   │
+                         └──────────┘
+```
+
+---
 
 ## Components
 
-### `gmail-cli/` — Gmail API CLI
-Replacement for gog. Uses Google's official Python client.
+### <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/logos:google-gmail.svg"><img src="https://api.iconify.design/logos:google-gmail.svg" width="20" height="20" align="top"></picture> `gmail-cli/` — Gmail API CLI
+
+Python replacement for the compromised `gog` CLI. Uses Google's official Python client.
+
 ```
 gmail-cli auth credentials client_secret.json
 gmail-cli auth add you@gmail.com
@@ -13,86 +59,130 @@ gmail-cli gmail search "newer_than:7d" --all -j
 gmail-cli gmail get <threadId>
 ```
 
-### `gemini-browser/` — Gemini Browser Automation
-Connects to Chrome via CDP (puppeteer-core), navigates to a custom gem, sends prompts, reads responses. Uses Gemini 3.5 Flash + Extended thinking. Gem selection via `--gem` flag resolved through `gems.json`.
+### <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.iconify.design/logos:gemini.svg"><img src="https://api.iconify.design/logos:gemini.svg" width="20" height="20" align="top"></picture> `gemini-browser/` — Gemini Automation
+
+Connects to Chrome via CDP (puppeteer-core), navigates to a custom gem, sends prompts, reads responses. Uses Gemini 3.5 Flash + Extended thinking. No Pro dependency.
+
 ```
 node gemini.js "your prompt"
-node gemini.js --gem <alias_or_id> "prompt"
-node gemini.js --gems
+node gemini.js --gem optimizer "Refactor this code"
+node gemini.js --gems                           # list available gems
 ```
 
-### `job_intelligence/` — Pipeline
+Gem aliases resolved through `gems.json`. Rate-limit detection built in.
 
-The pipeline is SLM-orchestrated — each stage outputs options, the SLM admits/rejects/advances.
+### ⚙️ `job_intelligence/` — Pipeline Core
 
-| Step | Script | SLM does |
-|------|--------|----------|
-| 1 | `stage_emails.py` | — (auto, filters by `job`/`jobs` keyword) |
-| 2 | `extract.py` | `admit --category <name> <jid>` / `reject` / `reset <jid>` |
-| 3 | `linkedin.py` | Same admit/reject as extract |
-| 4 | `fetch.py` | `admit` / `reject` / `flag` (auth wall) / `help` |
-| 5 | `tailor.py` | `done` / `skip` / `redo` / `retry` / `help` |
-| — | `apply.py` | `auto <jid>` / `batch` |
-| — | `report.py` | Read-only inspection: `stats`, `inspect`, `search`, `export`, `summary` |
+Each stage is a CLI script. The SLM reads the output and decides what to do next.
 
-Key subcommands across the pipeline: `help` (all stage scripts), `status` (extract, fetch, tailor).
+| Stage | Script | SLM Action |
+|-------|--------|------------|
+| 1. Stage emails | `stage_emails.py` | Auto (filters by `job`/`jobs` keyword) |
+| 2. Extract URLs | `extract.py` | `admit --category <name> <jid>` or `reject` |
+| 3. LinkedIn scrape | `linkedin.py` | Same admit/reject as extract |
+| 4. Fetch descriptions | `fetch.py` | `admit`, `reject`, `flag` for auth walls |
+| 5. Tailor CV | `tailor.py` | `done`, `skip`, `redo`, `retry` |
+| — Auto-apply | `apply.py` | `auto <jid>`, `batch` |
+| — DB reports | `report.py` | `stats`, `inspect`, `search`, `export`, `summary` |
 
-### Categories
+All stage scripts support `help` and `status` subcommands.
 
-Each job has a category (`tech`, `general`) that determines which Gemini gem handles its tailoring. Set on first `admit` via `--category tech <jid>`. Resolved through `categories.json` → `gems.json` → `gemini.js`.
+---
 
-### Notes
+## Key Features
 
-Human context (referral mentions, priorities) attached via `submit`. `tailor.py` appends `Context: {notes}` to the Gemini prompt. Survives all stage transitions.
+### 🏷️ Categories
 
-### Auth walls
+Jobs tagged with a category (`tech`, `general`) on first admit. Determines which Gemini gem handles tailoring. Resolved automatically: `categories.json` → `gems.json` → `gemini.js`.
 
-Jobs behind sign-in walls are auto-detected during fetch. Flagged manually via `fetch.py flag <jid>`. Opened in Chrome's persistent session via `fetch.py open [<jid>]`. Stale entries auto-pruned.
+```
+python3 extract.py admit --category tech abc123def4567890
+```
 
-### Per-job reset
+### 📝 Notes
 
-Reset a specific job to re-extract: `extract.py reset <jid>`. Full pipeline wipe: `extract.py reset` (no args).
+Attach human context (referral mentions, priorities, etc.) to any job. Survives all stage transitions. Appended to the Gemini prompt as supplementary info.
 
-## Setup
+```
+python3 extract.py submit '{"url":"https://...","notes":"John can refer at Google"}'
+```
 
-1. **Chrome** must be running with remote debugging:
-   ```
-   "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="%USERPROFILE%\.openclaw\chrome-profile" --remote-debugging-port=9222 --no-first-run
-   ```
-2. **Gmail API credentials** from Google Cloud Console (enable Gmail API)
-3. **Chrome persistent profile** at `~/.openclaw/chrome-profile/` (managed by `lib/chrome_manager.py`)
+### 🔒 Auth Walls
+
+Jobs behind sign-in walls are auto-detected during fetch. Flag manually, open in Chrome's persistent session to bypass.
+
+```
+python3 fetch.py flag <jid>
+python3 fetch.py open [<jid>]
+```
+
+### 🔄 Per-Job Reset
+
+Reset a single job to re-extract it. Full wipe with no args.
+
+```
+python3 extract.py reset <jid>     # re-extract one job
+python3 extract.py reset           # wipe everything, start fresh
+```
+
+---
+
+## Quick Start
+
+```bash
+# 1. Start Chrome with persistent profile
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="$env:USERPROFILE\.openclaw\chrome-profile" --remote-debugging-port=9222 --no-first-run
+
+# 2. Set up Gmail API
+gmail-cli auth credentials client_secret.json
+gmail-cli auth add you@gmail.com
+
+# 3. Run the pipeline
+python3 stage_emails.py
+python3 extract.py              # review URLs → admit --category tech <jid>
+python3 fetch.py                # review descriptions → admit <jid>
+python3 tailor.py               # review CV → done <jid>
+```
+
+---
 
 ## Requirements
 
-- Python 3.12+
-- Node.js 20+
-- Google Chrome
-- Google Cloud project with Gmail API enabled
-- Playwright (Python): `pip install playwright`
-- puppeteer-core (Node): `npm install -g puppeteer-core`
+| Dependency | Version | Install |
+|------------|---------|---------|
+| Python | 3.12+ | — |
+| Node.js | 20+ | — |
+| Google Chrome | Latest | — |
+| Playwright (Python) | — | `pip install playwright` |
+| puppeteer-core (Node) | — | `npm install -g puppeteer-core` |
+| Google Cloud project | — | Enable Gmail API |
+
+---
 
 ## Output
 
-Tailored CVs and application files go to `~/.openclaw/results/{jid}/`:
-- `gemini_response.txt` — full Gemini output
-- `script.py` — extracted Python script for PDF generation
-- `{jid}.url` — shortcut to job posting
-- `*.pdf` — generated CV / cover letter
+Tailored files land in `~/.openclaw/results/{jid}/`:
+
+```
+📁 results/{jid}/
+├── gemini_response.txt   # Full Gemini output
+├── script.py             # Extracted Python script for PDF
+├── {jid}.url             # Browser shortcut to job posting
+└── *.pdf                 # Generated CV / cover letter
+```
+
+---
 
 ## Recovery
 
-| Signal | Fix |
-|--------|------|
-| `invalid_grant` | `python3 gmail-cli/gmail_cli.py auth add <email>` |
+| Symptom | Fix |
+|---------|-----|
+| `invalid_grant` | Re-authenticate: `gmail-cli auth add <email>` |
 | `TIMEOUT` / `RATE_LIMIT` | `python3 tailor.py retry` |
-| Chrome crash | Re-run the Chrome command from Setup step 1 |
+| Chrome crash | Restart Chrome from Quick Start step 1 |
 | DB corruption | `python3 extract.py reset` |
-| Auth wall stuck | `fetch.py open` + `fetch.py --refresh` |
+| Auth wall stuck | `fetch.py open` then `fetch.py --refresh` |
 
-## Pipeline in one line
+---
 
-```
-stage_emails → extract → admit/reject → fetch → admit/reject → tailor → done/skip
-```
-
-Detailed pipeline reference: `job_intelligence/SKILL.md`
+> **Detailed operations manual**: `job_intelligence/SKILL.md`
