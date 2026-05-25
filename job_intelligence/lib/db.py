@@ -31,6 +31,24 @@ def get_conn():
     return _conn
 
 
+def _import_legacy_auth_walls():
+    old_path = os.path.join(os.path.expanduser("~"), ".openclaw", "needs_auth.json")
+    if not os.path.exists(old_path):
+        return
+    try:
+        with open(old_path) as f:
+            entries = json.load(f)
+        conn = get_conn()
+        for e in entries:
+            jid = e.get("jid")
+            if jid:
+                conn.execute("UPDATE jobs SET auth_wall=1 WHERE id=?", (jid,))
+        conn.commit()
+        os.remove(old_path)
+    except Exception:
+        pass
+
+
 def _create_v3_tables():
     c = get_conn()
     c.executescript("""
@@ -127,6 +145,7 @@ def _create_v3_tables():
         except sqlite3.OperationalError:
             pass
     c.execute("UPDATE jobs SET category='tech' WHERE category IS NULL")
+    _import_legacy_auth_walls()
 
     for idx in [
         "CREATE INDEX IF NOT EXISTS idx_jd_job ON job_documents(job_id)",
