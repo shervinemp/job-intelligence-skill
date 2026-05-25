@@ -50,12 +50,12 @@ def resolve(label, profile, ca):
     if key:
         section, field = key
         if section == "name" and field == "":
-            # Full name: combine first + last
             fn = profile.get("first_name", "")
             ln = profile.get("last_name", "")
             if fn and ln: return f"{fn} {ln}"
             return fn or ln or None
-        val = profile.get(field) or ca.get(field)
+        lookup = field or section
+        val = profile.get(lookup) or ca.get(lookup)
         if val: return val
     
     # Common answers match
@@ -171,7 +171,7 @@ for f in fields:
         continue
     
     if val:
-        sel = f"#{f['id']}" if f['id'] else f"[name=\"{f['name']}\"]"
+        sel = f"#{f['id']}" if f['id'] and not f['id'][0].isdigit() else f"[id=\"{f['id']}\"]" if f['id'] else f"[name=\"{f['name']}\"]"
         if not sel or sel == '#':
             unfilled.append(f)
             continue
@@ -190,6 +190,8 @@ for f in fields:
                 print(f"  FILLED: '{f['label']}' -> '{val[:30]}'", file=sys.stderr)
         except Exception as e:
             print(f"  FAILED: '{f['label']}' ({e})", file=sys.stderr)
+            if f['required']:
+                unfilled.append(f)
     elif f['required']:
         unfilled.append(f)
 
