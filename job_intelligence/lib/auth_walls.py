@@ -1,85 +1,50 @@
-"""Per-job tracking of auth-walled jobs in ~/.openclaw/needs_auth.json.
-
-Operations are per-jid (not wholesale) so failed retries don't lose entries.
-"""
-
-import json
-import os
+"""Per-job auth wall tracking via the jobs table."""
 from urllib.parse import urlparse
 
-NEEDS_AUTH_PATH = os.path.join(
-    os.path.expanduser("~"), ".openclaw", "needs_auth.json"
-)
-
-
-def _read():
-    if not os.path.exists(NEEDS_AUTH_PATH):
-        return []
-    try:
-        with open(NEEDS_AUTH_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return []
-
-
-def _write(entries):
-    os.makedirs(os.path.dirname(NEEDS_AUTH_PATH), exist_ok=True)
-    with open(NEEDS_AUTH_PATH, "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2)
+from .db import get_conn
 
 
 def add(jid, url, title, company):
-    entries = _read()
-    existing_jids = {e.get("jid") for e in entries}
-    if jid in existing_jids:
-        return
-    domain = urlparse(url).netloc
-    entries.append({
-        "jid": jid, "url": url, "domain": domain,
-        "title": title, "company": company,
-    })
-    _write(entries)
+    conn = get_conn()
+    conn.execute("UPDATE jobs SET auth_wall=1 WHERE id=?", (jid,))
+    conn.commit()
 
 
 def remove(jid):
-    entries = _read()
-    before = len(entries)
-    entries = [e for e in entries if e.get("jid") != jid]
-    if len(entries) != before:
-        _write(entries)
+    conn = get_conn()
+    conn.execute("UPDATE jobs SET auth_wall=0 WHERE id=?", (jid,))
+    conn.commit()
 
 
-def prune():
-    """Remove entries where the job has progressed past extracted/failed in the DB."""
-    try:
-        from .db import load, desc_exists
-        state = load()
-        entries = _read()
-        before = len(entries)
-        clean = []
-        for e in entries:
-            jid = e.get("jid")
-            if jid and jid in state.get("jobs", {}):
-                stage = state["jobs"][jid].get("stage")
-                if stage not in ("extracted", "failed"):
-                    continue
-            clean.append(e)
-        if len(clean) != before:
-            _write(clean)
-    except Exception:
-        pass
+def _prune():
+    conn = get_conn()
+    conn.execute("UPDATE jobs SET auth_wall=0 WHERE auth_wall=1 AND stage NOT IN ('extracted', 'failed')")
+    conn.commit()
 
 
 def list_all():
-    prune()
-    return _read()
+    _prune()
+    conn = get_conn()
+    rows = conn.execute("SELECT id, url, title, company FROM jobs WHERE auth_wall=1").fetchall()
+    results = []
+    for r in rows:
+        results.append({
+            "jid": r["id"],
+            "url": r["url"],
+            "domain": urlparse(r["url"] or "").netloc,
+            "title": r["title"],
+            "company": r["company"],
+        })
+    return results
 
 
 def count():
-    prune()
-    return len(_read())
+    _prune()
+    conn = get_conn()
+    return conn.execute("SELECT COUNT(*) as c FROM jobs WHERE auth_wall=1").fetchone()["c"]
 
 
 def domains():
-    entries = _read()
-    return sorted(set(e.get("domain", "?") for e in entries))
+    conn = get_conn()
+    rows = conn.execute("SELECT url FROM jobs WHERE auth_wall=1 AND url != ''").fetchall()
+    return sorted(set(urlparse(r["url"]).netloc for r in rows))

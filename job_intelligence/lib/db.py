@@ -60,6 +60,7 @@ def _create_v3_tables():
             fit_summary TEXT,
             company_vibe TEXT,
             error TEXT,
+            auth_wall INTEGER NOT NULL DEFAULT 0,
             scripts TEXT NOT NULL DEFAULT '[]',
             response_path TEXT,
             notes TEXT NOT NULL DEFAULT '',
@@ -120,7 +121,7 @@ def _create_v3_tables():
         );
     """)
     # Add columns that might be missing on existing DBs
-    for col in ["response_path TEXT", "notes TEXT NOT NULL DEFAULT ''", "category TEXT"]:
+    for col in ["response_path TEXT", "notes TEXT NOT NULL DEFAULT ''", "category TEXT", "auth_wall INTEGER NOT NULL DEFAULT 0"]:
         try:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
         except sqlite3.OperationalError:
