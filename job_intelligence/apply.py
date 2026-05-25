@@ -30,7 +30,7 @@ SCRIPTS = {
     "submit_external": "linkedin/external/03_submit.py",
 }
 
-def run_script(name, jid):
+def run_script(name, jid, extra_args=None):
     rel_path = SCRIPTS.get(name)
     if not rel_path:
         print(f"Unknown step: {name}", file=sys.stderr)
@@ -39,19 +39,20 @@ def run_script(name, jid):
     if not os.path.exists(abs_path):
         print(f"Script not found: {abs_path}", file=sys.stderr)
         return
-    r = subprocess.run(
-        [sys.executable, abs_path, jid],
-        cwd=SKILL_DIR,
-    )
+    cmd = [sys.executable, abs_path, jid]
+    if extra_args:
+        cmd.extend(extra_args)
+    r = subprocess.run(cmd, cwd=SKILL_DIR)
     return r.returncode
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python3 apply.py <step> <jid>", file=sys.stderr)
+        print("Usage: python3 apply.py <step> <jid> [extra args...]", file=sys.stderr)
         print(f"Steps: {', '.join(SCRIPTS.keys())}", file=sys.stderr)
         sys.exit(1)
     step, jid = sys.argv[1], sys.argv[2]
-    run_script(step, jid)
+    extra = sys.argv[3:] if len(sys.argv) > 3 else None
+    run_script(step, jid, extra_args=extra)
 
 if __name__ == "__main__":
     main()

@@ -23,8 +23,11 @@ answers = {}
 if "--answers" in sys.argv:
     idx = sys.argv.index("--answers")
     if idx + 1 < len(sys.argv):
-        try: answers = json.loads(sys.argv[idx + 1])
-        except: pass
+        try: 
+            answers = json.loads(sys.argv[idx + 1])
+            print(f"Parsed answers: {answers}", file=sys.stderr)
+        except json.JSONDecodeError as e:
+            print(f"Answers parse failed: {e}", file=sys.stderr)
 
 b, ctx = connect()
 page = None
@@ -62,14 +65,26 @@ for f in fields:
     if f['type'] == 'radio':
         if f['name'] and f['name'] not in handled_radios:
             handled_radios.add(f['name'])
-            # Find all radios in this group
             group = [rf for rf in fields if rf['name'] == f['name']]
+            # Find the question from the parent element's text
+            first = group[0]
+            parent_label = ""
+            sel = f"#{first['id']}" if first['id'] and not first['id'][0].isdigit() else f"[id=\"{first['id']}\"]" if first['id'] else None
+            if sel:
+                try:
+                    el = page.query_selector(sel)
+                    if el:
+                        parent = el.evaluate("el => el.closest('div, fieldset, section, li')?.querySelector('label, legend, span, strong')?.textContent?.trim() || ''")
+                        parent_label = parent
+                except: pass
+            label = parent_label or "Selection"
             screening_fields.append({
                 "tag": "radio_group",
-                "label": "Selection",
+                "label": label,
                 "required": any(rf['required'] for rf in group),
                 "value": "",
                 "options": [rf['label'] for rf in group if rf['label']],
+                "radio_name": group[0]['name'] if group else "",
             })
         continue
     if f['type'] == 'checkbox':
@@ -98,6 +113,24 @@ for f in screening_fields:
     label = f['label']
     if label in answers:
         val = answers[label]
+        print(f"MATCH: '{label}' -> '{val}'", file=sys.stderr)
+        if f.get('tag') == 'radio_group':
+            name = f.get('radio_name', '')
+            if name:
+                page.evaluate(f"""(val) => {{
+                    const d = document.querySelector('[role="dialog"]');
+                    const radios = d.querySelectorAll('input[type="radio"][name="{name}"]');
+                    for (const r of radios) {{
+                        const lbl = d.querySelector('label[for="'+r.id+'"]');
+                        const t = (lbl?lbl.textContent.trim():'').toLowerCase();
+                        if (t === val.toLowerCase()) {{
+                            r.click(); return;
+                        }}
+                    }}
+                }}""", val)
+            filled += 1
+            print(f"  FILLED: '{label}' -> '{val}'", file=sys.stderr)
+            continue
         sel = f"#{f['id']}" if f['id'] and not f['id'][0].isdigit() else f"[id=\"{f['id']}\"]" if f['id'] else f"[name=\"{f['name']}\"]"
         if not sel or sel == '#': continue
         try:
@@ -131,10 +164,8 @@ if remaining:
     for f in remaining:
         tag = f.get('tag', f['tag'])
         opts = f"  Options: {f['options']}" if f.get('options') else ""
-        val = f"  Current: '{f['value']}'" if f['value'] else ""
-        print(f"  [{tag}:{f['type']}] '{f['label']}'", file=sys.stderr)
+        print(f"  [{tag}] '{f['label']}'", file=sys.stderr)
         if opts: print(opts, file=sys.stderr)
-        if val: print(val, file=sys.stderr)
     print(f"\nNEXT: apply.py screen <jid> --answers '{{\"label\":\"value\"}}'", file=sys.stderr)
 else:
     print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
