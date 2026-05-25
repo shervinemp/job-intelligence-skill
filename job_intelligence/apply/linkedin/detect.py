@@ -35,20 +35,18 @@ time.sleep(5)
 result = p.evaluate("""() => {
     const r = { type: 'unknown', details: {} };
     
-    // 1. Already applied: <button> with text "Applied"
+    // 1. Easy Apply: dialog with real content (opened by /apply/ URL)
+    const d = document.querySelector('[role="dialog"]');
+    if (d && (d.innerText || '').trim().length > 80) {
+        r.type = 'easy_apply';
+        return r;
+    }
+    
+    // 2. Already applied: <button> with text "Applied"
     const all = document.querySelectorAll('button');
     for (const el of all) {
         if ((el.textContent || '').trim() === 'Applied' && el.offsetParent !== null) {
             r.type = 'applied'; return r;
-        }
-    }
-    
-    // 2. Easy Apply: <a> tag with aria-label "Easy Apply to this job"
-    const easyLinks = document.querySelectorAll('a[aria-label*="Easy Apply"]');
-    for (const a of easyLinks) {
-        if (a.offsetParent !== null) {
-            r.type = 'easy_apply';
-            return r;
         }
     }
     
