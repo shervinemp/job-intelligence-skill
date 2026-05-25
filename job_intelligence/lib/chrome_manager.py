@@ -63,7 +63,8 @@ def start():
         [CHROME_PATH,
          f"--user-data-dir={CHROME_PROFILE}",
          f"--remote-debugging-port={CDP_PORT}",
-         "--no-first-run"],
+         "--no-first-run", "--disable-session-crashed-bubble",
+         "--disable-restore-session-state"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     for _ in range(30):
