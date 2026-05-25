@@ -110,43 +110,60 @@ def handle_linkedin(page, jid, url, profile):
         if card: card.click()
     time.sleep(3)
     
-    # Check for "already applied" text
-    pane_text = page.evaluate("""() => {
+    # Check for "Applied" button (means already applied)
+    applied_btn = page.evaluate("""() => {
         const pane = document.querySelector('.jobs-search__job-details--container');
-        return pane ? pane.innerText.toLowerCase() : '';
-    }""")
-    for w in ["applied", "already applied", "you applied"]:
-        if w in pane_text:
-            return {"status": "already_applied", "jid": jid}
-    
-    # Check for "Easy Apply" button
-    clicked = page.evaluate("""() => {
-        const pane = document.querySelector('.jobs-search__job-details--container');
-        if (!pane) return 'no_pane';
+        if (!pane) return false;
         const btns = pane.querySelectorAll('button');
         for (const b of btns) {
             const t = (b.textContent || '').trim().toLowerCase();
-            if (t === 'easy apply' && !b.disabled) { b.click(); return 'easy_apply'; }
-            if ((t.includes('apply') || t === "i'm interested") && !b.disabled) { b.click(); return t; }
+            if (t === 'applied') return true;
+            if (t === 'applied \\u2713') return true;
         }
-        return 'no_button';
+        return false;
     }""")
-    if clicked == 'no_pane' or clicked == 'no_button':
-        # Maybe it's an external link
-        ext = page.evaluate("""() => {
-            const pane = document.querySelector('.jobs-search__job-details--container');
-            if (!pane) return null;
-            const links = pane.querySelectorAll('a[href]');
-            for (const a of links) {
-                if ((a.textContent || '').toLowerCase().includes('apply')) return a.href;
-            }
-            return null;
-        }""")
-        if ext:
-            return handle_external(page, jid, ext, profile)
-        die("failed", jid, f"no apply button found ({clicked})")
+    if applied_btn:
+        return {"status": "already_applied", "jid": jid}
     
-    if clicked != 'easy_apply':
+    # Check for Easy Apply / Apply buttons (including external links)
+    result = page.evaluate("""() => {
+        const pane = document.querySelector('.jobs-search__job-details--container');
+        if (!pane) return { action: 'no_pane' };
+        const all = pane.querySelectorAll('button, a');
+        for (const el of all) {
+            const t = (el.textContent || '').trim().toLowerCase();
+            if (t === 'easy apply' && !el.disabled) { el.click(); return { action: 'easy_apply' }; }
+            if (t === 'apply' && !el.disabled) {
+                const href = el.getAttribute('href') || el.href || '';
+                return { action: 'external', url: href };
+            }
+            if ((t === "i'm interested" || t === 'i\u2019m interested') && !el.disabled) { el.click(); return { action: 'interested' }; }
+        }
+        return { action: 'no_button' };
+    }""")
+    
+    if result['action'] == 'external':
+        target_url = result.get('url', '')
+        if target_url and not target_url.startswith('http'):
+            # Relative URL — prepend LinkedIn domain
+            target_url = 'https://www.linkedin.com' + target_url
+        if not target_url:
+            die("failed", jid, "external apply with no URL")
+        page.goto(target_url, wait_until='domcontentloaded', timeout=30000)
+        time.sleep(3)
+        # Detect platform and fill
+        plat = detect_platform(target_url)
+        if not plat:
+            die("failed", jid, f"unknown ATS platform")
+        result_val = fill_modal(page, jid, profile)
+        if isinstance(result_val, dict):
+            return result_val
+        return result_val
+    
+    if result['action'] == 'no_pane' or result['action'] == 'no_button':
+        die("failed", jid, f"no apply button found ({result['action']})")
+    
+    if result['action'] != 'easy_apply':
         # "I'm interested" was clicked — check if Easy Apply modal appears after
         time.sleep(3)
         d = page.evaluate("() => document.querySelector('[role=\"dialog\"]') ? true : false")
