@@ -6,6 +6,10 @@ def pre_fetch(page):
 
 
 def extract_text(page):
+    try:
+        page.wait_for_selector(".index_jobDetailContent__rhs3U", timeout=5000)
+    except Exception:
+        pass
     return page.evaluate("""() => {
       const sections = document.querySelectorAll('.index_sectionContent__prVJT');
       if (sections.length) {

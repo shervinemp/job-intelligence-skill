@@ -48,6 +48,12 @@ def _pw_fetch(url, timeout=30):
             page = ctx.new_page()
             page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
             page.wait_for_timeout(2000)
+            dl = time.time() + 5
+            while time.time() < dl:
+                t = (page.evaluate("() => document.body.innerText") or "").strip()
+                if len(t) > 80:
+                    break
+                time.sleep(0.5)
             text = fetch_description(url, page)
             if text and len(text.strip()) > 80:
                 return True, text.strip()
@@ -60,6 +66,12 @@ def _pw_fetch(url, timeout=30):
                 page = ctx.new_page()
                 page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
                 page.wait_for_timeout(2000)
+                dl = time.time() + 5
+                while time.time() < dl:
+                    t = (page.evaluate("() => document.body.innerText") or "").strip()
+                    if len(t) > 80:
+                        break
+                    time.sleep(0.5)
                 text = fetch_description(url, page)
                 if text and len(text.strip()) > 80:
                     return True, text.strip()
