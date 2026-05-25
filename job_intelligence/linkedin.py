@@ -11,11 +11,13 @@ Adds to DB as 'extracted' with description pre-saved (skips fetch.py).
 import hashlib
 import re
 import sys
+import time
 
-from playwright.sync_api import TimeoutError
+from playwright.sync_api import TimeoutError, expect
 
 from lib.chrome_manager import connect
 from lib.db import add_job, desc_get, desc_save, get_conn
+from lib.platforms import clean as clean_desc
 
 DEFAULT_URL = "https://www.linkedin.com/jobs/collections/recommended/"
 DEFAULT_MAX_PAGES = 20
@@ -38,12 +40,16 @@ def _scroll_load(page, idle_timeout=3):
                 el = el.parentElement;
             }
         }''')
-        try:
-            page.wait_for_function(
-                f"document.querySelectorAll('.job-card-container').length > {last_count}",
-                timeout=idle_timeout * 1000
-            )
-        except TimeoutError:
+        import time
+        deadline = time.time() + idle_timeout
+        card_count = last_count
+        while time.time() < deadline:
+            count = page.evaluate("() => document.querySelectorAll('.job-card-container').length")
+            if count > card_count:
+                card_count = count
+                break
+            time.sleep(1)
+        if card_count <= last_count:
             break
         last_count = len(page.query_selector_all('.job-card-container'))
     return page.query_selector_all('.job-card-container')
@@ -105,21 +111,19 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                              "category": "tech"})
                     card.click()
                     page.wait_for_timeout(500)
-                    try:
-                        page.wait_for_function(
-                            "document.querySelector('.job-details-jobs-unified-top-card__job-title')?.innerText?.trim()?.length > 0",
-                            timeout=3000
-                        )
-                    except TimeoutError:
-                        pass
+                    dl_deadline = time.time() + 8
+                    while time.time() < dl_deadline:
+                        pane = page.query_selector('.jobs-search__job-details--container')
+                        if pane:
+                            text = (pane.inner_text() or '').strip()
+                            if len(text) > 200:
+                                break
+                        time.sleep(0.5)
                     pane = page.query_selector('.jobs-search__job-details--container')
                     if pane:
-                        desc = pane.inner_text() or ''
-                        for cutoff in ['Similar jobs', 'People also viewed']:
-                            ci = desc.find(cutoff)
-                            if ci >= 0:
-                                desc = desc[:ci]
-                        desc_save(jid, desc.strip()[:8000])
+                        desc = (pane.inner_text() or '').strip()[:8000]
+                        desc = clean_desc(job_url, desc)
+                        desc_save(jid, desc)
                     print(f"JOB:{jid}:{job_url}  [{parsed['title'] or '?'} @ {parsed['company'] or '?'} - {parsed['location'] or '?'}]")
                     count += 1
                 except Exception as e:
@@ -133,13 +137,11 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
             if not next_btn:
                 break
             next_btn.click()
-            try:
-                page.wait_for_function(
-                    "document.querySelectorAll('.job-card-container').length > 0",
-                    timeout=5000
-                )
-            except TimeoutError:
-                break
+            pg_deadline = time.time() + 5
+            while time.time() < pg_deadline:
+                if page.evaluate("() => document.querySelectorAll('.job-card-container').length > 0"):
+                    break
+                time.sleep(0.5)
 
         print(f"SCRAPED:{count}", file=sys.stderr)
     finally:
