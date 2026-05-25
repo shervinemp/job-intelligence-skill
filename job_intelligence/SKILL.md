@@ -24,13 +24,15 @@
 | `python3 linkedin.py` | Scrape LinkedIn saved jobs into pipeline | `admit`/`reject` each |
 | `python3 linkedin.py --list` | Preview job cards without adding | — |
 | `python3 linkedin.py --url <url> --max 20` | Custom URL, limit to 20 | — |
-| `python3 extract.py` | Auto-extract URLs, shows `JOB:{jid}:{url}` with context | `admit --category <name> <jid>` / `reject` each |
+| `python3 extract.py` | Auto-extract URLs (skips existing in DB), shows `JOB:{jid}:{url}` with context | `admit --category <name> <jid>` / `reject` each |
 | `python3 extract.py admit --category <name> <jid>` | Keep job + set category. Re-run to update category or skip flag | Categories: tech, general |
 | `python3 extract.py help` | Show all options and available categories | — |
+| `python3 extract.py reset <jid>` | Delete specific job, re-extracts on next run | — |
 | `python3 extract.py reject <jid>` | Skip the extracted job | — |
 | `python3 extract.py review [--count N]` | Show N staged emails for manual URL picking | Pick URLs → `submit [<tid>] '<json>'` |
 | `python3 extract.py submit [<tid>] '<json>'` | Submit URLs manually. JSON must include `"category"`. | `{"url":"...","category":"tech","notes":"..."}` |
 | `python3 fetch.py` | Fetch descriptions (default 3, use `--count N`) | `admit`/`reject`/`flag` each |
+| `python3 fetch.py help` | Show all fetch subcommands and options | — |
 | `python3 fetch.py admit <jid>` | Mark job as described | — |
 | `python3 fetch.py reject <jid>` | Skip (garbage/closed) | — |
 | `python3 fetch.py flag <jid>` | Mark auth wall | — |
@@ -39,6 +41,7 @@
 | `python3 fetch.py retry-skipped` | Reset all skipped jobs back to extracted | — |
 | `python3 fetch.py --refresh` | Re-fetch described URLs | Same admit/reject/flag |
 | `python3 tailor.py [--count N] [--no-open]` | Gemini crafts CV | `done`/`skip`/`redo` |
+| `python3 tailor.py help` | Show all tailor subcommands and options | — |
 | `python3 tailor.py done <jid>` | Mark applied, create .url shortcut | — |
 | `python3 tailor.py skip <jid>` | Skip | — |
 | `python3 tailor.py redo <jid>` | Re-tailor from described | — |
