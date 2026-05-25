@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
-"""04_screening.py — Resolve unfilled required fields via LLM.
-Displays each question for user review before filling.
+"""04_screening.py — Handle custom screening questions.
+Strategy:
+1. Try to match from profile common_answers
+2. Yes/No questions → answer "No" by default
+3. Text questions → use safe defaults
+4. Print all remaining for model intercept
+
+No Gemini call.
 """
-import json, os, sys, time, re
+import json, os, sys, re
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 from lib.chrome_manager import connect
-from lib.call_gemini import call_gemini_node
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 with open(STATE_PATH) as f:
     state = json.load(f)
+
+profile_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "profile.json")
+with open(profile_path) as f:
+    profile = json.load(f)
+ca = profile.get("common_answers", {})
 
 b, ctx = connect()
 page = None
@@ -20,7 +30,7 @@ for p in ctx.pages:
 if not page:
     print("ERROR: no LinkedIn page found", file=sys.stderr); sys.exit(1)
 
-# Get unfilled required fields
+# Get current fields
 fields = page.evaluate("""() => {
     const d = document.querySelector('[role="dialog"]');
     if (!d) return [];
@@ -43,60 +53,93 @@ if not unfilled:
     print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
     sys.exit(0)
 
-# Load profile
-profile_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "profile.json")
-with open(profile_path) as f:
-    profile = json.load(f)
-ca_text = "\n".join(f"{k}: {v}" for k, v in profile.get("common_answers", {}).items() if v)
-
-prompt = "Answer these job application questions using my profile data. Return JSON.\n\n"
-prompt += f"Name: {profile.get('first_name','')} {profile.get('last_name','')}\n"
-prompt += f"Email: {profile.get('email','')}\nPhone: {profile.get('phone','')}\n"
-prompt += ca_text + "\n\nQuestions:\n"
-for f in unfilled:
-    opts = f" Options: {f['options'][:6]}" if f.get('options') else ''
-    prompt += f"  label='{f['label']}' type={f['tag']}:{f['type']}{opts}\n"
-prompt += "\nReturn: [{\"label\":\"...\", \"value\":\"...\"}]"
-
-print(f"Asking LLM for {len(unfilled)} fields...", file=sys.stderr)
-ok, out = call_gemini_node(prompt, timeout_seconds=30)
-
-if not ok:
-    print(f"LLM failed: {out}", file=sys.stderr)
-    print("NEXT: apply/linkedin/easy_apply/03_fill_fields.py", file=sys.stderr)
-    sys.exit(1)
-
-try:
-    answers = json.loads(out) if isinstance(out, str) else out
-    if not isinstance(answers, list): answers = [answers]
-except:
-    print(f"LLM returned invalid JSON: {out[:200]}", file=sys.stderr)
-    print("NEXT: apply/linkedin/easy_apply/03_fill_fields.py", file=sys.stderr)
-    sys.exit(1)
-
 filled = 0
-for item in answers:
-    label = item.get("label", "")
-    val = item.get("value", "")
-    if not label or not val: continue
-    for f in unfilled:
-        if f['label'].lower().strip() == label.lower().strip():
-            sel = f"#{f['id']}" if f['id'] else f"[name=\"{f['name']}\"]"
-            if not sel or sel == '#': continue
+remaining = []
+
+for f in unfilled:
+    label_lower = f['label'].lower()
+    val = None
+    
+    # 1. Try common_answers
+    for ca_key, ca_val in ca.items():
+        if ca_val and ca_key.replace('_', ' ') in label_lower:
+            val = ca_val
+            break
+    
+    if val is None:
+        # 2. Yes/No questions → "No"
+        if f['options'] and any(o.lower() in ('yes', 'no') for o in f['options'][:2]):
+            val = 'No'
+            # Check for specific yes/no patterns
+            if 'authorized' in label_lower or 'eligible' in label_lower:
+                val = ca.get('authorized_to_work', 'Yes')
+            elif 'visa' in label_lower or 'sponsor' in label_lower:
+                val = ca.get('require_visa', 'No')
+            elif 'disability' in label_lower:
+                val = ca.get('disability_status', 'I do not have a disability')
+            elif 'veteran' in label_lower:
+                val = ca.get('veteran_status', 'I am not a protected veteran')
+            elif 'gender' in label_lower:
+                val = ca.get('gender', 'Prefer not to say')
+    
+    if val is None and f['options']:
+        # 3. Select with options — pick second option (skip placeholder)
+        val = f['options'][1] if len(f['options']) > 1 else f['options'][0]
+    
+    if val is None:
+        # 4. Text question — use years of experience from profile if available
+        years = ca.get('years_of_experience', '')
+        if years and ('years' in label_lower or 'experience' in label_lower):
+            val = years
+        else:
+            val = ''  # Model must decide
+    
+    if val:
+        sel = f"#{f['id']}" if f['id'] else f"[name=\"{f['name']}\"]"
+        if sel and sel != '#':
             try:
                 el = page.query_selector(sel)
                 if el:
                     if f['tag'] == 'SELECT':
                         el.select_option(val)
+                    elif f['type'] == 'radio':
+                        # Find the radio option matching our value
+                        radios = page.evaluate(f"""(id, val) => {{
+                            const d = document.querySelector('[role="dialog"]');
+                            const radios = d.querySelectorAll('input[type="radio"]');
+                            for (const r of radios) {{
+                                const lbl = d.querySelector('label[for="'+r.id+'"]');
+                                const t = lbl ? lbl.textContent.trim().toLowerCase() : '';
+                                if (r.name === document.getElementById(id).name && t === val.toLowerCase()) {{
+                                    r.click(); return true;
+                                }}
+                            }}
+                            return false;
+                        }}""", f['id'], val)
                     elif f['type'] == 'checkbox':
-                        if val.lower() in ('yes','true','1','on') and not el.is_checked(): el.click()
+                        if val.lower() in ('yes','true','1','on') and not el.is_checked():
+                            el.click()
                     else:
                         el.fill(val)
                     filled += 1
-                    print(f"  FILLED: '{label}' -> '{val}'", file=sys.stderr)
+                    print(f"  FILLED: '{f['label']}' -> '{val}'", file=sys.stderr)
+                    continue
             except Exception as e:
-                print(f"  FAILED: '{label}' ({e})", file=sys.stderr)
-            break
+                print(f"  FAILED: '{f['label']}' ({e})", file=sys.stderr)
+    
+    remaining.append(f)
 
-print(f"LLM filled: {filled}/{len(unfilled)}", file=sys.stderr)
-print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
+state["screening_filled"] = filled
+state["screening_remaining"] = [f"{f['label']} (options: {f['options'][:4]})" for f in remaining]
+with open(STATE_PATH, "w") as f:
+    json.dump(state, f, indent=2)
+
+print(f"\nAuto-filled: {filled}/{len(unfilled)}", file=sys.stderr)
+if remaining:
+    print(f"Remaining ({len(remaining)}):", file=sys.stderr)
+    for f in remaining:
+        opts = f" options={f['options'][:3]}" if f.get('options') else ''
+        print(f"  '{f['label']}' type={f['tag']}:{f['type']}{opts}", file=sys.stderr)
+    print("NEXT: apply/linkedin/easy_apply/04_screening.py (rerun after model provides answers)", file=sys.stderr)
+else:
+    print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
