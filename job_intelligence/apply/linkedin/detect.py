@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""detect.py — Navigate to LinkedIn search results, find job card, classify apply type.
+"""detect.py — Classify a LinkedIn job's apply type via /apply/ URL.
 Usage: python3 detect.py <jid>
-Output:
+
+Outputs to stderr:
   TYPE: easy_apply | external | applied | unavailable
-  NEXT: ...
+  (data about what was found)
+  NEXT: <next script path>
+
+State: ~/.openclaw/apply_state.json
+Leaves the page open for subsequent scripts.
 """
 import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -18,79 +23,71 @@ r = c.execute("SELECT url, title, company FROM jobs WHERE id=?", (jid,)).fetchon
 url, title, company = r["url"], r["title"], r["company"]
 print(f"JOB: {title} @ {company}", file=sys.stderr)
 
-# Extract job ID from URL
-job_id = url.split('/jobs/view/')[1].split('/')[0]
+job_id = url.split("/jobs/view/")[1].split("/")[0]
+apply_url = f"https://www.linkedin.com/jobs/view/{job_id}/apply/?openSDUIApplyFlow=true"
 
 b, ctx = connect()
-page = ctx.new_page()
-
-# Go to search results
-page.goto("https://www.linkedin.com/jobs/search/?keywords=software&location=Canada", wait_until='domcontentloaded', timeout=30000)
+p = ctx.new_page()
+p.goto(apply_url, wait_until='domcontentloaded', timeout=30000)
 time.sleep(5)
 
-# Click our specific job card
-found = page.evaluate(f"""() => {{
-    const card = document.querySelector('.job-card-container[data-job-id="{job_id}"]');
-    if (card) {{ card.click(); return true; }}
-    // Fallback: first card
-    const first = document.querySelector('.job-card-container');
-    if (first) {{ first.click(); return false; }}
-    return false;
-}}""")
-
-if not found:
-    # Job card not on page — try clicking first card anyway
-    print(f"Job card {job_id} not found in results, using first card", file=sys.stderr)
-time.sleep(3)
-
-# Look for pane
-pane = page.query_selector('.jobs-search__job-details--container')
-if not pane:
-    print("TYPE: unavailable (no pane)", file=sys.stderr)
-    print("NEXT: none", file=sys.stderr)
-    sys.exit(1)
-
 # Classify
-result = page.evaluate("""() => {
-    const pane = document.querySelector('.jobs-search__job-details--container');
-    if (!pane) return { type: 'no_pane' };
-    const found = [];
-    // Check buttons in pane
-    const btns = pane.querySelectorAll('button');
-    for (const b of btns) {
-        const t = (b.textContent || '').trim().toLowerCase();
-        if (t === 'easy apply' && !b.disabled) found.push({ type: 'easy_apply' });
-        if (t === 'applied') found.push({ type: 'applied' });
+result = p.evaluate("""() => {
+    const r = { type: 'unknown', details: {} };
+    
+    // 1. Easy Apply: dialog with real content
+    const d = document.querySelector('[role="dialog"]');
+    if (d && (d.innerText || '').trim().length > 80) {
+        r.type = 'easy_apply';
+        r.details.hasDialog = true;
+        r.details.fieldCount = d.querySelectorAll('input:not([type=hidden]), select, textarea').length;
+        r.details.buttons = Array.from(d.querySelectorAll('button')).map(b => ({
+            text: (b.textContent||'').trim().slice(0,20), disabled: b.disabled
+        }));
+        return r;
     }
-    // Check links
-    const links = pane.querySelectorAll('a');
-    for (const a of links) {
-        const aria = (a.getAttribute('aria-label') || '').toLowerCase();
-        if (aria.includes('apply on company website')) {
-            found.push({ type: 'external', href: a.href });
+    
+    // 2. Already applied
+    const all = document.querySelectorAll('button');
+    for (const el of all) {
+        if ((el.textContent || '').trim().toLowerCase() === 'applied' && el.offsetParent !== null) {
+            r.type = 'applied'; return r;
         }
     }
-    return found.length > 0 ? found : [{ type: 'unknown' }];
+    
+    // 3. External apply: element with aria-label containing "on company website"
+    const all2 = document.querySelectorAll('button, a');
+    for (const el of all2) {
+        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+        if (aria.includes('on company website') && el.offsetParent !== null) {
+            r.type = 'external';
+            r.details.aria = (el.getAttribute('aria-label') || '').slice(0, 80);
+            return r;
+        }
+    }
+    
+    return r;
 }""")
 
-apply_type = 'unavailable'
-for r2 in result if isinstance(result, list) else []:
-    if r2['type'] == 'applied': apply_type = 'applied'; break
-    if r2['type'] == 'easy_apply': apply_type = 'easy_apply'; break
-    if r2['type'] == 'external': apply_type = 'external'; break
-
-state = {"jid": jid, "url": url, "type": apply_type, "job_id": job_id, 
-         "search_url": page.url, "page_url": page.url}
+apply_type = result.get('type', 'unknown')
+state = {
+    "jid": jid, "url": url, "type": apply_type,
+    "details": result.get('details', {}),
+    "page_url": p.url,
+}
 os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
 with open(STATE_PATH, "w") as f:
     json.dump(state, f, indent=2)
 
 print(f"TYPE: {apply_type}", file=sys.stderr)
 if apply_type == 'easy_apply':
+    print(f"Fields: {result['details'].get('fieldCount')}", file=sys.stderr)
+    print(f"Buttons: {[b['text'] for b in result['details'].get('buttons', [])]}", file=sys.stderr)
     print("NEXT: apply/linkedin/easy_apply/01_click.py", file=sys.stderr)
 elif apply_type == 'external':
+    print(f"External apply detected", file=sys.stderr)
     print("NEXT: apply/linkedin/external/01_navigate.py", file=sys.stderr)
 elif apply_type == 'applied':
-    print("NEXT: none (already applied)", file=sys.stderr)
+    print("NEXT: none", file=sys.stderr)
 else:
-    print(f"NEXT: none ({apply_type})", file=sys.stderr)
+    print("NEXT: none", file=sys.stderr)
