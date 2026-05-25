@@ -300,8 +300,6 @@ def cmd_open(*jids):
         except Exception:
             pass
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
-        p.close()
-        b.close()
         print("Opened. Close tab when done.", file=sys.stderr)
     else:
         print("Could not open Chrome.", file=sys.stderr)
