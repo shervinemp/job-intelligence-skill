@@ -75,7 +75,12 @@ skills/
     │   ├── chrome_manager.py # Shared Chrome lifecycle
     │   ├── auth_walls.py     # Auth wall tracking
     │   ├── call_gemini.py    # gemini.js subprocess wrapper
-    │   └── extract_pdf.py    # PDF extraction from Gemini output
+    │   ├── extract_pdf.py    # PDF extraction from Gemini output
+    │   └── platforms/        # Site-specific description cleaners
+    │       ├── __init__.py   # Registry + fetch_description/clean
+    │       ├── _shared.py    # Shared text-processing helpers
+    │       ├── linkedin.py   # LinkedIn: click "…more" + strip chrome
+    │       └── jobright.py   # Jobright: section-level DOM extraction
     └── SKILL.md              # Detailed operations manual
 ```
 
