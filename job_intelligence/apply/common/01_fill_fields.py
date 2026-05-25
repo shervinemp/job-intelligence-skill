@@ -37,11 +37,6 @@ CA_MAP = {
 }
 
 # Yes/no defaults for common questions
-YESNO_DEFAULTS = {
-    "sponsor": "No", "visa": "No", "authorized": "Yes", "eligible": "Yes",
-    "relocate": "Yes", "travel": "Yes", "background check": "Yes",
-}
-
 def resolve(label, profile, ca):
     norm = re.sub(r'[^a-z0-9]+', ' ', label.lower()).strip()
     
@@ -63,13 +58,6 @@ def resolve(label, profile, ca):
         if phrase in norm:
             val = ca.get(ca_key)
             if val: return val
-    
-    # Yes/No defaults
-    if norm in ('yes', 'no'):
-        return None  # handled by radio logic below
-    for phrase, default in YESNO_DEFAULTS.items():
-        if phrase in norm:
-            return default
     
     return None
 
@@ -124,38 +112,26 @@ unfilled = []
 handled_radios = set()  # track radio groups by name
 
 for f in fields:
-    # Skip already-filled fields
+    # Skip already-filled fields (except "Select an option")
     if f['value'] and f['value'] != 'Select an option':
         continue
     
     val = resolve(f['label'], profile, ca)
     
-    # Radio buttons: group by name, fill first one
+    # Radio buttons: NEVER auto-fill — present to model
     if f['type'] == 'radio':
         if f['name'] in handled_radios:
-            continue  # already handled this group
-        # Find all radios in this group
+            continue
         radios = [rf for rf in fields if rf['name'] == f['name']]
         handled_radios.add(f['name'])
-        # Pick the first "No" or negative option as safe default
-        for rf in radios:
-            rl = rf['label'].lower()
-            if any(w in rl for w in ['no', 'not', 'do not', 'unable']):
-                val = rf['value']
-                # Select this radio
-                sel = f"input[name=\"{f['name']}\"][value=\"{val}\"]"
-                try:
-                    el = page.query_selector(sel)
-                    if el and not el.is_checked():
-                        el.click()
-                        filled += 1
-                        print(f"  RADIO: '{rf['label'][:40]}' -> No", file=sys.stderr)
-                except: pass
-                break
+        unfilled.append({"tag": "radio_group", "label": f['label'].split(' - ')[0] if ' - ' in f['label'] else f['label'],
+                         "options": [rf['label'] for rf in radios], "required": f['required']})
         continue
     
     if f['type'] == 'checkbox':
-        # Checkbox: leave unchecked (opt-in)
+        # Checkbox: NEVER auto-fill
+        if f['required']:
+            unfilled.append(f)
         continue
     
     if f['tag'] == 'INPUT' and f['type'] == 'file':
