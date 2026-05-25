@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""01_click.py — Click the Easy Apply button in the search results pane.
-State: reads apply_state.json, clicks Easy Apply, updates state with modal info.
-Leaves modal open. Next script reconnects and finds the page by URL.
+"""01_click.py — Verify the Easy Apply modal is open and content is loaded.
+The /apply/ URL should have already opened the modal.
+This script waits for content, or falls back to clicking the Easy Apply link.
 """
 import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -14,66 +14,50 @@ with open(STATE_PATH) as f:
 b, ctx = connect()
 page = None
 for p in ctx.pages:
-    if 'jobs/search' in p.url:
+    if '/jobs/view/' in p.url:
         page = p
         break
 if not page:
-    page = ctx.new_page()
-    page.goto(state["search_url"], wait_until='domcontentloaded', timeout=30000)
-    time.sleep(5)
+    print("ERROR: no LinkedIn page found", file=sys.stderr)
+    sys.exit(1)
 
-# Click Easy Apply button in pane
-clicked = page.evaluate("""() => {
-    const pane = document.querySelector('.jobs-search__job-details--container');
-    if (!pane) return false;
-    const btns = pane.querySelectorAll('button');
-    for (const b of btns) {
-        if ((b.textContent || '').trim().toLowerCase() === 'easy apply' && !b.disabled) {
-            b.click(); return true;
-        }
-    }
-    return false;
-}""")
-print(f"Clicked Easy Apply: {clicked}", file=sys.stderr)
-time.sleep(4)
+# Wait for modal content to load
+modal = None
+for attempt in range(5):
+    time.sleep(2)
+    modal = page.evaluate("""() => {
+        const d = document.querySelector('[role="dialog"]');
+        if (!d) return null;
+        const inputs = d.querySelectorAll('input, select, textarea');
+        return { fieldCount: inputs.length, textLen: (d.innerText||'').length };
+    }""")
+    if modal and modal['fieldCount'] > 0 and modal['textLen'] > 200:
+        print(f"Modal loaded: {modal['fieldCount']} fields, {modal['textLen']} chars", file=sys.stderr)
+        break
+    # Fallback: try clicking the Easy Apply link
+    if attempt == 2:
+        print(f"Retry: clicking Easy Apply link directly...", file=sys.stderr)
+        page.evaluate("""() => {
+            const a = document.querySelector('a[href*="apply"][aria-label*="Easy Apply"]');
+            if (a) { a.click(); return; }
+            // try any Easy Apply element
+            const all = document.querySelectorAll('button, a');
+            for (const el of all) {
+                const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                if (aria.includes('easy apply') && el.offsetParent !== null) {
+                    el.click(); return;
+                }
+            }
+        }""")
 
-# Check modal
-modal = page.evaluate("""() => {
-    const d = document.querySelector('[role="dialog"]');
-    if (!d) return { status: 'no_modal' };
-    const inputs = d.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
-    return {
-        status: 'open',
-        fieldCount: inputs.length,
-        first200: (d.innerText || '').slice(0, 200),
-        progress: (d.querySelector('[data-test-text-progress-percent]') || {}).textContent || '',
-        fields: Array.from(inputs).map(el => {
-            const lbl = d.querySelector('label[for="' + el.id + '"]');
-            return {
-                tag: el.tagName, type: el.getAttribute('type') || '',
-                label: (lbl ? lbl.textContent.trim() : '') || el.placeholder || el.getAttribute('aria-label') || '',
-                required: el.required, hasValue: !!el.value,
-            };
-        }),
-        buttons: Array.from(d.querySelectorAll('button')).map(b => ({
-            text: (b.textContent || '').trim().slice(0, 25),
-            disabled: b.disabled,
-        })),
-    };
-}""")
+if not modal or modal['fieldCount'] == 0:
+    print("ERROR: modal did not load", file=sys.stderr)
+    print("NEXT: none", file=sys.stderr)
+    sys.exit(1)
 
+# Write updated state
 state["modal"] = modal
-state["modal_url"] = page.url
 with open(STATE_PATH, "w") as f:
     json.dump(state, f, indent=2)
 
-print(f"Modal: {modal['status']}", file=sys.stderr)
-if modal['status'] == 'open':
-    print(f"Fields ({modal['fieldCount']}):", file=sys.stderr)
-    for f_info in modal['fields']:
-        print(f"  [{f_info['tag']}:{f_info['type']}] '{f_info['label']}' req={f_info['required']} filled={f_info['hasValue']}", file=sys.stderr)
-    print(f"Buttons: {[b['text'] for b in modal['buttons']]}", file=sys.stderr)
-    print(f"Progress: {modal['progress']}", file=sys.stderr)
-    print("NEXT: apply/linkedin/easy_apply/02_read_state.py", file=sys.stderr)
-else:
-    print("NEXT: none", file=sys.stderr)
+print("NEXT: apply/linkedin/easy_apply/02_read_state.py", file=sys.stderr)
