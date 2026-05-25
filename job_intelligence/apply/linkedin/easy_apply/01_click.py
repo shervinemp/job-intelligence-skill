@@ -36,18 +36,10 @@ for attempt in range(5):
         break
     # Fallback: try clicking the Easy Apply link
     if attempt == 2:
-        print(f"Retry: clicking Easy Apply link directly...", file=sys.stderr)
+        print(f"Retry: clicking Easy Apply link...", file=sys.stderr)
         page.evaluate("""() => {
-            const a = document.querySelector('a[href*="apply"][aria-label*="Easy Apply"]');
-            if (a) { a.click(); return; }
-            // try any Easy Apply element
-            const all = document.querySelectorAll('button, a');
-            for (const el of all) {
-                const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-                if (aria.includes('easy apply') && el.offsetParent !== null) {
-                    el.click(); return;
-                }
-            }
+            const a = document.querySelector('a[aria-label*="Easy Apply"]');
+            if (a && a.offsetParent !== null) { a.click(); }
         }""")
 
 if not modal or modal['fieldCount'] == 0:
