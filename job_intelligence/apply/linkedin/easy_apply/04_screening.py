@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""04_screening.py — Handle custom screening questions.
-Strategy:
-1. Try to match from profile common_answers
-2. Yes/No questions → answer "No" by default
-3. Text questions → use safe defaults
-4. Print all remaining for model intercept
+"""04_screening.py — Present screening questions to the model for decisions.
+DO NOT auto-fill any defaults. Present each question with all options.
+The model reads the output and decides what to answer.
 
-No Gemini call.
+Output format per question:
+  [TYPE] "Question text"
+    Options: [opt1, opt2, ...]
+    Current: "current_value"
+
+Model should rerun with --answers '{"label":"value"}' or fill manually.
 """
 import json, os, sys, re
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -16,100 +18,123 @@ STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.jso
 with open(STATE_PATH) as f:
     state = json.load(f)
 
-profile_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "profile.json")
-with open(profile_path) as f:
-    profile = json.load(f)
-ca = profile.get("common_answers", {})
+# Parse answers if provided
+answers = {}
+if "--answers" in sys.argv:
+    idx = sys.argv.index("--answers")
+    if idx + 1 < len(sys.argv):
+        try: answers = json.loads(sys.argv[idx + 1])
+        except: pass
 
 b, ctx = connect()
 page = None
 for p in ctx.pages:
     if 'jobs/' in p.url:
-        page = p
-        break
+        page = p; break
 if not page:
-    print("ERROR: no LinkedIn page found", file=sys.stderr); sys.exit(1)
+    print("ERROR: no LinkedIn page", file=sys.stderr); sys.exit(1)
 
-# Get current fields
 fields = page.evaluate("""() => {
     const d = document.querySelector('[role="dialog"]');
     if (!d) return [];
     const inputs = d.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
     return Array.from(inputs).map(el => {
         const lbl = d.querySelector('label[for="'+el.id+'"]');
+        const parent = el.closest('div, fieldset, section, li');
+        const plbl = parent ? parent.querySelector('label, legend, strong, span') : null;
+        let label = (lbl?lbl.textContent.trim():'')||el.placeholder||el.getAttribute('aria-label')||'';
+        if (!label && plbl) label = plbl.textContent.trim();
+        const opts = el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean) : [];
         return {
             tag: el.tagName, type: el.getAttribute('type')||'',
             id: el.id, name: el.getAttribute('name')||'',
-            label: (lbl?lbl.textContent.trim():'')||el.placeholder||el.getAttribute('aria-label')||'',
+            label: label.replace(/\\s+/g,' ').trim().slice(0, 100),
             required: el.required, value: el.value||'',
-            options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean) : [],
+            options: opts.slice(0, 20),
         };
     });
 }""")
 
-# Process ALL text-input fields (screening questions may have wrong defaults)
-all_text_fields = [f for f in fields if f['type'] in ('text',) and f['tag'] == 'INPUT']
+# Identify screening questions: text inputs with long labels, radio groups, selects
+screening_fields = []
+handled_radios = set()
+for f in fields:
+    if f['type'] == 'radio':
+        if f['name'] and f['name'] not in handled_radios:
+            handled_radios.add(f['name'])
+            # Find all radios in this group
+            group = [rf for rf in fields if rf['name'] == f['name']]
+            screening_fields.append({
+                "tag": "radio_group",
+                "label": "Selection",
+                "required": any(rf['required'] for rf in group),
+                "value": "",
+                "options": [rf['label'] for rf in group if rf['label']],
+            })
+        continue
+    if f['type'] == 'checkbox':
+        continue
+    if f['tag'] == 'TEXTAREA':
+        continue
+    if f['tag'] == 'INPUT' and f['type'] == 'file':
+        continue
+    # Text inputs: include even if filled (wrong defaults)
+    if f['tag'] == 'INPUT' and f['type'] in ('text', 'number'):
+        screening_fields.append(f)
+        continue
+    # Selects: include if required or has meaningful options
+    if f['tag'] == 'SELECT' and f['options']:
+        screening_fields.append(f)
+        continue
+
+if not screening_fields:
+    print("No screening questions detected", file=sys.stderr)
+    print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
+    sys.exit(0)
+
+# Fill from answers if provided
 filled = 0
-remaining = []
-
-for f in all_text_fields:
-    label_lower = f['label'].lower()
-    val = None
-    
-    # 1. Try common_answers
-    for ca_key, ca_val in ca.items():
-        if ca_val and ca_key.replace('_', ' ') in label_lower:
-            val = ca_val
-            break
-    
-    if val is None:
-        # 2. Years of experience questions
-        years = ca.get('years_of_experience', '') or ca.get('total_years', '')
-        if years and ('year' in label_lower or 'experience' in label_lower):
-            val = years
-
-    if val is None:
-        # 3. Common label patterns
-        for phrase, ca_key in {
-            "years of experience": "years_of_experience",
-            "years of work": "years_of_experience", 
-            "how many years": "years_of_experience",
-        }.items():
-            if phrase in label_lower:
-                v = ca.get(ca_key)
-                if v: val = v; break
-    
-    if val and val != f['value']:
-        # Override the wrong default
+for f in screening_fields:
+    label = f['label']
+    if label in answers:
+        val = answers[label]
         sel = f"#{f['id']}" if f['id'] and not f['id'][0].isdigit() else f"[id=\"{f['id']}\"]" if f['id'] else f"[name=\"{f['name']}\"]"
-        if sel and sel != '#':
-            try:
-                el = page.query_selector(sel)
-                if el:
+        if not sel or sel == '#': continue
+        try:
+            el = page.query_selector(sel)
+            if el:
+                if f['tag'] == 'SELECT':
+                    el.select_option(val)
+                elif f['type'] == 'radio':
+                    page.evaluate(f"""() => {{
+                        const d = document.querySelector('[role="dialog"]');
+                        const radios = d.querySelectorAll('input[type="radio"]');
+                        for (const r of radios) {{
+                            const lbl = d.querySelector('label[for="'+r.id+'"]');
+                            const t = (lbl?lbl.textContent.trim():'').toLowerCase();
+                            if (r.name === '{f['name']}' && t === '{val.lower()}') {{
+                                r.click(); return;
+                            }}
+                        }}
+                    }}""")
+                else:
                     el.fill(val)
-                    filled += 1
-                    print(f"  FILLED: '{f['label']}' -> '{val}'", file=sys.stderr)
-                    continue
-            except Exception as e:
-                print(f"  FAILED: '{f['label']}' ({e})", file=sys.stderr)
-    
-    if not val:
-        remaining.append(f)
+                filled += 1
+                print(f"  FILLED: '{label}' -> '{val[:30]}'", file=sys.stderr)
+        except Exception as e:
+            print(f"  FAILED: '{label}' ({e})", file=sys.stderr)
 
-# Also handle remaining unfilled required fields (selects with bad defaults)
-unfilled = [f for f in fields if f['required'] and (not f['value'] or f['value'] == 'Select an option')]
-
-state["screening_filled"] = filled
-state["screening_remaining"] = [f"{f['label']} (options: {f['options'][:4]})" for f in remaining]
-with open(STATE_PATH, "w") as f:
-    json.dump(state, f, indent=2)
-
-print(f"\nAuto-filled: {filled}/{len(unfilled)}", file=sys.stderr)
+# Present remaining unanswered questions
+remaining = [f for f in screening_fields if f['label'] not in answers]
 if remaining:
-    print(f"Remaining ({len(remaining)}):", file=sys.stderr)
+    print(f"\nScreening questions ({len(remaining)}):", file=sys.stderr)
     for f in remaining:
-        opts = f" options={f['options'][:3]}" if f.get('options') else ''
-        print(f"  '{f['label']}' type={f['tag']}:{f['type']}{opts}", file=sys.stderr)
-    print("NEXT: apply/linkedin/easy_apply/04_screening.py (rerun after model provides answers)", file=sys.stderr)
+        tag = f.get('tag', f['tag'])
+        opts = f"  Options: {f['options']}" if f.get('options') else ""
+        val = f"  Current: '{f['value']}'" if f['value'] else ""
+        print(f"  [{tag}:{f['type']}] '{f['label']}'", file=sys.stderr)
+        if opts: print(opts, file=sys.stderr)
+        if val: print(val, file=sys.stderr)
+    print(f"\nNEXT: apply.py screen <jid> --answers '{{\"label\":\"value\"}}'", file=sys.stderr)
 else:
     print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
