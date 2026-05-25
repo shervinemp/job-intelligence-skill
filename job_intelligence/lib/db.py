@@ -144,7 +144,6 @@ def _create_v3_tables():
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
-    c.execute("UPDATE jobs SET category='tech' WHERE category IS NULL")
     _import_legacy_auth_walls()
 
     for idx in [
