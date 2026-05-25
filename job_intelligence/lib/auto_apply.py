@@ -85,11 +85,10 @@ def detect_platform(url):
         ("icims.com", "icims"), ("taleo.net", "taleo"),
         ("smartrecruiters", "smartrecruiters"), ("bamboohr", "bamboohr"),
         ("ashbyhq.com", "ashby"), ("jazzhr.com", "jazzhr"),
-        ("jobright.ai", "jobright"),
     ]:
         if kw in host or kw in url:
             return plat
-    return "unknown"
+    return None
 
 # ─── LinkedIn Easy Apply handler ─────────────────────
 
@@ -160,29 +159,34 @@ def handle_linkedin(page, jid, url, profile):
 # ─── Generic modal/ATS field filler ──────────────────
 
 def fill_modal(page, jid, profile):
-    """Multi-step modal filler. Detects fields, fills, clicks Next → Submit."""
+    """Multi-step modal filler. Detects fields, fills, clicks Next/Submit."""
     last_hash = None
     max_steps = 10
+    last_action = None
     
     for step in range(max_steps):
         time.sleep(2)
         
-        # Check for success
-        text = page.evaluate("() => document.body.innerText").lower()
-        for w in ["thank you", "application submitted", "your application", "was sent"]:
-            if w in text:
-                return {"status": "submitted", "jid": jid}
-        
         dlg = page.query_selector('[role="dialog"]')
         if not dlg:
-            # Already applied or success
-            for w in ["already applied", "you have already applied"]:
+            if step == 0:
+                return {"status": "failed", "jid": jid, "reason": "no_dialog"}
+            # Dialog disappeared — check if we submitted
+            text = page.evaluate("() => document.body.innerText").lower()
+            for w in ["thank you", "application submitted", "your application", "was sent"]:
                 if w in text:
-                    return {"status": "already_applied", "jid": jid}
-            return {"status": "submitted" if step > 0 else "failed", "jid": jid,
-                    "reason": "no_dialog" if step == 0 else "submitted"}
+                    return {"status": "submitted", "jid": jid}
+            if last_action == "submit":
+                return {"status": "submitted", "jid": jid}
+            return {"status": "failed", "jid": jid, "reason": "dialog_closed"}
         
-        # Extract form fields
+        # Check for success text inside dialog
+        dlg_text = dlg.inner_text().lower()
+        for w in ["application sent", "submitted", "thank you"]:
+            if w in dlg_text:
+                return {"status": "submitted", "jid": jid}
+        
+        # Extract form fields (don't trust prefilled values)
         fields = page.evaluate("""(container) => {
             const dlg = document.querySelector('[role="dialog"]');
             if (!dlg) return [];
@@ -203,24 +207,28 @@ def fill_modal(page, jid, profile):
         }""")
         
         if not fields:
-            # No inputs — maybe this step is just review. Click primary button.
-            if not click_primary(page):
-                return {"status": "failed", "jid": jid, "reason": "no_fields_no_button"}
+            # No inputs — click primary button
+            action = click_primary(page)
+            if not action:
+                return {"status": "failed", "jid": jid, "reason": "no_button"}
+            last_action = action
             continue
         
         # Fill fields from profile
-        filled = fill_fields(page, fields, profile, jid)
+        fill_fields(page, fields, profile, jid)
         
         # If any required fields remain empty, use LLM to resolve
-        unfilled = [f for f in fields if f["required"] and not (f["value"] or f.get("_filled"))]
+        unfilled = [f for f in fields if f["required"] and not f["value"]]
         if unfilled:
             llm_ok = llm_fill_fields(page, unfilled, fields, profile)
             if not llm_ok:
                 return {"status": "failed", "jid": jid, "reason": f"unfilled_required:{unfilled[0]['label']}"}
         
         # Click next/submit
-        if not click_primary(page):
+        action = click_primary(page)
+        if not action:
             return {"status": "failed", "jid": jid, "reason": "no_next_button"}
+        last_action = action
     
     return {"status": "failed", "jid": jid, "reason": "max_steps"}
 
@@ -282,24 +290,35 @@ def find_resume(jid):
     return None
 
 def click_primary(page):
-    """Click Next, Review, Submit, or similar primary action button."""
+    """Click Next, Review, Submit, or similar primary action button.
+    Returns 'submit', 'next', or None."""
     return page.evaluate("""() => {
         const dlg = document.querySelector('[role="dialog"]');
-        if (!dlg) return false;
+        if (!dlg) return null;
         const btns = dlg.querySelectorAll('button:not([disabled])');
-        const keywords = ['submit application', 'submit', 'review', 'next', 'send', 'done', 'save', 'continue'];
-        let best = null, bestScore = 0;
+        const keywords = [
+            ['submit application', 'submit'],
+            ['submit', 'submit'],
+            ['send application', 'submit'],
+            ['send', 'submit'],
+            ['done', 'submit'],
+            ['review', 'review'],
+            ['next', 'next'],
+            ['continue', 'next'],
+            ['save', 'next'],
+        ];
+        let bestAction = null, bestScore = 0, bestBtn = null;
         for (const b of btns) {
             const t = (b.textContent || '').trim().toLowerCase();
-            for (const kw of keywords) {
-                if (t.includes(kw)) {
-                    const score = t === kw ? 10 : 5;
-                    if (score > bestScore) { bestScore = score; best = b; }
+            for (const [kw, action] of keywords) {
+                if (t.includes(kw) || t === kw) {
+                    const score = t === kw ? 100 : 50;
+                    if (score > bestScore) { bestScore = score; bestAction = action; bestBtn = b; }
                 }
             }
         }
-        if (best) { best.click(); return true; }
-        return false;
+        if (bestBtn) { bestBtn.click(); return bestAction; }
+        return null;
     }""")
 
 def llm_fill_fields(page, unfilled, all_fields, profile):
