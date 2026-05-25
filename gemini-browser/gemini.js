@@ -391,10 +391,12 @@ async function read(page, timeout = 360000) {
 
 async function deleteChat(page) {
   try {
-    // Extract conversation ID from current URL (gem or main page)
+    // Extract conversation ID from current URL (gem, app, or main page)
     const convId = await page.evaluate(() => {
       const mGem = location.href.match(/\/gem\/[^\/]+\/([^\/\?]+)/);
       if (mGem) return mGem[1];
+      const mApp = location.href.match(/\/app\/([^\/\?]+)/);
+      if (mApp) return mApp[1];
       const mMain = location.href.match(/\/c\/([^\/\?]+)/);
       return mMain ? mMain[1] : null;
     });
@@ -435,8 +437,8 @@ async function deleteChat(page) {
     await deleteBtn.click();
     await wait(1000);
 
-    const confirmBtn = await page.$('[data-test-id="confirm-button"]');
-    if (confirmBtn) await confirmBtn.click();
+    const confirmBtn = page.locator('[role="dialog"] button:has-text("Delete")');
+    if (await confirmBtn.count()) await confirmBtn.click();
     await wait(1500);
     log('deleteChat: done');
   } catch (e) { log(`deleteChat error: ${e.message}`); }
