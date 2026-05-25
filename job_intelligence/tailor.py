@@ -32,12 +32,14 @@ from lib.call_gemini import (
     list_gems,
 )
 from lib.extract_pdf import extract_and_run
+from lib.platforms import clean as clean_desc
 
 JOB_PROMPT_TEMPLATE = """Job Title: {title}
 Company: {company}
 Location: {location}
 
 Job Description:
+
 {job_description}"""
 
 
@@ -46,6 +48,7 @@ def generate_tailored_docs(job_entry, gem=None):
     url = job.get("url", "")
     job_id = hashlib.md5(url.encode()).hexdigest()[:16]
     description = desc_get(job_id)
+    description = clean_desc(url, description)
 
     if not description:
         return False, "No job description found — run fetch.py first"
