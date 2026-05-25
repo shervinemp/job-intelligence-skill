@@ -86,7 +86,7 @@ has_submit = any(b['text'].lower() in ('submit', 'submit application', 'send', '
 if has_empty_required:
     print("NEXT: apply/linkedin/easy_apply/03_fill_fields.py", file=sys.stderr)
 elif has_submit:
-    print("NEXT: apply/linkedin/easy_apply/06_submit.py", file=sys.stderr)
+    print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
 elif has_next:
     print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
 else:
