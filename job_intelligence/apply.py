@@ -26,6 +26,7 @@ SCRIPTS = {
     "navigate": "linkedin/external/01_navigate.py",
     "detect_platform": "linkedin/external/02_detect_platform.py",
     "fill_external": "common/01_fill_fields.py",
+    "next_external": "common/02_click_next.py",
     "submit_external": "linkedin/external/03_submit.py",
 }
 
