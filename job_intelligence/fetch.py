@@ -44,7 +44,6 @@ def _pw_fetch(url, timeout=30):
     page = b = None
     try:
         b, ctx = connect()
-        print(f"DBG: connect -> ctx={'yes' if ctx else 'no'}", file=sys.stderr)
         if ctx:
             page = ctx.new_page()
             page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
