@@ -110,18 +110,21 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                              "location": parsed["location"], "source": "LinkedIn", "source_url": job_url,
                              "category": "tech"})
                     card.click()
-                    page.wait_for_timeout(500)
-                    dl_deadline = time.time() + 8
-                    while time.time() < dl_deadline:
-                        pane = page.query_selector('.jobs-search__job-details--container')
-                        if pane:
-                            text = (pane.inner_text() or '').strip()
-                            if len(text) > 200:
-                                break
-                        time.sleep(0.5)
-                    pane = page.query_selector('.jobs-search__job-details--container')
-                    if pane:
-                        desc = (pane.inner_text() or '').strip()[:8000]
+                    page.wait_for_timeout(1500)
+                    desc = ""
+                    for _ in range(4):
+                        dl_deadline = time.time() + 5
+                        while time.time() < dl_deadline:
+                            pane = page.query_selector('.jobs-search__job-details--container')
+                            if pane:
+                                text = (pane.inner_text() or '').strip()
+                                if len(text) > 200:
+                                    desc = text[:8000]
+                                    break
+                            time.sleep(0.5)
+                        if desc:
+                            break
+                    if desc:
                         desc = clean_desc(job_url, desc)
                         desc_save(jid, desc)
                     print(f"JOB:{jid}:{job_url}  [{parsed['title'] or '?'} @ {parsed['company'] or '?'} - {parsed['location'] or '?'}]")
