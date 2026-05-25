@@ -14,39 +14,30 @@ Automated job discovery, description fetching, and CV tailoring — orchestrated
 ## Pipeline Flow
 
 ```
-                          ┌──────────────────┐
-                          │   Gmail Search   │
-                          └────────┬─────────┘
-                                   │
-                          ┌────────▼─────────┐
-                          │ stage_emails.py  │
-                          └────────┬─────────┘
-                                   │
-                          ┌────────▼─────────┐   ┌──────────────────┐
-                          │   extract.py     │   │  linkedin.py     │
-                          └────────┬─────────┘   └────────┬─────────┘
-                                   │                     │
-                                   └──────────┬──────────┘
-                                              │
-                                     ┌────────▼─────────┐
-                                     │  admit / reject  │
-                                     └────────┬─────────┘
-                                              │
-                                     ┌────────▼─────────┐
-                                     │    fetch.py       │
-                                     └────────┬─────────┘
-                                              │
-                                     ┌────────▼─────────┐
-                                     │ admit/reject/flag│
-                                     └────────┬─────────┘
-                                              │
-                                     ┌────────▼─────────┐
-                                     │   tailor.py      │
-                                     └────────┬─────────┘
-                                              │
-                                     ┌────────▼─────────┐
-                                     │   done / skip    │
-                                     └──────────────────┘
+  [Gmail Search]
+        |
+        v
+  [stage_emails.py]
+        |
+        v
+  [extract.py]  [linkedin.py]
+        |             |
+        +------+------+
+               |
+               v
+        [admit / reject]
+               |
+               v
+          [fetch.py]
+               |
+               v
+      [admit/reject/flag]
+               |
+               v
+          [tailor.py]
+               |
+               v
+         [done / skip]
 ```
 
 ---
