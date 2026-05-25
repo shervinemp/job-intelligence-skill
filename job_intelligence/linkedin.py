@@ -93,23 +93,31 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
             cards = _scroll_load(page)
             if not cards:
                 break
+            cards_data = []
             for card in cards:
+                cid = card.get_attribute('data-job-id') or ''
+                if not cid:
+                    continue
+                cards_data.append({
+                    'id': cid,
+                    'url': f'https://www.linkedin.com/jobs/view/{cid}/',
+                    'jid': hashlib.md5(f'https://www.linkedin.com/jobs/view/{cid}/'.encode()).hexdigest()[:16],
+                    'parsed': _parse_card(card),
+                })
+
+            for cd in cards_data:
                 try:
-                    job_id = card.get_attribute('data-job-id') or ''
-                    if not job_id:
-                        continue
-                    job_url = f'https://www.linkedin.com/jobs/view/{job_id}/'
-                    jid = hashlib.md5(job_url.encode()).hexdigest()[:16]
+                    job_url = cd['url']
+                    jid = cd['jid']
                     existing = get_conn().execute("SELECT id FROM jobs WHERE id=?", (jid,)).fetchone()
                     if existing:
                         if desc_get(jid):
                             continue
-                        # Exists but no description — re-process to fill it
-                    parsed = _parse_card(card)
+                    parsed = cd['parsed']
                     add_job({"url": job_url, "title": parsed["title"], "company": parsed["company"],
                              "location": parsed["location"], "source": "LinkedIn", "source_url": job_url,
                              "category": "tech"})
-                    card.click()
+                    page.locator(f'[data-job-id="{cd["id"]}"]').click()
                     page.wait_for_timeout(1500)
                     desc = ""
                     for _ in range(4):
