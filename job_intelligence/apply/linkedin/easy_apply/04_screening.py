@@ -74,8 +74,19 @@ for f in fields:
                 try:
                     el = page.query_selector(sel)
                     if el:
-                        parent = el.evaluate("el => el.closest('div, fieldset, section, li')?.querySelector('label, legend, span, strong')?.textContent?.trim() || ''")
-                        parent_label = parent
+                        parent_label = el.evaluate("""el => {
+                            let e = el;
+                            for (let i = 0; i < 4; i++) {
+                                e = e.parentElement;
+                                if (!e) break;
+                                const heading = e.querySelector('label, legend, span, strong, [role="heading"]');
+                                if (heading) {
+                                    const t = heading.textContent.trim();
+                                    if (t.length > 3 && !t.includes('Yes') && !t.includes('No')) return t;
+                                }
+                            }
+                            return '';
+                        }""")
                 except: pass
             label = parent_label or "Selection"
             screening_fields.append({
