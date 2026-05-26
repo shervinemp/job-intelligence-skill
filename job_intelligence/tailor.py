@@ -1,7 +1,7 @@
 """tailor.py — Tailor CVs via Gemini Web.
 
 Usage:
-  tailor.py [--count N] [--no-open]   Craft N described jobs (default: 1 with handoff)
+  tailor.py [--count N]               Craft N described jobs (default: 1)
   tailor.py done <jid> [jid...]       Mark job(s) as applied
   tailor.py skip <jid> [jid...]       Skip job(s)
   tailor.py redo <jid>                Re-tailor a job
@@ -43,7 +43,7 @@ Job Description:
 {job_description}"""
 
 
-def generate_tailored_docs(job_entry, gem=None):
+def generate_tailored_docs(job_entry):
     job = job_entry
     url = job.get("url", "")
     job_id = hashlib.md5(url.encode()).hexdigest()[:16]
@@ -56,14 +56,12 @@ def generate_tailored_docs(job_entry, gem=None):
     cat = job.get("category")
     if not cat:
         return False, f"No category for job {job_id} — admit with --category first"
-    cat_dir = os.path.dirname(os.path.abspath(__file__))
-    cat_path = os.path.join(cat_dir, "categories.json")
+    cat_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "categories.json")
     try:
         with open(cat_path) as f:
-            categories = json.load(f)
+            cat_info = json.load(f).get(cat)
     except Exception as e:
         return False, f"Can't read categories.json: {e}"
-    cat_info = categories.get(cat)
     if not cat_info:
         return False, f"Category '{cat}' not in categories.json"
     gem = cat_info.get("gem")
@@ -146,7 +144,7 @@ def generate_tailored_docs(job_entry, gem=None):
     }
 
 
-def cmd_craft(count=1, no_open=False, gem=None):
+def cmd_craft(count=1):
     state = load()
     described = [
         (jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described"
@@ -174,7 +172,7 @@ def cmd_craft(count=1, no_open=False, gem=None):
             print(f"DIR: {os.path.join(RESULTS_DIR, jid)}")
 
         try:
-            success, result = generate_tailored_docs(entry, gem=gem)
+            success, result = generate_tailored_docs(entry)
             if success:
                 advance(
                     entry,
@@ -187,8 +185,6 @@ def cmd_craft(count=1, no_open=False, gem=None):
                     text = result.get("text", "")
                     if text:
                         print(f"\n---RESPONSE---\n{text}\n---", file=sys.stderr)
-                    if not no_open:
-                        _cmd_ready(jid)
                 else:
                     scripts_str = ", ".join(result.get("scripts", [])) if result.get("scripts") else "no scripts"
                     print(f"  Complete -> {scripts_str}", file=sys.stderr)
@@ -355,7 +351,7 @@ def cmd_done(*job_ids):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_relentless(count, gem=None):
+def cmd_relentless(count):
     """Like cmd_craft but retries on rate limit instead of leaving jobs at described.
     --count N: process N described jobs
     --count -1: process ALL described jobs
@@ -384,7 +380,7 @@ def cmd_relentless(count, gem=None):
 
     while True:
         r = _sp.run(
-            [_sys.executable, tailor_script, f"--count={count}", "--no-open"],
+            [_sys.executable, tailor_script, f"--count={count}"],
             capture_output=True, text=True, timeout=300,
         )
         output = (r.stdout or "") + (r.stderr or "")
@@ -412,8 +408,8 @@ def cmd_relentless(count, gem=None):
 
 def cmd_help():
     print("Usage:", file=sys.stderr)
-    print("  [--count N] [--no-open]                     Craft CVs (default 1)", file=sys.stderr)
-    print("  [--count N] --no-open --relentless           Craft all, idle on rate limits", file=sys.stderr)
+    print("  [--count N] [--open]                         Craft CVs (default 1, no browser)", file=sys.stderr)
+    print("  [--count N] --relentless                     Craft all, idle on rate limits", file=sys.stderr)
     print("  done <jid> [jid...]                          Mark applied, create .url shortcut", file=sys.stderr)
     print("  skip <jid> [jid...]                          Skip", file=sys.stderr)
     print("  redo <jid>                                   Re-tailor from described", file=sys.stderr)
@@ -487,9 +483,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(prog="tailor.py", description="Tailor CVs via Gemini Web")
     parser.add_argument("--count", type=int, default=1, help="Jobs to process (default 1, -1 = all)")
-    parser.add_argument("--no-open", action="store_true", help="Skip opening browser for each job")
     parser.add_argument("--relentless", action="store_true", help="Retry on rate limit with idle loop")
-    parser.add_argument("--gem", help="Gem alias or ID")
     
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("done", help="Mark job as applied").add_argument("jids", nargs="+")
@@ -552,13 +546,11 @@ def main():
     elif args.command == "help":
         cmd_help()
     elif args.command is None:
-        # No subcommand — craft mode
         count = args.count
-        gem = args.gem
         if args.relentless:
-            cmd_relentless(count=count if count != -1 else -1, gem=gem)
+            cmd_relentless(count=count)
         else:
-            cmd_craft(count=count if count != -1 else 999, no_open=args.no_open, gem=gem)
+            cmd_craft(count=count)
 
 
 if __name__ == "__main__":

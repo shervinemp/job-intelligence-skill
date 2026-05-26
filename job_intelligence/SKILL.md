@@ -9,9 +9,9 @@
 |-------|-------------|--------------|
 | **search + stage** | `python3 stage_emails.py [--days N]` — searches Gmail (last 14d), saves threads to DB, fetches + cleans each email | Auto: skips emails without `job`/`jobs` keyword |
 | **re-search** | `python3 stage_emails.py --refresh [--days N]` — clears cached threads, re-searches Gmail, re-stages | — |
-| **extract** | `python3 extract.py` — finds all URLs in staged emails, saves to DB | SLM: `admit`/`reject` each extracted URL |
+| **extract** | `python3 extract.py` — finds all URLs in staged emails, saves to DB | SLM: `admit`/`reject` each extracted URL. Check the URL + email context — many non-job URLs leak through (tracking links, privacy pages, company profiles, notification landing pages) |
 | **linkedin** | `python3 linkedin.py [--url <url>] [--max N]` — scrape LinkedIn jobs into pipeline | SLM: `admit`/`reject` each |
-| **fetch** | `python3 fetch.py` — visits each URL (Playwright), scrapes description | SLM: `admit`/`reject`/`flag` each description |
+| **fetch** | `python3 fetch.py` — visits each URL (Playwright), scrapes description | SLM: `admit`/`reject`/`flag` each description. Second gate — reject if the snippet doesn't look like a real JD (missing responsibilities/qualifications/work-description language) |
 | **tailor** | `python3 tailor.py [--count N]` — Gemini crafts CV | SLM: `done`/`skip`/`redo` |
 
 ## I run / What I do
@@ -40,8 +40,9 @@
 | `python3 fetch.py retry` | Retry failed fetches | Same admit/reject |
 | `python3 fetch.py retry-skipped` | Reset all skipped jobs back to extracted | — |
 | `python3 fetch.py --refresh` | Re-fetch described URLs | Same admit/reject/flag |
-| `python3 tailor.py [--count N] [--no-open]` | Gemini crafts CV (default 1) | `done`/`skip`/`redo` |
-| `python3 tailor.py --count -1 --no-open` | Process ALL described jobs | — |
+| `python3 tailor.py [--count N]` | Gemini crafts CV (default 1) | `done`/`skip`/`redo` |
+
+| `python3 tailor.py --count -1` | Process ALL described jobs | — |
 | `python3 tailor.py --relentless --count -1` | Process all, idle on rate limit, retry | — |
 | `python3 tailor.py help` | Show all tailor subcommands and options | — |
 | `python3 tailor.py done <jid>` | Mark applied, create .url shortcut | — |
