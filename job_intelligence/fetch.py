@@ -151,6 +151,7 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
             save_description(jid, result)
             limit = 2000 if verbose else 500
             snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
+            print(f"IS THIS A JOB POSTING? (admit/reject)", file=sys.stderr)
             print(f"DESC:{jid}:{snippet}")
             auth_walls.remove(jid)
             fetched += 1

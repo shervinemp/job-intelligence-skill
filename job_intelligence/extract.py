@@ -14,11 +14,14 @@ EXTRACTED_IDS_KEY = "extracted_ids"
 
 _SKIP_DOMAINS = {
     "linkedin.com/comm", "linkedin.com/feed", "linkedin.com/notifications",
-    "linkedin.com/mynetwork", "linkedin.com/messaging", "t1.em.linkedin.com",
+    "linkedin.com/mynetwork", "linkedin.com/messaging", "linkedin.com/company",
+    "t1.em.linkedin.com",
     "accounts.google.com", "github.com", "google.com",
     "facebook.com", "twitter.com", "x.com", "instagram.com",
     "youtube.com", "unsubscribe", "user-subscription",
-    "cts.indeed.com", "ca.indeed.com/pagead",
+    "cts.indeed.com", "ca.indeed.com/pagead", "engage.indeed.com",
+    "jobright.ai", "searchalert.action.azurecomm.net",
+    "workinottawa.investottawa.ca/privacy-policy",
 }
 
 
@@ -76,6 +79,7 @@ def cmd_auto():
             jid = add_job({"url": url, "email_id": tid, "source": "Email", "source_url": url})
             if jid:
                 ctx = _snippet(content, url)
+                print(f"REAL JOB? (admit/reject)", file=sys.stderr)
                 print(f"JOB:{jid}:{url}  [{ctx}]")
                 total += 1
         extracted_ids.append(tid)
