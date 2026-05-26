@@ -316,36 +316,50 @@ def _parse_count():
 
 
 def main():
-    subcommands = {"admit", "reject", "flag", "open", "retry", "retry-skipped", "status", "help"}
-    if len(sys.argv) > 1 and sys.argv[1] in subcommands:
-        cmd = sys.argv[1]
-        if cmd == "admit":
-            cmd_admit(*sys.argv[2:])
-        elif cmd == "reject":
-            cmd_reject(*sys.argv[2:])
-        elif cmd == "flag":
-            cmd_flag(*sys.argv[2:])
-        elif cmd == "open":
-            cmd_open(*sys.argv[2:])
-        elif cmd == "retry":
-            cmd_retry(use_playwright='--curl' not in sys.argv)
-        elif cmd == "retry-skipped":
-            cmd_retry_skipped()
-        elif cmd == "status":
-            cmd_status()
-        elif cmd == "help":
-            cmd_help()
-    elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
-        cmd_fetch(
-            count=_parse_count(),
-            use_playwright='--curl' not in sys.argv,
-            force='--force' in sys.argv,
-            refresh='--refresh' in sys.argv,
-            verbose='--verbose' in sys.argv,
-        )
+    import argparse
+    parser = argparse.ArgumentParser(prog="fetch.py", description="Fetch job descriptions")
+    parser.add_argument("--count", type=int, default=3, help="Jobs to fetch (default 3)")
+    parser.add_argument("--curl", action="store_true", help="Use curl instead of Playwright")
+    parser.add_argument("--force", action="store_true", help="Re-fetch even if description exists")
+    parser.add_argument("--refresh", action="store_true", help="Fetch from described stage")
+    parser.add_argument("--verbose", action="store_true", help="Show more description text")
+
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("admit", help="Mark jobs as described").add_argument("jids", nargs="+")
+    sub.add_parser("reject", help="Skip (garbage/closed)").add_argument("jids", nargs="+")
+    sub.add_parser("flag", help="Mark as auth wall").add_argument("jids", nargs="*")
+    sub.add_parser("open", help="Open job in Chrome").add_argument("jid", nargs="?")
+    sub.add_parser("retry", help="Retry failed fetches")
+    sub.add_parser("retry-skipped", help="Reset skipped back to extracted")
+    sub.add_parser("status", help="Pipeline state")
+    sub.add_parser("help", help="This message")
+
+    args = parser.parse_args()
+    
+    if args.command == "admit":
+        cmd_admit(*args.jids)
+    elif args.command == "reject":
+        cmd_reject(*args.jids)
+    elif args.command == "flag":
+        cmd_flag(*args.jids)
+    elif args.command == "open":
+        cmd_open(args.jid)
+    elif args.command == "retry":
+        cmd_retry(use_playwright=not args.curl)
+    elif args.command == "retry-skipped":
+        cmd_retry_skipped()
+    elif args.command == "status":
+        cmd_status()
+    elif args.command == "help" or args.command is None:
+        cmd_help()
     else:
-        print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
-        sys.exit(1)
+        cmd_fetch(
+            count=args.count,
+            use_playwright=not args.curl,
+            force=args.force,
+            refresh=args.refresh,
+            verbose=args.verbose,
+        )
 
 
 if __name__ == "__main__":
