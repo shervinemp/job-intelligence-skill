@@ -91,10 +91,16 @@ def fuzzy_match(question_text, ca):
         return val
     return None
 
-def click_option(page, opt, tag_type):
+def click_option_value(page, opt, tag_type):
+    """Click a value. Tries visible buttons first (Ashby style), then radio inputs."""
+    # Visible button match: exact, or opt starts with button text
+    clicked = page.evaluate("(opt) => { const btns = document.querySelectorAll('button'); for (const b of btns) { const t = (b.textContent||'').trim(); if (t === opt || opt.startsWith(t)) { if (t.length > 1 && b.offsetParent !== null) { b.click(); return true; } } } return false; }", opt)
+    if clicked:
+        return True
+    # Fallback: click the radio input
     if tag_type == 'radio_group':
         return page.evaluate("(opt) => { const rs = document.querySelectorAll('input[type=\"radio\"]'); for (const r of rs) { const lbl = document.querySelector('label[for=\"' + r.id + '\"]'); if (lbl && lbl.textContent.trim() === opt) { r.click(); return true; } } return false; }", opt)
-    return page.evaluate("(opt) => { const secs = document.querySelectorAll('div[class*=\"question\"], fieldset, div[class*=\"field\"], li[class*=\"field\"]'); for (const sec of secs) { const btns = sec.querySelectorAll('button'); for (const b of btns) { if (b.textContent.trim() === opt) { b.click(); return true; } } } return false; }", opt)
+    return False
 
 b, ctx = connect()
 ext_url = state.get("external_url", "")
@@ -148,6 +154,7 @@ form = page.evaluate("""() => {
             id: el.id, name: el.getAttribute('name')||'',
             label: label.replace(/\\s+/g, ' ').trim().slice(0, 80),
             required: el.required, value: el.value||'',
+            _checked: el.type === 'radio' ? el.checked : true,
             options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0, 12) : [],
         };
     });
@@ -192,7 +199,10 @@ first_name = profile.get("first_name", "")
 last_name = profile.get("last_name", "")
 
 for f in form:
-    if f['value'] and f['value'] != 'Select an option':
+    # Check actual checked state for radios
+    if f['type'] == 'radio' and not f.get('_checked', True):
+        pass  # process below
+    elif f['value'] and f['value'] != 'Select an option':
         continue
 
     # File: upload to ALL file inputs (some are drop zones, some are real)
@@ -218,7 +228,9 @@ for f in form:
     if f['type'] == 'radio':
         if f['name'] in handled_radios: continue
         handled_radios.add(f['name'])
-        radios = [rf for rf in form if rf.get('name') == f['name']]
+        radios = [rf for rf in form if rf.get('name') == f['name'] and rf.get('type') == 'radio']
+        # Skip if any radio in group is already checked
+        if any(rf.get('_checked') for rf in radios): continue
         opts = [rf['label'] for rf in radios]
         q_label = opts[0].split(' - ')[0] if ' - ' in opts[0] else opts[0]
         # Check answers
@@ -231,7 +243,7 @@ for f in form:
         if ans:
             for opt in opts:
                 if ans.lower() in opt.lower() or opt.lower() in ans.lower():
-                    if click_option(page, opt, 'radio_group'):
+                    if click_option_value(page, opt, 'radio_group'):
                         filled += 1; print(f"  ANSWERED: '{q_label[:40]}' -> '{ans}'", file=sys.stderr)
                         save_answer(q_label, ans)
                     break
@@ -271,7 +283,7 @@ for f in form:
         elif f['tag'] == 'button_group' and f.get('options'):
             for opt in f['options']:
                 if ans.lower() in opt.lower() or opt.lower() in ans.lower():
-                    if click_option(page, opt, 'button_group'):
+                    if click_option_value(page, opt, 'button_group'):
                         filled += 1; print(f"  ANSWERED: '{lbl[:40]}' -> '{ans}'", file=sys.stderr)
                         save_answer(lbl, ans)
                     break
