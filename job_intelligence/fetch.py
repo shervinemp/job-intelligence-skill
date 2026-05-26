@@ -180,12 +180,14 @@ def cmd_flag(*jids):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_admit(*jids):
+def cmd_admit(*jids, **fields):
     state = load()
     count = 0
     for jid in jids:
         if jid in state.get("jobs", {}) and desc_exists(jid):
-            advance(state["jobs"][jid], "described")
+            entry = state["jobs"][jid]
+            updates = {k: v for k, v in fields.items() if v is not None}
+            advance(entry, "described", **updates)
             count += 1
     print(f"ADMITTED:{count}", file=sys.stderr)
     if count:
@@ -325,7 +327,13 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Show more description text")
 
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("admit", help="Mark jobs as described").add_argument("jids", nargs="+")
+    admit_p = sub.add_parser("admit", help="Mark jobs as described")
+    admit_p.add_argument("jids", nargs="+")
+    admit_p.add_argument("--title", help="Job title")
+    admit_p.add_argument("--company", help="Company name")
+    admit_p.add_argument("--location", help="Job location")
+    admit_p.add_argument("--salary", help="Salary range")
+    admit_p.add_argument("--url", help="External apply URL")
     sub.add_parser("reject", help="Skip (garbage/closed)").add_argument("jids", nargs="+")
     sub.add_parser("flag", help="Mark as auth wall").add_argument("jids", nargs="*")
     sub.add_parser("open", help="Open job in Chrome").add_argument("jid", nargs="?")
@@ -337,7 +345,7 @@ def main():
     args = parser.parse_args()
     
     if args.command == "admit":
-        cmd_admit(*args.jids)
+        cmd_admit(*args.jids, title=args.title, company=args.company, location=args.location, salary=args.salary, url=args.url)
     elif args.command == "reject":
         cmd_reject(*args.jids)
     elif args.command == "flag":
