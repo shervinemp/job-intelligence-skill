@@ -495,7 +495,22 @@ def main():
         elif cmd == "skip":
             cmd_skip(*sys.argv[2:])
         elif cmd == "redo":
-            cmd_redo(sys.argv[2] if len(sys.argv) > 2 else None)
+            from_stages = None
+            if "--from" in sys.argv:
+                i = sys.argv.index("--from")
+                if i + 1 < len(sys.argv):
+                    from_stages = [s.strip() for s in sys.argv[i + 1].split(",")]
+            if from_stages:
+                state = load()
+                targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in from_stages]
+                count = 0
+                for jid, entry in targets:
+                    advance(entry, "described", error=None)
+                    print(f"  {jid}: {entry.get('stage')} -> described", file=sys.stderr)
+                    count += 1
+                print(f"Redo: {count} jobs", file=sys.stderr)
+            else:
+                cmd_redo(sys.argv[2] if len(sys.argv) > 2 else None)
         elif cmd == "retry":
             cmd_retry()
         elif cmd == "reset":
