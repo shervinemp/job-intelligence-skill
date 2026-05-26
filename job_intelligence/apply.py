@@ -46,13 +46,13 @@ def run_script(name, jid, extra_args=None):
     return r.returncode
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python3 apply.py <step> <jid> [extra args...]", file=sys.stderr)
-        print(f"Steps: {', '.join(SCRIPTS.keys())}", file=sys.stderr)
-        sys.exit(1)
-    step, jid = sys.argv[1], sys.argv[2]
-    extra = sys.argv[3:] if len(sys.argv) > 3 else None
-    run_script(step, jid, extra_args=extra)
+    import argparse
+    parser = argparse.ArgumentParser(prog="apply.py", description="Run atomic apply scripts")
+    parser.add_argument("step", choices=list(SCRIPTS.keys()), help="Which step to run")
+    parser.add_argument("jid", help="Job ID")
+    parser.add_argument("extra", nargs=argparse.REMAINDER, help="Extra args for the step script")
+    args = parser.parse_args()
+    run_script(args.step, args.jid, extra_args=args.extra or None)
 
 if __name__ == "__main__":
     main()

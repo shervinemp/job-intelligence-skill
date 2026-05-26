@@ -206,30 +206,15 @@ def cmd_list():
 
 
 if __name__ == "__main__":
-    url = DEFAULT_URL
-    max_jobs = None
-    max_pages = DEFAULT_MAX_PAGES
-    list_only = False
+    import argparse
+    parser = argparse.ArgumentParser(prog="linkedin.py", description="Scrape LinkedIn jobs")
+    parser.add_argument("--url", default=DEFAULT_URL, help="LinkedIn search URL")
+    parser.add_argument("--max", type=int, default=None, help="Max jobs to scrape")
+    parser.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES, help="Max pages")
+    parser.add_argument("--list", action="store_true", help="List jobs without scraping")
+    args = parser.parse_args()
 
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        if args[i] == '--url' and i + 1 < len(args):
-            url = args[i + 1]
-            i += 2
-        elif args[i] == '--max' and i + 1 < len(args):
-            max_jobs = int(args[i + 1])
-            i += 2
-        elif args[i] == '--max-pages' and i + 1 < len(args):
-            max_pages = int(args[i + 1])
-            i += 2
-        elif args[i] == '--list':
-            list_only = True
-            i += 1
-        else:
-            i += 1
-
-    if list_only:
+    if args.list:
         cmd_list()
     else:
-        scrape_linkedin(url, max_jobs, max_pages)
+        scrape_linkedin(args.url, args.max, args.max_pages)

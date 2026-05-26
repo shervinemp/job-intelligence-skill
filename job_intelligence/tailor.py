@@ -493,74 +493,81 @@ def _parse_count():
 
 
 def main():
-    subcommands = {"done", "skip", "redo", "retry", "reset", "status", "resume", "ready", "list-gems", "help"}
-    if len(sys.argv) > 1 and sys.argv[1] in subcommands:
-        cmd = sys.argv[1]
-        if cmd == "done":
-            cmd_done(*sys.argv[2:])
-        elif cmd == "skip":
-            cmd_skip(*sys.argv[2:])
-        elif cmd == "redo":
-            from_stages = None
-            if "--from" in sys.argv:
-                i = sys.argv.index("--from")
-                if i + 1 < len(sys.argv):
-                    from_stages = [s.strip() for s in sys.argv[i + 1].split(",")]
-            if from_stages:
-                state = load()
-                targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in from_stages]
-                count = 0
-                for jid, entry in targets:
-                    advance(entry, "described", error=None)
-                    print(f"  {jid}: {entry.get('stage')} -> described", file=sys.stderr)
-                    count += 1
-                print(f"Redo: {count} jobs", file=sys.stderr)
-            else:
-                cmd_redo(sys.argv[2] if len(sys.argv) > 2 else None)
-        elif cmd == "retry":
-            cmd_retry()
-        elif cmd == "reset":
-            hard = "--hard" in sys.argv
-            from_stages = None
-            if "--from" in sys.argv:
-                i = sys.argv.index("--from")
-                if i + 1 < len(sys.argv):
-                    from_stages = [s.strip() for s in sys.argv[i + 1].split(",")]
-            job_id = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
-            if job_id and from_stages:
-                print("Use either <jid> or --from, not both.", file=sys.stderr)
-                sys.exit(1)
-            cmd_reset(job_id=job_id, hard=hard, from_stages=from_stages)
-        elif cmd == "status":
-            cmd_status()
-        elif cmd == "resume":
-            cmd_resume(sys.argv[2] if len(sys.argv) > 2 else None)
-        elif cmd == "ready":
-            cmd_ready(sys.argv[2] if len(sys.argv) > 2 else None)
-        elif cmd == "list-gems":
-            list_gems()
-        elif cmd == "help":
-            cmd_help()
-    elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
-        gem = None
-        if "--gem" in sys.argv:
-            i = sys.argv.index("--gem")
-            if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
-                gem = sys.argv[i + 1]
-        if "--relentless" in sys.argv:
-            cmd_relentless(
-                count=_parse_count() or 1,
-                gem=gem,
-            )
+    import argparse
+    parser = argparse.ArgumentParser(prog="tailor.py", description="Tailor CVs via Gemini Web")
+    parser.add_argument("--count", type=int, default=1, help="Jobs to process (default 1, -1 = all)")
+    parser.add_argument("--no-open", action="store_true", help="Skip opening browser for each job")
+    parser.add_argument("--relentless", action="store_true", help="Retry on rate limit with idle loop")
+    parser.add_argument("--gem", help="Gem alias or ID")
+    
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("done", help="Mark job as applied").add_argument("jids", nargs="+")
+    sub.add_parser("skip", help="Skip job").add_argument("jids", nargs="+")
+    redo_p = sub.add_parser("redo", help="Re-tailor from described")
+    redo_p.add_argument("jid", nargs="?")
+    redo_p.add_argument("--from", dest="from_stages", help="Batch redo by stage (comma-separated)")
+    sub.add_parser("retry", help="Retry failed jobs")
+    reset_p = sub.add_parser("reset", help="Reset job stage")
+    reset_p.add_argument("target", nargs="?", help="jid or --all")
+    reset_p.add_argument("--hard", action="store_true", help="Reset to extracted instead of described")
+    reset_p.add_argument("--from", dest="from_stages", help="Reset by stage (comma-separated)")
+    sub.add_parser("status", help="Pipeline state")
+    sub.add_parser("resume", help="Show application files").add_argument("jid", nargs="?")
+    sub.add_parser("ready", help="Open URL + files").add_argument("jid", nargs="?")
+    sub.add_parser("list-gems", help="List Gemini gems")
+    
+    args = parser.parse_args()
+    
+    if args.command == "done":
+        cmd_done(*args.jids)
+    elif args.command == "skip":
+        cmd_skip(*args.jids)
+    elif args.command == "redo":
+        if getattr(args, 'from_stages', None):
+            state = load()
+            stages = [s.strip() for s in args.from_stages.split(",")]
+            targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in stages]
+            count = 0
+            for jid, entry in targets:
+                advance(entry, "described", error=None)
+                print(f"  {jid}: {entry.get('stage')} -> described", file=sys.stderr)
+                count += 1
+            print(f"Redo: {count} jobs", file=sys.stderr)
         else:
-            cmd_craft(
-                count=_parse_count() or 1,
-                no_open="--no-open" in sys.argv,
-                gem=gem,
-            )
+            cmd_redo(args.jid)
+    elif args.command == "retry":
+        cmd_retry()
+    elif args.command == "reset":
+        target = args.target
+        hard = args.hard
+        from_stages = getattr(args, 'from_stages', None)
+        if from_stages:
+            from_stages = [s.strip() for s in from_stages.split(",")]
+            cmd_reset(from_stages=from_stages, hard=hard)
+        elif target == "--all":
+            cmd_reset(job_id="--all", hard=hard)
+        elif target:
+            cmd_reset(job_id=target, hard=hard)
+        else:
+            parser.print_help()
+    elif args.command == "status":
+        cmd_status()
+    elif args.command == "resume":
+        cmd_resume(args.jid)
+    elif args.command == "ready":
+        cmd_ready(args.jid)
+    elif args.command == "list-gems":
+        list_gems()
+    elif args.command == "help" or args.command is None:
+        cmd_help()
     else:
-        print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
-        sys.exit(1)
+        # No subcommand — craft mode
+        count = args.count
+        gem = args.gem
+        if args.relentless:
+            cmd_relentless(count=count if count != -1 else -1, gem=gem)
+        else:
+            cmd_craft(count=count if count != -1 else 999, no_open=args.no_open, gem=gem)
 
 
 if __name__ == "__main__":

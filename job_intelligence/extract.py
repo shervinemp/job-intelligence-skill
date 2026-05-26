@@ -286,41 +286,53 @@ def cmd_help():
 
 
 def main():
-    subcommands = {"submit", "reset", "status", "admit", "reject", "review", "help"}
-    if len(sys.argv) > 1 and sys.argv[1] in subcommands:
-        cmd = sys.argv[1]
-        if cmd == "submit":
-            if len(sys.argv) == 3:
-                cmd_submit(sys.argv[2])
-            elif len(sys.argv) >= 4:
-                cmd_submit(sys.argv[2], sys.argv[3])
-            else:
-                print("Usage: python3 extract.py submit [<tid>] '<json>'", file=sys.stderr)
-                sys.exit(1)
-        elif cmd == "reset":
-            cmd_reset(*sys.argv[2:])
-        elif cmd == "status":
-            cmd_status()
-        elif cmd == "admit":
-            cmd_admit(*sys.argv[2:])
-        elif cmd == "reject":
-            cmd_reject(*sys.argv[2:])
-        elif cmd == "review":
-            count = 3
-            if "--count" in sys.argv:
-                i = sys.argv.index("--count")
-                if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
-                    count = int(sys.argv[i + 1])
-            cmd_review(count)
-        elif cmd == "help":
-            cmd_help()
-    elif len(sys.argv) == 1 or sys.argv[1].startswith("--"):
-        cmd_auto()
-    else:
-        print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
-        print("  See 'extract.py help' for usage", file=sys.stderr)
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser(prog="extract.py", description="Extract job URLs from staged emails")
+    parser.add_argument("--count", type=int, default=3, help="Jobs to review (default 3)")
+    
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("auto", help="Auto-extract URLs from staged emails")
+    submit_p = sub.add_parser("submit", help="Submit a job entry")
+    submit_p.add_argument("tid", nargs="?")
+    submit_p.add_argument("json_data", nargs="?")
+    sub.add_parser("reset", help="Reset extraction state").add_argument("args", nargs="*")
+    sub.add_parser("status", help="Pipeline state")
+    admit_p = sub.add_parser("admit", help="Admit an extracted job")
+    admit_p.add_argument("jids", nargs="+")
+    admit_p.add_argument("--category", help="Job category")
+    reject_p = sub.add_parser("reject", help="Reject an extracted job")
+    reject_p.add_argument("jids", nargs="+")
+    sub.add_parser("review", help="Review extracted jobs for admit/reject")
+    sub.add_parser("help", help="This message")
 
+    args = parser.parse_args()
+    
+    if args.command == "submit":
+        if args.tid and args.json_data:
+            cmd_submit(args.tid, args.json_data)
+        elif args.tid:
+            cmd_submit(args.tid)
+        else:
+            parser.print_help()
+    elif args.command == "reset":
+        cmd_reset(*args.args)
+    elif args.command == "status":
+        cmd_status()
+    elif args.command == "admit":
+        if args.category:
+            cmd_admit(args.category, *args.jids)
+        else:
+            cmd_admit(*args.jids)
+    elif args.command == "reject":
+        cmd_reject(*args.jids)
+    elif args.command == "review":
+        cmd_review(args.count)
+    elif args.command == "auto" or args.command is None:
+        cmd_auto()
+    elif args.command == "help":
+        cmd_help()
+    else:
+        cmd_auto()
 
 if __name__ == "__main__":
     main()

@@ -148,29 +148,21 @@ def stage_emails():
 
 
 if __name__ == "__main__":
-    days = None
-    refresh = False
-    remaining = []
-    i = 1
-    while i < len(sys.argv):
-        a = sys.argv[i]
-        if a == "--refresh":
-            refresh = True
-        elif a == "--days" and i + 1 < len(sys.argv):
-            days = int(sys.argv[i + 1])
-            i += 1
-        else:
-            remaining.append(a)
-        i += 1
+    import argparse
+    parser = argparse.ArgumentParser(prog="stage_emails.py", description="Stage job emails from Gmail")
+    parser.add_argument("--days", type=int, default=None, help="Search back N days")
+    parser.add_argument("--refresh", action="store_true", help="Clear state and re-fetch")
+    args, remaining = parser.parse_known_args()
     sys.argv = remaining or [sys.argv[0]]
 
-    if refresh:
+    if args.refresh:
         search_threads_clear()
         setting_set("staged_ids", [])
         setting_set("skipped_ids", [])
         setting_set("last_searched_at", None)
 
     query = _load_query()
+    days = args.days
     last_searched = setting_get("last_searched_at")
     if days is None and last_searched:
         cutoff = max(datetime.fromisoformat(last_searched), datetime.now() - timedelta(days=14))
