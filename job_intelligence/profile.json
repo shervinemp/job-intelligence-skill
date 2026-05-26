@@ -30,7 +30,6 @@
     "portfolio_url": "https://shervinemp.github.io/portfolio",
     "github_url": "https://github.com/shervinemp",
     "website_url": "https://shervinemp.github.io/portfolio",
-    "visa_sponsorship": "No",
     "work_authorization": "Yes",
     "years_of_experience": "5",
     "gender": "Prefer not to say",
@@ -39,7 +38,6 @@
     "how_did_you_hear": "LinkedIn",
     "willing_to_relocate": "Yes",
     "authorized_to_work": "Yes",
-    "require_visa": "No",
     "current_ctc": "",
     "expected_ctc": "",
     "notice_period": "",
@@ -48,6 +46,8 @@
     "willing_to_commute": "Yes",
     "email": "shervin.naseri@gmail.com",
     "phone_number": "+1 (343) 558-1744",
-    "have_you_ever_been": "No"
+    "have_you_ever_been": "No",
+    "full_name": "Shervin Naseri",
+    "linkedin_profile_link": "https://www.linkedin.com/in/shervin-naseri-b3a016b0"
   }
 }
