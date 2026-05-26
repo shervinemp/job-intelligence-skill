@@ -536,14 +536,14 @@ async function dump(page) {
     let og = await openGem(page, opts.gem);
     if (og.timedOut) {
       const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: og.resetsAt || 'unknown' });
-      console.error(out); try { await page.close(); } catch (e) {} process.exit(2);
+      console.error(out); try { await page.close(); } catch (e) {} await new Promise(r => setTimeout(r, 500)); process.exit(2);
     }
 
     const modeSet = await ensureMode(page);
     if (modeSet.status === 'timedOut') {
       const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: modeSet.resetsAt || 'unknown' });
       console.error(out);
-      try { await page.close(); } catch (e) {} process.exit(2);
+      try { await page.close(); } catch (e) {} await new Promise(r => setTimeout(r, 500)); process.exit(2);
     }
     if (modeSet.status !== 'ok') {
       die('Could not set Flash + Extended mode.');
