@@ -103,6 +103,10 @@ def generate_tailored_docs(job_entry, gem=None):
     RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
+    # Clear stale response file so a rate-limited exit doesn't reuse old content
+    stale = os.path.join(app_dir, "gemini_response.txt")
+    if os.path.exists(stale):
+        os.remove(stale)
     success, output = call_gemini_node(
         [prompt, "--app-dir", app_dir], timeout_seconds=600, gem=gem
     )
@@ -156,7 +160,8 @@ def cmd_craft(count=1, no_open=False, gem=None):
         return
 
     processed = failed_count = 0
-    for jid, entry in described[:count]:
+    batch = described if count == -1 else described[:count]
+    for jid, entry in batch:
         title = entry.get("title", "?")
         company = entry.get("company", "?")
         url = entry.get("url", "")
@@ -471,9 +476,11 @@ def _parse_count():
     if "--count" in sys.argv:
         i = sys.argv.index("--count")
         if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
-            print("Warning: --count requires a number, using default 1", file=sys.stderr)
             return None
         return int(sys.argv[i + 1])
+    for arg in sys.argv:
+        if arg.startswith("--count="):
+            return int(arg.split("=", 1)[1])
     return None
 
 
