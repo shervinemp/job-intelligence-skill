@@ -3,12 +3,7 @@
   "first_name": "Shervin",
   "last_name": "Naseri",
   "email": "shervin.naseri@gmail.com",
-  "phone": "+1 (343) 558-1744",
   "location": "Ottawa, Ontario, Canada",
-  "linkedin": "https://www.linkedin.com/in/shervin-naseri-b3a016b0",
-  "github": "https://github.com/shervinemp",
-  "portfolio": "https://shervinemp.github.io/portfolio",
-  "website": "https://shervinemp.github.io/portfolio",
   "work_experience": [
     {
       "title": "",
@@ -51,6 +46,5 @@
     "cover_letter_intro": "",
     "previously_employed": "No",
     "willing_to_commute": "Yes"
-  },
-  "name": "Shervin Naseri"
+  }
 }
