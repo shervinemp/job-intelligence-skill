@@ -328,6 +328,7 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Show more description text")
 
     sub = parser.add_subparsers(dest="command")
+    sub.required = False
     admit_p = sub.add_parser("admit", help="Mark jobs as described")
     admit_p.add_argument("jids", nargs="+")
     admit_p.add_argument("--title", help="Job title")
@@ -359,7 +360,7 @@ def main():
         cmd_retry_skipped()
     elif args.command == "status":
         cmd_status()
-    elif args.command == "help" or args.command is None:
+    elif args.command == "help":
         cmd_help()
     else:
         cmd_fetch(
