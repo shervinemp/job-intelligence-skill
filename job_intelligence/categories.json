@@ -1,10 +1,10 @@
 {
   "tech": {
-    "gem": "3697c8c02b40",
-    "desc": "Building or maintaining technology is the primary function: software, data, ML, IT, backend, frontend, DevOps, cloud, infrastructure, security."
+    "gem": "optimizer_tech",
+    "desc": "Building or maintaining technology: software, data, ML, IT, backend, frontend, DevOps, cloud, infra, security."
   },
   "general": {
-    "gem": "3697c8c02b40",
-    "desc": "Jobs requiring no specialized skills or experience: retail, food service, warehouse, hospitality, cleaning, labor. No degree or certification needed."
+    "gem": "optimizer_general",
+    "desc": "No specialized skills needed: retail, food service, warehouse, hospitality, cleaning, labor."
   }
 }

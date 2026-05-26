@@ -500,7 +500,7 @@ async function dump(page) {
     if (opts.action === 'dump') {
       await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
       await wait(5000);
-      await dump(page); browser.close(); return;
+      await dump(page); await browser.close().catch(()=>{}); return;
     }
 
     if (opts.action === 'state') {
@@ -510,14 +510,14 @@ async function dump(page) {
       }
       const mode = await checkMode(page);
       console.log(`URL: ${page.url()}\nTitle: ${await page.title()}\nMode: ${mode.activeTier} | Thinking: ${mode.thinkingLevel}`);
-      await saveSession(page); browser.close(); return;
+      await saveSession(page); await browser.close().catch(()=>{}); return;
     }
 
     if (opts.action === 'login') {
       const ok = await page.evaluate(() => (document.body.innerText.includes('New chat') || document.body.innerText.includes('Conversation with')) && !document.body.innerText.includes('Sign in'));
       log(ok ? 'Valid.' : 'Not signed in.');
       if (ok) await saveSession(page);
-      browser.close(); return;
+      await browser.close().catch(()=>{}); return;
     }
 
     if (opts.action === 'gems') {
@@ -528,7 +528,7 @@ async function dump(page) {
       });
       console.log(`${mode.activeTier} | Thinking: ${mode.thinkingLevel}\n`);
       if (gems.length) gems.forEach(g => console.log(`  - ${g}`));
-      await saveSession(page); browser.close(); return;
+      await saveSession(page); await browser.close().catch(()=>{}); return;
     }
 
     if (!opts.prompt) die('Usage: node gemini.js "your prompt"');
