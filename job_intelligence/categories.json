@@ -1,10 +1,10 @@
 {
   "tech": {
-    "gem": "optimizer",
+    "gem": "3697c8c02b40",
     "desc": "Software engineering, data, ML"
   },
   "general": {
-    "gem": null,
-    "desc": "Non-technical or other"
+    "gem": "3697c8c02b40",
+    "desc": "Any legitimate job, not specifically tech"
   }
 }
