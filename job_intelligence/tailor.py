@@ -448,12 +448,17 @@ def cmd_redo(job_id):
     print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_reset(job_id=None, hard=False):
+def cmd_reset(job_id=None, hard=False, from_stages=None):
     state = load()
     if not state.get("jobs"):
         print("No jobs.", file=sys.stderr)
         return
-    if job_id == "--all":
+    if from_stages:
+        targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in from_stages]
+        if not targets:
+            print(f"No jobs with stage in {from_stages}.", file=sys.stderr)
+            return
+    elif job_id == "--all":
         targets = list(state["jobs"].items())
     elif job_id:
         if job_id not in state["jobs"]:
@@ -495,8 +500,16 @@ def main():
             cmd_retry()
         elif cmd == "reset":
             hard = "--hard" in sys.argv
-            job_id = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "--hard" else None
-            cmd_reset(job_id=job_id, hard=hard)
+            from_stages = None
+            if "--from" in sys.argv:
+                i = sys.argv.index("--from")
+                if i + 1 < len(sys.argv):
+                    from_stages = [s.strip() for s in sys.argv[i + 1].split(",")]
+            job_id = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
+            if job_id and from_stages:
+                print("Use either <jid> or --from, not both.", file=sys.stderr)
+                sys.exit(1)
+            cmd_reset(job_id=job_id, hard=hard, from_stages=from_stages)
         elif cmd == "status":
             cmd_status()
         elif cmd == "resume":
