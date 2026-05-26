@@ -1,10 +1,10 @@
 {
   "tech": {
     "gem": "3697c8c02b40",
-    "desc": "Professional roles in software, data, ML, engineering. Anything requiring technical skills."
+    "desc": "Building or maintaining technology is the primary function: software, data, ML, IT, backend, frontend, DevOps, cloud, infrastructure, security."
   },
   "general": {
     "gem": "3697c8c02b40",
-    "desc": "Everything else \u2014 retail, warehouse, admin, hospitality. Not ideal but worth trying in this market."
+    "desc": "Jobs requiring no specialized skills or experience: retail, food service, warehouse, hospitality, cleaning, labor. No degree or certification needed."
   }
 }
