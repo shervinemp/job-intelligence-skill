@@ -8,7 +8,7 @@
   "linkedin": "https://www.linkedin.com/in/shervin-naseri-b3a016b0",
   "github": "https://github.com/shervinemp",
   "portfolio": "https://shervinemp.github.io/portfolio",
-  "website": "",
+  "website": "https://shervinemp.github.io/portfolio",
   "work_experience": [
     {
       "title": "",
@@ -48,6 +48,9 @@
     "current_ctc": "",
     "expected_ctc": "",
     "notice_period": "",
-    "cover_letter_intro": ""
-  }
+    "cover_letter_intro": "",
+    "previously_employed": "No",
+    "willing_to_commute": "Yes"
+  },
+  "name": "Shervin Naseri"
 }
