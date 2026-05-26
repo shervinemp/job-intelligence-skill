@@ -3,9 +3,10 @@
 Navigates to the external URL if needed, identifies the ATS,
 and reports all form fields for review.
 """
-import json, os, sys, time, re
+import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 from lib.chrome_manager import connect
+from apply.common.platforms import detect_platform
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 with open(STATE_PATH) as f:
@@ -16,26 +17,13 @@ if not external_url:
     print("ERROR: no external URL in state", file=sys.stderr)
     sys.exit(1)
 
-# Detect platform from URL
-def detect_platform(url):
-    host = url.split("/")[2] if "//" in url else ""
-    for kw, plat in [
-        ("greenhouse", "greenhouse"), ("lever.co", "lever"),
-        ("myworkdayjobs", "workday"), ("workday.com", "workday"),
-        ("ashbyhq", "ashby"), ("icims", "icims"), ("taleo", "taleo"),
-        ("smartrecruiters", "smartrecruiters"), ("bamboohr", "bamboohr"),
-    ]:
-        if kw in host or kw in url:
-            return plat
-    return "unknown"
-
 plat = detect_platform(external_url)
 print(f"Platform: {plat}", file=sys.stderr)
 
 b, ctx = connect()
 page = None
 for p in ctx.pages:
-    if external_url in p.url or (plat != "unknown" and plat in p.url):
+    if external_url in p.url or (plat and plat in p.url):
         page = p
         break
 if not page:
