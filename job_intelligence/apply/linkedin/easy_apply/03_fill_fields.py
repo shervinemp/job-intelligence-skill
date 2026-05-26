@@ -103,6 +103,9 @@ if os.path.isdir(results_dir):
             break
 
 for f_info in fields_result:
+    # Skip already-filled fields (non-default values)
+    if f_info["value"] and f_info["value"] != "Select an option":
+        continue
     val = resolve(f_info["label"], profile, ca)
     if val is None:
         if f_info["required"] and (not f_info["value"] or f_info["value"] == "Select an option"):
