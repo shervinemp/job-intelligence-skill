@@ -92,15 +92,15 @@ def fuzzy_match(question_text, ca):
     return None
 
 def click_option_value(page, opt, tag_type):
-    """Click a value. Tries visible buttons first (Ashby style), then radio inputs."""
-    # Visible button match: exact, or opt starts with button text
-    clicked = page.evaluate("(opt) => { const btns = document.querySelectorAll('button'); for (const b of btns) { const t = (b.textContent||'').trim(); if (t === opt || opt.startsWith(t)) { if (t.length > 1 && b.offsetParent !== null) { b.click(); return true; } } } return false; }", opt)
+    """Click a value. Priority: exact button match > section-scoped button prefix > radio click."""
+    # 1. Exact button match (rarest, most reliable)
+    clicked = page.evaluate("(opt) => { const btns = document.querySelectorAll('button'); for (const b of btns) { if ((b.textContent||'').trim() === opt && b.offsetParent !== null) { b.click(); return true; } } return false; }", opt)
     if clicked:
         return True
-    # Fallback: click the radio input
+    # 2. Find the radio with this label, then click the button in its section that matches by prefix
     if tag_type == 'radio_group':
-        return page.evaluate("(opt) => { const rs = document.querySelectorAll('input[type=\"radio\"]'); for (const r of rs) { const lbl = document.querySelector('label[for=\"' + r.id + '\"]'); if (lbl && lbl.textContent.trim() === opt) { r.click(); return true; } } return false; }", opt)
-    return False
+        clicked = page.evaluate("(opt) => { const rs = document.querySelectorAll('input[type=\"radio\"]'); for (const r of rs) { const lbl = document.querySelector('label[for=\"' + r.id + '\"]'); if (lbl && lbl.textContent.trim() === opt) { const sec = r.closest('div, fieldset, li, section'); if (sec) { const btns = sec.querySelectorAll('button'); const firstWord = opt.split(/[ ,]+/)[0]; for (const b of btns) { if ((b.textContent||'').trim() === firstWord && b.offsetParent !== null) { b.click(); return true; } } } r.click(); return true; } } return false; }", opt)
+    return clicked or False
 
 b, ctx = connect()
 ext_url = state.get("external_url", "")
