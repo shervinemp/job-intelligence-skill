@@ -9,6 +9,7 @@ import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn
+from apply.common.platforms import detect_platform, check_page, ALREADY_APPLIED, LOGIN_WALL
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 
@@ -18,27 +19,16 @@ r = c.execute("SELECT url, title, company FROM jobs WHERE id=?", (jid,)).fetchon
 url, title, company = r["url"], r["title"], r["company"]
 print(f"JOB: {title} @ {company}", file=sys.stderr)
 
-# Detect platform from URL
-def detect_platform(url):
-    host = url.split("/")[2] if "//" in url else ""
-    for kw, plat in [
-        ("greenhouse", "greenhouse"), ("lever.co", "lever"),
-        ("myworkdayjobs", "workday"), ("workday.com", "workday"),
-        ("ashbyhq", "ashby"), ("icims", "icims"), ("taleo", "taleo"),
-        ("smartrecruiters", "smartrecruiters"), ("bamboohr", "bamboohr"),
-        ("jobright.ai", "jobright"),
-    ]:
-        if kw in host or kw in url:
-            return plat
-    return "unknown"
-
 plat = detect_platform(url)
-print(f"Platform: {plat}", file=sys.stderr)
 
-if plat == "jobright":
+# Aggregator check (not a real ATS)
+if plat is None and "jobright.ai" in url:
+    print("Platform: jobright (aggregator)", file=sys.stderr)
     print("TYPE: aggregator (no apply form)", file=sys.stderr)
     print("NEXT: none", file=sys.stderr)
     sys.exit(0)
+
+print(f"Platform: {plat}", file=sys.stderr)
 
 b, ctx = connect()
 p = ctx.new_page()
