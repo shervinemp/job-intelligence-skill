@@ -189,13 +189,15 @@ def cmd_craft(count=1, no_open=False, gem=None):
                     print(f"  Complete -> {scripts_str}", file=sys.stderr)
                 processed += 1
             else:
-                advance(entry, "failed", error=str(result)[:200])
                 err_str = str(result)[:120]
                 if "RATE_LIMIT" in err_str:
                     reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
                     print(f"  RATE_LIMIT {jid} — resets {reset_time}", file=sys.stderr)
-                else:
-                    print(f"  FAILED {jid} {err_str}", file=sys.stderr)
+                    # Don't advance to failed — leave at described for retry
+                    failed_count += 1
+                    break  # Stop processing more jobs — rate limit persists
+                advance(entry, "failed", error=str(result)[:200])
+                print(f"  FAILED {jid} {err_str}", file=sys.stderr)
                 failed_count += 1
         except Exception as e:
             advance(entry, "failed", error=str(e)[:200])
@@ -349,6 +351,61 @@ def cmd_done(*job_ids):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
+def cmd_relentless(count, gem=None):
+    """Like cmd_craft but retries on rate limit instead of leaving jobs at described.
+    --count N: process N described jobs
+    --count -1: process ALL described jobs
+    On rate limit: parse reset time, idle until it passes, then retry.
+    """
+    import re as _re, time as _time, subprocess as _sp, sys as _sys, os as _os
+    from datetime import datetime
+
+    _YEAR = datetime.now().year
+
+    def wait_until(target_str):
+        for fmt in [f"%b %d, %I:%M %p, %Y", f"%B %d, %I:%M %p, %Y"]:
+            try:
+                target = datetime.strptime(target_str + f", {_YEAR}", fmt)
+                wait = (target - datetime.now()).total_seconds()
+                if 0 < wait < 14400:
+                    print(f"Rate limit — sleeping {wait:.0f}s", file=sys.stderr)
+                    _time.sleep(wait)
+                    return
+            except ValueError:
+                continue
+        print(f"Rate limit — unknown reset '{target_str}', sleeping 120s", file=sys.stderr)
+        _time.sleep(120)
+
+    tailor_script = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "tailor.py")
+
+    while True:
+        r = _sp.run(
+            [_sys.executable, tailor_script, f"--count={count}", "--no-open"],
+            capture_output=True, text=True, timeout=300,
+        )
+        output = (r.stdout or "") + (r.stderr or "")
+
+        if "ALL_DONE" in output or "NO_PENDING" in output:
+            s = pipeline_status()
+            print(f"DONE: {s['stages'].get('tailored',0)} tailored")
+            break
+
+        m = _re.search(r'"resetsAt"\s*:\s*"([^"]+)"', output)
+        if m:
+            wait_until(m.group(1))
+            # jobs stayed at 'described' — loop retries them
+            continue
+
+        s = pipeline_status()
+        if s.get("stages", {}).get("described", 0) == 0:
+            print(f"DONE: {s['stages'].get('tailored',0)} tailored")
+            break
+        
+        if count != -1:
+            # Non-infinite: we processed what was asked
+            break
+
+
 def cmd_help():
     print("Usage:", file=sys.stderr)
     print("  [--count N] [--no-open] [--gem GEM]     Craft CVs (default 1 with handoff)", file=sys.stderr)
@@ -452,11 +509,17 @@ def main():
             i = sys.argv.index("--gem")
             if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
                 gem = sys.argv[i + 1]
-        cmd_craft(
-            count=_parse_count() or 1,
-            no_open="--no-open" in sys.argv,
-            gem=gem,
-        )
+        if "--relentless" in sys.argv:
+            cmd_relentless(
+                count=_parse_count() or 1,
+                gem=gem,
+            )
+        else:
+            cmd_craft(
+                count=_parse_count() or 1,
+                no_open="--no-open" in sys.argv,
+                gem=gem,
+            )
     else:
         print(f"Unknown subcommand: {sys.argv[1]}", file=sys.stderr)
         sys.exit(1)
