@@ -195,12 +195,11 @@ def cmd_craft(count=1, no_open=False, gem=None):
                 processed += 1
             else:
                 err_str = str(result)[:120]
-                if "RATE_LIMIT" in err_str:
-                    reset_time = err_str.split(":", 1)[1] if ":" in err_str else "later"
-                    print(f"  RATE_LIMIT {jid} — resets {reset_time}", file=sys.stderr)
-                    # Don't advance to failed — leave at described for retry
+                if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
+                    print(f"  TRANSIENT {jid} — {err_str}", file=sys.stderr)
+                    # Leave at described, stop batch — transient error
                     failed_count += 1
-                    break  # Stop processing more jobs — rate limit persists
+                    break
                 advance(entry, "failed", error=str(result)[:200])
                 print(f"  FAILED {jid} {err_str}", file=sys.stderr)
                 failed_count += 1
@@ -483,14 +482,6 @@ def cmd_reset(job_id=None, hard=False, from_stages=None):
     print(f"Reset {len(targets)} jobs ({mode}).", file=sys.stderr)
 
 
-def _parse_count():
-    if "--count" in sys.argv:
-        i = sys.argv.index("--count")
-        if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
-            return None
-        return int(sys.argv[i + 1])
-    return None
-
 
 def main():
     import argparse
@@ -558,9 +549,9 @@ def main():
         cmd_ready(args.jid)
     elif args.command == "list-gems":
         list_gems()
-    elif args.command == "help" or args.command is None:
+    elif args.command == "help":
         cmd_help()
-    else:
+    elif args.command is None:
         # No subcommand — craft mode
         count = args.count
         gem = args.gem
