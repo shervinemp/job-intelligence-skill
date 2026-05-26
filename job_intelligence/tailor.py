@@ -478,9 +478,6 @@ def _parse_count():
         if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
             return None
         return int(sys.argv[i + 1])
-    for arg in sys.argv:
-        if arg.startswith("--count="):
-            return int(arg.split("=", 1)[1])
     return None
 
 
