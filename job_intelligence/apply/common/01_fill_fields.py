@@ -195,16 +195,21 @@ for f in form:
     if f['value'] and f['value'] != 'Select an option':
         continue
 
-    # File: upload once
+    # File: upload to ALL file inputs (some are drop zones, some are real)
     if f['tag'] == 'INPUT' and f['type'] == 'file':
-        if not file_uploaded and resume_path:
+        if resume_path:
             try:
-                el = page.query_selector("input[type=\"file\"]")
+                # Use the selector for THIS specific input
+                sel = f"[id=\"{f['id']}\"]" if f['id'] else None
+                if sel:
+                    el = page.query_selector(sel)
+                else:
+                    el = page.query_selector("input[type=\"file\"]")
                 if el:
                     el.set_input_files(resume_path)
                     file_uploaded = True
                     filled += 1
-                    print(f"  RESUME: uploaded {os.path.basename(resume_path)}", file=sys.stderr)
+                print(f"  RESUME: uploaded to {f['id'] or 'first file input'}", file=sys.stderr)
             except Exception as e:
                 print(f"  RESUME FAILED: {e}", file=sys.stderr)
         continue
