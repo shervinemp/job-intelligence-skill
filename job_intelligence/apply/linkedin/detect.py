@@ -30,6 +30,7 @@ b, ctx = connect()
 p = ctx.new_page()
 p.goto(apply_url, wait_until='domcontentloaded', timeout=30000)
 time.sleep(5)
+p.evaluate("() => window.__applyPage = true")
 
 # Classify
 result = p.evaluate("""() => {
