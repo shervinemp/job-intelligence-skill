@@ -52,6 +52,18 @@ if plat is None and "jobright.ai" in url:
 print(f"Platform: {plat}", file=sys.stderr)
 
 b, ctx = connect()
+
+# Clean up old external pages from previous runs (except the current external)
+current_url = url
+for pg in ctx.pages:
+    u = pg.url
+    if 'linkedin.com' in u or u == 'about:blank' or u.startswith('chrome'):
+        continue
+    if u == current_url or current_url in u or u in current_url:
+        continue
+    try: pg.close()
+    except: pass
+
 p = ctx.new_page()
 p.goto(url, wait_until='domcontentloaded', timeout=30000)
 time.sleep(5)

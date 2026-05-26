@@ -27,6 +27,14 @@ job_id = url.split("/jobs/view/")[1].split("/")[0]
 apply_url = f"https://www.linkedin.com/jobs/view/{job_id}/apply/?openSDUIApplyFlow=true"
 
 b, ctx = connect()
+
+# Clean up stale non-LinkedIn pages from previous runs
+for pg in ctx.pages:
+    u = pg.url
+    if 'linkedin.com' not in u and u != 'about:blank' and not u.startswith('chrome'):
+        try: pg.close()
+        except: pass
+
 p = ctx.new_page()
 p.goto(apply_url, wait_until='domcontentloaded', timeout=30000)
 time.sleep(5)
