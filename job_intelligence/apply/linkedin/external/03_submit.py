@@ -16,14 +16,18 @@ if DRY_RUN:
 
 b, ctx = connect()
 page = None
+ext_url = state.get("external_url", "")
+is_external = bool(ext_url)
 for p in ctx.pages:
     url = p.url
-    if state.get("external_url") and state["external_url"] in url:
-        page = p
-        break
-    if '/jobs/view/' in url:
-        page = p
-        break
+    if is_external:
+        if url in ext_url or ext_url in url:
+            page = p
+            break
+    else:
+        if '/jobs/view/' in url:
+            page = p
+            break
 if not page:
     print("ERROR: no relevant page found", file=sys.stderr)
     sys.exit(1)
