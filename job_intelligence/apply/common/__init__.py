@@ -1,4 +1,6 @@
-"""Shared utilities for apply scripts."""
+"""Shared utilities for apply scripts.
+Critical: always check common_answers for gaps before filling forms.
+"""
 
 def find_apply_page(ctx, fallback_url=None):
     """Find the page marked with window.__applyPage.
