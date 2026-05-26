@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""detect_ats.py — Entry point for direct ATS job URLs (no LinkedIn).
+"""detect_ats.py — Navigate to external ATS URL, detect platform, read form fields.
 Usage: python3 detect_ats.py <jid>
-Navigates to the URL, detects platform, reads form fields, 
-hands off to common filler for profile-mapped fields
-and presents the rest to the model.
+Reads external_url from apply_state.json (saved by navigate step) or DB notes,
+then reads the form and hands off to common filler.
 """
 import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -14,9 +13,31 @@ from apply.common.platforms import detect_platform, check_page, ALREADY_APPLIED,
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 
 jid = sys.argv[1]
+
 c = get_conn()
-r = c.execute("SELECT url, title, company FROM jobs WHERE id=?", (jid,)).fetchone()
-url, title, company = r["url"], r["title"], r["company"]
+r = c.execute("SELECT url, title, company, notes FROM jobs WHERE id=?", (jid,)).fetchone()
+title, company = r["title"], r["company"]
+
+# Priority: apply_state.json external_url > DB notes > DB url
+url = r["url"]
+existing_state = {}
+if os.path.exists(STATE_PATH):
+    with open(STATE_PATH) as f:
+        existing_state = json.load(f)
+    external = existing_state.get("external_url")
+    if external:
+        url = external
+    else:
+        # Try DB notes
+        notes = r["notes"]
+        if notes:
+            try:
+                n = json.loads(notes)
+                if n.get("external_url"):
+                    url = n["external_url"]
+            except (json.JSONDecodeError, TypeError):
+                pass
+
 print(f"JOB: {title} @ {company}", file=sys.stderr)
 
 plat = detect_platform(url)
@@ -65,14 +86,26 @@ info = p.evaluate("""() => {
     };
 }""")
 
-state = {
-    "jid": jid, "url": url, "type": "ats_direct",
-    "platform": plat, "external_url": url,
-    "external_form": info,
-}
+# Enrich existing state — don't overwrite external_url
+existing_state.setdefault("jid", jid)
+existing_state.update({"type": "ats_direct", "platform": plat, "external_form": info})
+existing_state.setdefault("external_url", url)
 os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
 with open(STATE_PATH, "w") as f:
-    json.dump(state, f, indent=2)
+    json.dump(existing_state, f, indent=2)
+
+# Persist external_url to DB notes for future runs
+if existing_state.get("external_url") and existing_state["external_url"] != r["url"]:
+    notes = r["notes"]
+    try:
+        notes_dict = json.loads(notes) if notes else {}
+    except (json.JSONDecodeError, TypeError):
+        notes_dict = {}
+    if not isinstance(notes_dict, dict):
+        notes_dict = {}
+    notes_dict["external_url"] = existing_state["external_url"]
+    c.execute("UPDATE jobs SET notes=? WHERE id=?", (json.dumps(notes_dict), jid))
+    c.commit()
 
 print(f"Fields ({info['fieldCount']}):", file=sys.stderr)
 for f in info['fields'][:15]:

@@ -66,14 +66,23 @@ b, ctx = connect()
 
 # Find the right page: LinkedIn modal or external ATS
 page = None
+ext_url = state.get("external_url", "")
+is_external = bool(ext_url)
 for p in ctx.pages:
     url = p.url
-    if state.get("external_url") and state["external_url"] in url:
-        page = p
-        break
-    if '/jobs/view/' in url:
-        page = p
-        break
+    if is_external:
+        if url in ext_url or ext_url in url:
+            page = p
+            break
+    else:
+        if '/jobs/view/' in url:
+            page = p
+            break
+if not page and is_external:
+    print("No matching page found, navigating fresh", file=sys.stderr)
+    page = ctx.new_page()
+    page.goto(ext_url, wait_until='domcontentloaded', timeout=30000)
+    import time; time.sleep(5)
 if not page:
     print("ERROR: no relevant page found", file=sys.stderr)
     sys.exit(1)
