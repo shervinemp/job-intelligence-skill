@@ -39,6 +39,19 @@ result = p.evaluate("""() => {
     const d = document.querySelector('[role="dialog"]');
     if (d && (d.innerText || '').trim().length > 80) {
         r.type = 'easy_apply';
+        const inputs = d.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
+        r.details.fieldCount = inputs.length;
+        r.details.buttons = Array.from(d.querySelectorAll('button')).map(b => ({
+            text: (b.textContent||'').trim().slice(0,20), disabled: b.disabled
+        }));
+        r.details.fields = Array.from(inputs).map(el => {
+            const lbl = d.querySelector('label[for="'+el.id+'"]');
+            return {
+                tag: el.tagName, type: el.getAttribute('type')||'',
+                label: (lbl?lbl.textContent.trim():'')||el.placeholder||el.getAttribute('aria-label')||'',
+                required: el.required, value: el.value||'',
+            };
+        });
         return r;
     }
     
