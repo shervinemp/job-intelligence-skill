@@ -16,6 +16,9 @@ APPLY_DIR = os.path.join(SKILL_DIR, "apply")
 SCRIPTS = {
     "detect": "linkedin/detect.py",
     "detect_ats": "detect_ats.py",
+    "greenhouse": "greenhouse/detect.py",
+    "lever": "lever/detect.py",
+    "workday": "workday/detect.py",
     "click": "linkedin/easy_apply/01_click.py",
     "read": "linkedin/easy_apply/02_read_state.py",
     "fill": "linkedin/easy_apply/03_fill_fields.py",
