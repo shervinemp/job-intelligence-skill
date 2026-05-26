@@ -61,7 +61,7 @@ if external_url:
     with open(STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
     print(f"External URL: {external_url}", file=sys.stderr)
-    print("NEXT: apply/linkedin/external/02_detect_platform.py", file=sys.stderr)
+    print("NEXT: apply/detect_ats.py", file=sys.stderr)
 else:
     print("ERROR: no external page opened", file=sys.stderr)
     print("NEXT: none", file=sys.stderr)
