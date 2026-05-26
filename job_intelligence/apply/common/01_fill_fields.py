@@ -18,22 +18,27 @@ with open(profile_path) as f:
 
 argv = sys.argv[1:]
 answers_override = {}
-i = 1
+i = 0
 while i < len(argv):
-    if argv[i] == '--answer' and i + 1 < len(argv) and '=' in argv[i+1]:
-        k, v = argv[i+1].split('=', 1)
-        answers_override[k.strip()] = v.strip()
+    if argv[i] == '--answers' and i + 1 < len(argv):
+        try:
+            answers_override.update(json.loads(argv[i+1]))
+        except Exception as e:
+            print(f"  --answers JSON parse error: {e}", file=sys.stderr)
         i += 2
-    elif argv[i].startswith('--answer='):
-        eq = argv[i].index('=')
-        rest = argv[i][eq+1:]
-        if '=' in rest[:5]:
-            k, v = rest.split('=', 1)
-        else:
-            k, v = '', rest
-        if k:
+    elif argv[i] == '--answer' and i + 2 < len(argv) and argv[i+2].startswith('='):
+        # PowerShell splat: --answer "key" "=value"
+        answers_override[argv[i+1]] = argv[i+2].lstrip('=')
+        i += 3
+    elif argv[i] == '--answer' and i + 1 < len(argv):
+        # Unity: --answer="key=value" or --answer "key=value"
+        a = argv[i+1]
+        if '=' in a:
+            k, v = a.split('=', 1)
             answers_override[k] = v
-        i += 1
+            i += 2
+        else:
+            i += 2
     else:
         i += 1
 
@@ -49,11 +54,28 @@ def save_answer(text, value):
         print(f"  SAVED: common_answers['{key}'] = '{value}'", file=sys.stderr)
 
 def fuzzy_match(question_text, ca):
-    """Find a matching answer in common_answers by word overlap."""
+    """Find a matching answer in common_answers by word overlap or exact key match."""
     q_words = set(re.sub(r'[^a-z0-9]+', ' ', question_text.lower()).split())
     q_words -= {'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'and', 'or', 'is', 'are', 'do', 'does', 'will', 'would', 'have', 'has', 'you', 'your'}
     if len(q_words) < 2:
+        # Single significant word: try exact key containment
+        q_lower = question_text.lower()
+        for key in ca:
+            if ca[key] and key.lower() in q_lower:
+                return ca[key]
         return None
+    best_key, best_overlap = None, 0
+    for key in ca:
+        if not ca[key]:
+            continue
+        k_words = set(re.sub(r'[^a-z0-9]+', ' ', key.lower()).split())
+        overlap = len(q_words & k_words)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_key = key
+    if best_overlap >= 2:
+        return ca[best_key]
+    return None
     best_key, best_overlap = None, 0
     for key in ca:
         if not ca[key]:
@@ -76,6 +98,17 @@ def click_option(page, opt, tag_type):
 
 b, ctx = connect()
 ext_url = state.get("external_url", "")
+
+# Clean up stale non-relevant pages before starting
+for pg in ctx.pages:
+    u = pg.url
+    if u == 'about:blank' or u.startswith('chrome'):
+        continue
+    if '/jobs/view/' in u or (ext_url and (u in ext_url or ext_url in u)):
+        continue
+    try: pg.close()
+    except: pass
+
 page, navigated_fresh = find_apply_page(ctx, ext_url or None)
 
 # Check for already-applied / login wall
@@ -185,9 +218,10 @@ for f in form:
         q_label = opts[0].split(' - ')[0] if ' - ' in opts[0] else opts[0]
         # Check answers
         ans = None
-        if q_label in answers_override:
-            ans = answers_override[q_label]
-        else:
+        for k, v in answers_override.items():
+            if k in q_label or q_label in k:
+                ans = v; break
+        if ans is None:
             ans = fuzzy_match(q_label, ca)
         if ans:
             for opt in opts:
@@ -203,15 +237,18 @@ for f in form:
     # Check answers_override for any label
     ans = None
     lbl = f.get('label', '')
-    if lbl in answers_override:
-        ans = answers_override[lbl]
-    else:
+    # Substring match in answers_override
+    for k, v in answers_override.items():
+        if k in lbl or lbl in k:
+            ans = v
+            break
+    if ans is None:
         ans = fuzzy_match(lbl, ca)
 
     if ans:
         # Apply to text/select/button
         if f['tag'] in ('INPUT', 'TEXTAREA', 'SELECT'):
-            sel = f"#{f['id']}" if f['id'] else f"[name=\"{f['name']}\"]" if f['name'] else None
+            sel = f"[id=\"{f['id']}\"]" if f['id'] else f"[name=\"{f['name']}\"]" if f['name'] else None
             if sel:
                 try:
                     el = page.query_selector(sel)
@@ -240,7 +277,7 @@ for f in form:
         nlbl = re.sub(r'[^a-z0-9]+', ' ', lbl.lower()).strip()
         if nlbl == 'full name' and first_name and last_name:
             fn = f"{first_name} {last_name}"
-            sel = f"#{f['id']}" if f['id'] else f"[name=\"{f['name']}\"]"
+            sel = f"[id=\"{f['id']}\"]" if f['id'] else f"[name=\"{f['name']}\"]"
             if sel:
                 try:
                     el = page.query_selector(sel)

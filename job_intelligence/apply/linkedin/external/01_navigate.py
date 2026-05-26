@@ -21,22 +21,26 @@ url, title, company = r["url"], r["title"], r["company"]
 
 b, ctx = connect()
 
+# Clean up stale non-LinkedIn pages from previous runs
+for pg in ctx.pages:
+    u = pg.url
+    if 'linkedin.com' not in u and u != 'about:blank' and not u.startswith('chrome'):
+        try: pg.close()
+        except: pass
+
 # Reuse existing LinkedIn page if available, otherwise create new
 p = None
 for pg in ctx.pages:
     if '/jobs/view/' in pg.url:
         p = pg
-        # Clean up stale non-LinkedIn pages from previous runs
-        for pg2 in ctx.pages:
-            u = pg2.url
-            if pg2 != p and 'linkedin.com' not in u and u != 'about:blank' and not u.startswith('chrome'):
-                try: pg2.close()
-                except: pass
         break
-if not p:
+if p:
+    # Navigate to plain jobs/view URL (closes any /apply/ modal)
+    p.goto(url, wait_until='domcontentloaded', timeout=30000)
+else:
     p = ctx.new_page()
     p.goto(url, wait_until='domcontentloaded', timeout=30000)
-    time.sleep(5)
+time.sleep(5)
 p.evaluate("() => window.__applyPage = true")
 
 # Extract external URL
