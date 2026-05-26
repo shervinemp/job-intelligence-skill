@@ -107,15 +107,15 @@ Re-run with `"notes":""` to clear. The field survives all stage transitions.
 
 ## Categories
 
-Each job has a category that determines which Gemini gem handles its tailoring. Available in `categories.json`:
+Each job has a category that guides admission. All categories use the same gem (`categories.json` → `gems.json`).
 
-| Category | Gem | Description |
-|----------|-----|-------------|
-| tech | optimizer | Application Optimizer gem |
-| general | (none) | Default Gemini, raw JD processing |
+| Category | Description | When to use |
+|----------|-------------|-------------|
+| tech | Building/maintaining tech: software, data, ML, IT, backend, frontend, DevOps, cloud, infra, security | Primary target |
+| general | No specialized skills needed: retail, food service, warehouse, hospitality, cleaning, labor | Settle job |
+| (reject) | Admin, buyer, PM, analyst, non-software engineer, technician — skip, not worth your time | Reject at extract |
 
-Required on first `admit` via `--category tech <jid>`. Re-run with a different category to update.  
-`tailor.py` resolves from `categories.json` → `gems.json` → gemini.js automatically.
+Required on first `admit` via `--category tech <jid>`. Re-run to update.
 
 ## Auth walls
 
