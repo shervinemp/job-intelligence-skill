@@ -50,7 +50,14 @@ def resolve(label, profile, ca):
         if section == "common_answers":
             return ca.get(key)
         lookup = key or section
-        return profile.get(lookup) or ca.get(lookup)
+        val = profile.get(lookup) or ca.get(lookup)
+        if val: return val
+    # Substring match for noisy labels (e.g. "Location (city)Location (city)")
+    for map_norm, (section, key) in FIELD_MAP.items():
+        if map_norm in norm:
+            lookup = key or section
+            val = profile.get(lookup) or ca.get(lookup)
+            if val: return val
     # Common answers multi-word match
     for phrase, key in COMMON_FIELD_MAP.items():
         if phrase in norm:
