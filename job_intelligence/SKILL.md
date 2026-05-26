@@ -40,15 +40,47 @@
 | `python3 fetch.py retry` | Retry failed fetches | Same admit/reject |
 | `python3 fetch.py retry-skipped` | Reset all skipped jobs back to extracted | — |
 | `python3 fetch.py --refresh` | Re-fetch described URLs | Same admit/reject/flag |
-| `python3 tailor.py [--count N] [--no-open]` | Gemini crafts CV | `done`/`skip`/`redo` |
+| `python3 tailor.py [--count N] [--no-open]` | Gemini crafts CV (default 1) | `done`/`skip`/`redo` |
+| `python3 tailor.py --count -1 --no-open` | Process ALL described jobs | — |
+| `python3 tailor.py --relentless --count -1` | Process all, idle on rate limit, retry | — |
 | `python3 tailor.py help` | Show all tailor subcommands and options | — |
 | `python3 tailor.py done <jid>` | Mark applied, create .url shortcut | — |
 | `python3 tailor.py skip <jid>` | Skip | — |
 | `python3 tailor.py redo <jid>` | Re-tailor from described | — |
+| `python3 tailor.py redo --from tailored,failed` | Batch redo by stage | — |
 | `python3 tailor.py retry` | Retry failed | — |
+| `python3 tailor.py reset --from failed,skipped` | Reset jobs by stage to described | — |
+| `python3 tailor.py reset --all --hard` | Reset ALL jobs to extracted (careful!) | — |
 | `python3 tailor.py ready [<jid>]` | Open URL + files folder | — |
 | `python3 extract.py reset` | Wipe DB, start fresh | — |
 | `status` | Unified status + next command, includes category distribution | Follow `next:` hint |
+
+## Apply pipeline
+
+| Step | Command | What happens |
+|------|---------|-------------|
+| Detect | `python3 apply.py detect <jid>` | Navigates /apply/ URL → Easy Apply / External / Applied |
+| Click | `python3 apply.py click <jid>` | Opens Easy Apply modal |
+| Read | `python3 apply.py read <jid>` | Shows current fields + buttons, routes to next step |
+| Fill | `python3 apply.py fill <jid>` | Fills profile-mapped fields (name, email, phone, linkedin) |
+| Resume | `python3 apply.py resume <jid>` | Uploads tailored PDF to Easy Apply modal |
+| Screen | `python3 apply.py screen <jid> --answers '{"Q":"A"}'` | Presents screening questions; model answers with --answers |
+| Next | `python3 apply.py next <jid>` | Clicks Next/Review/Submit (disables overlay) |
+| Submit | `python3 apply.py submit <jid>` | Verifies result after submit |
+| Navigate | `python3 apply.py navigate <jid>` | External ATS: click "Apply on company website" |
+| Detect platform | `python3 apply.py detect_platform <jid>` | External ATS: detect Greenhouse/Lever/Ashby/Workday |
+| Fill external | `python3 apply.py fill_external <jid>` | External ATS: fill profile fields + present options |
+| Next external | `python3 apply.py next_external <jid>` | External ATS: multi-page support (Next/Continue) |
+| Submit external | `python3 apply.py submit_external <jid>` | External ATS: dry-run safe submit |
+| Detect ATS | `python3 apply.py detect_ats <jid>` | Direct ATS URL (no LinkedIn): detect platform, read form |
+
+### Flow examples
+
+**LinkedIn Easy Apply:** detect → click → read → fill → resume → screen → next → [loop] → submit
+
+**LinkedIn External → Ashby:** detect → navigate → detect_platform → fill_external → submit_external
+
+**Direct ATS URL:** detect_ats → fill_external → next_external → [loop] → submit_external
 
 ## Extraction rules
 
