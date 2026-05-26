@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """01_fill_fields.py — Shared field filler for any form (LinkedIn modal or external ATS).
 Reads state, fills fields from profile, reports unfilled required fields.
+
+Usage:
+  fill_fields.py <jid> [--answer "question"=value ...]
+
+--answer flags provide answers to unfilled fields. Each answer is saved
+to profile.json common_answers for future reuse.
 """
 import json, os, sys, re
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from lib.chrome_manager import connect
 from apply.common.platforms import check_page, ALREADY_APPLIED, LOGIN_WALL, GUEST_APPLY
+from apply.common import find_apply_page
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 with open(STATE_PATH) as f:
@@ -14,9 +21,52 @@ with open(STATE_PATH) as f:
 profile_path = os.path.join(os.path.dirname(__file__), "..", "..", "profile.json")
 with open(profile_path) as f:
     profile = json.load(f)
-ca = profile.get("common_answers", {})
 
-# Heuristic label → value resolution
+# Parse --answer flags
+answers_override = {}
+argv = sys.argv[1:]  # first is jid
+found_jid = False
+for a in argv:
+    if not found_jid:
+        found_jid = True
+        continue
+    if a.startswith("--answer"):
+        eq = a.find("=")
+        if eq > 0:
+            q = a[len("--answer="):eq]
+            v = a[eq+1:]
+            if q.endswith('"') and q.startswith('"'):
+                q = q[1:-1]
+            answers_override[q] = v
+            # Also handle "question"=value with equals in value
+        elif '=' not in a:
+            continue
+# Handle the case where --answer is followed by space-separated key=value
+i = 0
+while i < len(argv):
+    if argv[i] == '--answer' and i + 1 < len(argv) and '=' in argv[i+1]:
+        parts = argv[i+1].split('=', 1)
+        answers_override[parts[0]] = parts[1]
+        i += 2
+    else:
+        i += 1
+
+def save_answer(question_text, answer):
+    """Save a question→answer mapping to common_answers for future reuse."""
+    norm = re.sub(r'[^a-z0-9]+', '_', question_text.lower()).strip('_')[:60]
+    # Try to find a concise key — use first distinctive 3-4 words
+    words = [w for w in norm.split('_') if len(w) > 2]
+    key = '_'.join(words[:4]) if len(words) >= 3 else norm
+    profile.setdefault("common_answers", {})
+    existing = profile["common_answers"]
+    # Only save if no existing answer for this key
+    if key not in existing or existing[key] != answer:
+        existing[key] = answer
+        with open(profile_path, "w") as f:
+            json.dump(profile, f, indent=2)
+        print(f"  SAVED: common_answers['{key}'] = '{answer}'", file=sys.stderr)
+
+# Heuristic label → profile value resolution
 FIELD_MAP = {
     "full name": ("name", ""),
     "first name": ("first_name", ""), "firstname": ("first_name", ""),
@@ -28,20 +78,9 @@ FIELD_MAP = {
     "resume": ("resume", ""), "upload resume": ("resume", ""), "cv": ("resume", ""),
 }
 
-CA_MAP = {
-    "work authorization": "work_authorization", "authorized": "authorized_to_work",
-    "visa sponsorship": "require_visa", "sponsorship": "visa_sponsorship", "require visa": "require_visa",
-    "gender": "gender", "veteran": "veteran_status", "disability": "disability_status",
-    "how did you hear": "how_did_you_hear", "referral": "how_did_you_hear",
-    "relocate": "willing_to_relocate", "relocation": "willing_to_relocate",
-    "salary": "expected_ctc",
-}
-
-# Yes/no defaults for common questions
-def resolve(label, profile, ca):
+def resolve(label):
+    """Resolve a field label to a profile value. Returns None if uncertain."""
     norm = re.sub(r'[^a-z0-9]+', ' ', label.lower()).strip()
-    
-    # Direct field map
     key = FIELD_MAP.get(norm)
     if key:
         section, field = key
@@ -51,41 +90,12 @@ def resolve(label, profile, ca):
             if fn and ln: return f"{fn} {ln}"
             return fn or ln or None
         lookup = field or section
-        val = profile.get(lookup) or ca.get(lookup)
-        if val: return val
-    
-    # Common answers match
-    for phrase, ca_key in CA_MAP.items():
-        if phrase in norm:
-            val = ca.get(ca_key)
-            if val: return val
-    
+        return profile.get(lookup)
     return None
 
 b, ctx = connect()
-
-# Find the right page: LinkedIn modal or external ATS
-page = None
 ext_url = state.get("external_url", "")
-is_external = bool(ext_url)
-for p in ctx.pages:
-    url = p.url
-    if is_external:
-        if url in ext_url or ext_url in url:
-            page = p
-            break
-    else:
-        if '/jobs/view/' in url:
-            page = p
-            break
-if not page and is_external:
-    print("No matching page found, navigating fresh", file=sys.stderr)
-    page = ctx.new_page()
-    page.goto(ext_url, wait_until='domcontentloaded', timeout=30000)
-    import time; time.sleep(5)
-if not page:
-    print("ERROR: no relevant page found", file=sys.stderr)
-    sys.exit(1)
+page, navigated_fresh = find_apply_page(ctx, ext_url or None)
 
 # Check for already-applied or login wall
 plat = state.get("platform") or ""
@@ -120,7 +130,7 @@ if check_page(text, plat, LOGIN_WALL):
         print("NEXT: none", file=sys.stderr)
         sys.exit(0)
 
-# Get fields
+# Get standard form fields
 fields = page.evaluate("""() => {
     const container = document.querySelector('[role="dialog"]') || document;
     const inputs = container.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
@@ -141,6 +151,29 @@ fields = page.evaluate("""() => {
     });
 }""")
 
+# Detect custom question buttons (Ashby-style yes/no button groups not rendered as radios)
+questions = page.evaluate("""() => {
+    const qs = [];
+    const sections = document.querySelectorAll('div[class*="question"], fieldset, div[class*="field"], li[class*="field"]');
+    for (const sec of sections) {
+        const label = sec.querySelector('label, legend, strong, p, [class*="label"], [class*="heading"], [class*="title"]');
+        if (!label) continue;
+        const btns = sec.querySelectorAll('button');
+        if (btns.length < 2) continue;
+        const qText = (label.textContent || '').trim();
+        if (qText.length < 5) continue;
+        const opts = Array.from(btns).map(b => (b.textContent || '').trim()).filter(Boolean);
+        const answered = btns.length === 0 || Array.from(btns).some(b => {
+            const cls = b.getAttribute('class') || '';
+            return cls.includes('selected') || cls.includes('active') || b.getAttribute('aria-pressed') === 'true';
+        });
+        if (!answered) {
+            qs.push({ question: qText.slice(0, 120), options: opts, required: true });
+        }
+    }
+    return qs;
+}""")
+
 # Find resume PDF
 resume_path = None
 results_dir = os.path.join(os.path.expanduser("~"), ".openclaw", "results", state["jid"])
@@ -152,47 +185,122 @@ if os.path.isdir(results_dir):
 
 filled = 0
 unfilled = []
-handled_radios = set()  # track radio groups by name
+file_uploaded = False
+handled_radios = set()
+
+# Common answers from profile for auto-resolve
+common_answers = profile.get("common_answers", {})
+
+def check_answers(label, opts=None):
+    """Check answers_override and common_answers for a matching answer."""
+    # CLI override takes priority
+    if label in answers_override:
+        return answers_override[label]
+    # Check common_answers for any matching key
+    norm = re.sub(r'[^a-z0-9]+', '_', label.lower()).strip('_')
+    for key, val in common_answers.items():
+        if val and key.replace('_', ' ') in norm or norm[:len(key)] == key:
+            return val
+    # Check common_answers keys against radio options
+    if opts:
+        norm_opts = set(re.sub(r'[^a-z0-9]+', '', o.lower()) for o in opts)
+        for key, val in common_answers.items():
+            val_norm = re.sub(r'[^a-z0-9]+', '', val.lower())
+            if val_norm in norm_opts:
+                for opt in opts:
+                    if val_norm in re.sub(r'[^a-z0-9]+', '', opt.lower()):
+                        return opt
+    return None
+
+def apply_and_save(label, value, tag_type, options=None):
+    """Apply a value to a field, file, radio, or button. Save for future."""
+    global filled
+    
+    if tag_type in ('radio_group', 'button_group') and options:
+        for opt in options:
+            if value.lower() in opt.lower() or opt.lower() in value.lower():
+                if tag_type == 'radio_group':
+                    page.evaluate(f"(opt) => {{ const rs = document.querySelectorAll('input[type=\"radio\"]'); for (const r of rs) {{ const lbl = document.querySelector('label[for=\"' + r.id + '\"]'); if (lbl && (lbl.textContent||'').trim() === opt) {{ r.click(); return true; }} }} return false; }}", opt)
+                else:
+                    page.evaluate("(opt) => { const secs = document.querySelectorAll('div[class*=\"question\"], fieldset, div[class*=\"field\"], li[class*=\"field\"]'); for (const sec of secs) { const btns = sec.querySelectorAll('button'); for (const b of btns) { if ((b.textContent||'').trim() === opt) { b.click(); return true; } } } return false; }", opt)
+                filled += 1
+                print(f"  ANSWERED: '{label[:40]}' -> '{value}'", file=sys.stderr)
+                save_answer(label, value)
+                return True
+    
+    # Text fields: find by label
+    sel = None
+    for f in fields:
+        if f['label'] == label or label in f['label'] or f['label'] in label:
+            sel = f"#{f['id']}" if f['id'] else f"[name=\"{f['name']}\"]" if f['name'] else None
+            if sel:
+                try:
+                    el = page.query_selector(sel)
+                    if el:
+                        if f['tag'] == 'SELECT':
+                            el.select_option(value)
+                        else:
+                            el.fill(value)
+                        filled += 1
+                        print(f"  FILLED: '{label[:40]}' -> '{value}'", file=sys.stderr)
+                        save_answer(label, value)
+                        return True
+                except:
+                    pass
+    return False
 
 for f in fields:
-    # Skip already-filled fields (except "Select an option")
     if f['value'] and f['value'] != 'Select an option':
         continue
     
-    val = resolve(f['label'], profile, ca)
-    
-    # Radio buttons: NEVER auto-fill — present to model
-    if f['type'] == 'radio':
-        if f['name'] in handled_radios:
-            continue
-        radios = [rf for rf in fields if rf['name'] == f['name']]
-        handled_radios.add(f['name'])
-        unfilled.append({"tag": "radio_group", "label": f['label'].split(' - ')[0] if ' - ' in f['label'] else f['label'],
-                         "options": [rf['label'] for rf in radios], "required": f['required']})
-        continue
-    
-    if f['type'] == 'checkbox':
-        # Checkbox: NEVER auto-fill
-        if f['required']:
-            unfilled.append(f)
-        continue
-    
     if f['tag'] == 'INPUT' and f['type'] == 'file':
+        if file_uploaded:
+            continue
         if resume_path:
             try:
-                el = page.query_selector(f"input[type=\"file\"]")
+                el = page.query_selector("input[type=\"file\"]")
                 if el:
                     el.set_input_files(resume_path)
+                    file_uploaded = True
                     filled += 1
                     print(f"  UPLOADED: resume -> {os.path.basename(resume_path)}", file=sys.stderr)
             except Exception as e:
                 print(f"  UPLOAD FAILED: {e}", file=sys.stderr)
         continue
     
+    if f['type'] == 'radio':
+        if f['name'] in handled_radios:
+            continue
+        handled_radios.add(f['name'])
+        radios = [rf for rf in fields if rf['name'] == f['name']]
+        group_label = radios[0]['label'].split(' - ')[0] if ' - ' in radios[0]['label'] else radios[0]['label']
+        opts = [rf['label'] for rf in radios]
+        
+        # Check answers before deferring
+        ans = check_answers(group_label, opts)
+        if ans and apply_and_save(group_label, ans, 'radio_group', opts):
+            continue
+        
+        unfilled.append({"tag": "radio_group", "label": group_label[:60], "options": opts, "required": f['required']})
+        continue
+    
+    if f['type'] == 'checkbox':
+        if f['required']:
+            unfilled.append(f)
+        continue
+    
+    # Check override/common_answers first
+    ans = check_answers(f['label'])
+    if ans:
+        apply_and_save(f['label'], ans, 'text')
+        continue
+    
+    val = resolve(f['label'])
     if val:
         sel = f"#{f['id']}" if f['id'] and not f['id'][0].isdigit() else f"[id=\"{f['id']}\"]" if f['id'] else f"[name=\"{f['name']}\"]"
         if not sel or sel == '#':
-            unfilled.append(f)
+            if f['required']:
+                unfilled.append(f)
             continue
         try:
             el = page.query_selector(sel)
@@ -213,6 +321,15 @@ for f in fields:
                 unfilled.append(f)
     elif f['required']:
         unfilled.append(f)
+
+# Custom button questions (Ashby-style)
+for q in questions:
+    if set(o.lower() for o in q['options']) <= {"replace", "upload file", "upload"}:
+        continue
+    ans = check_answers(q['question'], q['options'])
+    if ans and apply_and_save(q['question'], ans, 'button_group', q['options']):
+        continue
+    unfilled.append({"label": q['question'], "tag": "button_group", "type": "choice", "options": q['options'], "required": True})
 
 state["filled"] = filled
 state["unfilled"] = [f"{f['label']}" for f in unfilled]
