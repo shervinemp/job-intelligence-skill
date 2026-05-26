@@ -9,3 +9,6 @@ page-dump.json
 *.log
 .DS_Store
 Thumbs.db
+
+# Personal data
+job_intelligence/profile.json

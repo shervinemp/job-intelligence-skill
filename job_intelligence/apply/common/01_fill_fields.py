@@ -5,6 +5,7 @@ Reads state, fills fields from profile, reports unfilled required fields.
 import json, os, sys, re
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from lib.chrome_manager import connect
+from apply.common.platforms import check_page, ALREADY_APPLIED, LOGIN_WALL, GUEST_APPLY
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 with open(STATE_PATH) as f:
@@ -76,6 +77,39 @@ for p in ctx.pages:
 if not page:
     print("ERROR: no relevant page found", file=sys.stderr)
     sys.exit(1)
+
+# Check for already-applied or login wall
+plat = state.get("platform") or ""
+text = page.evaluate("() => document.body.innerText")
+if check_page(text, plat, ALREADY_APPLIED):
+    print("STATUS: already_applied", file=sys.stderr)
+    print("NEXT: none", file=sys.stderr)
+    sys.exit(0)
+if check_page(text, plat, LOGIN_WALL):
+    print("STATUS: login_wall", file=sys.stderr)
+    # Try guest apply
+    guest = page.evaluate("""() => {""" + f"""
+        const patterns = {json.dumps(list(set(GUEST_APPLY.get(plat, []) + GUEST_APPLY["default"])))};
+""" + """
+        const all = document.querySelectorAll('button, a');
+        for (const el of all) {
+            const t = (el.textContent || '').toLowerCase();
+            for (const p of patterns) {
+                if (t.includes(p) && el.offsetParent !== null) {
+                    el.click(); return true;
+                }
+            }
+        }
+        return false;
+    }""")
+    if guest:
+        print("  Guest apply clicked", file=sys.stderr)
+        import time
+        time.sleep(3)
+    else:
+        print("  Cannot bypass login wall", file=sys.stderr)
+        print("NEXT: none", file=sys.stderr)
+        sys.exit(0)
 
 # Get fields
 fields = page.evaluate("""() => {
