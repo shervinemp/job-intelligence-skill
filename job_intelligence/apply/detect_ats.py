@@ -6,7 +6,7 @@ hands off to common filler for profile-mapped fields
 and presents the rest to the model.
 """
 import json, os, sys, time
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn
 from apply.common.platforms import detect_platform, check_page, ALREADY_APPLIED, LOGIN_WALL
