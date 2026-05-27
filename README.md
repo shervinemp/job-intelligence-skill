@@ -46,7 +46,7 @@ Automated job discovery, description fetching, CV tailoring, and auto-apply — 
                                               │
                              ┌────────────────┼────────────────┐
                              │                │                │
-                      ┌──────▼───────┐   ┌────▼────┐   ┌──-────▼───────┐
+                      ┌──────▼───────┐   ┌────▼────┐   ┌───────▼───────┐
                       │  Easy Apply  │   │External │   │    Already    │
                       │   (modal)    │   │/ATS dir │   │    Applied    │
                       └──────┬───────┘   └────┬────┘   └───────┬───────┘
