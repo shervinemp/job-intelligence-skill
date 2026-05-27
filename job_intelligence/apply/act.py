@@ -217,7 +217,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
 
         ans = _find_answer(lbl, lbl_norm, answers, ca, profile)
 
-        if ans:
+        if ans is not None:
             sel = ""
             if f["id"]: sel = f'[id="{f["id"]}"]'
             elif f["name"]: sel = f'[name="{f["name"]}"]'
@@ -239,7 +239,6 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                             except:
                                 pass
                             if is_ac:
-                                # Use JS to set value and dispatch events (Workday multiselect needs native events)
                                 page.evaluate("""(args) => {
                                     var ans = args[0], sel = args[1];
                                     var el = document.querySelector(sel);
