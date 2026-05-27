@@ -12,7 +12,7 @@
 | **extract** | `extract.py` — find URLs in staged emails | SLM: admit/reject. Many non-job URLs leak through. |
 | **linkedin** | `linkedin.py [--url <url>] [--max N]` — scrape LinkedIn jobs | SLM: admit/reject |
 | **fetch** | `fetch.py` — visit URL, scrape description | SLM: admit/reject/flag. Second gate — real JD vs garbage. |
-| **tailor** | `tailor.py [--count N]` — Gemini crafts CV | SLM: done/skip/redo |
+| **tailor** | `tailor.py [--count N]` — crafts tailored CV | SLM: done/skip/redo |
 
 ## Commands
 
@@ -35,7 +35,7 @@
 | `fetch.py retry` | Retry failed fetches | Same admit/reject |
 | `fetch.py retry-skipped` | Reset skipped → extracted | — |
 | `fetch.py --refresh` | Re-fetch described URLs | Same admit/reject |
-| `tailor.py [--count N]` | Gemini crafts CV (default 1) | done/skip/redo |
+| `tailor.py [--count N]` | Crafts tailored CV (default 1) | done/skip/redo |
 | `tailor.py --count -1` | Process ALL described | — |
 | `tailor.py --relentless --count -1` | Process all, idle on rate limit | — |
 | `tailor.py done/skip/redo <jid>` | Mark applied / skip / redo | — |
