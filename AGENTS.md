@@ -31,7 +31,7 @@
 - **Stage:** `stage_emails.py [--days N]` — search Gmail, save, clean. `--refresh` to re-stage.
 - **Extract:** finds URLs in emails → `JOB:{jid}:{url}` → I admit/reject
 - **Fetch:** `fetch.py [--count N]` — scrape descriptions → `DESC:{jid}:{snippet}` → I admit/reject/flag
-- **Tailor:** `tailor.py [--count N]` → Gemini crafts CV → I done/skip/redo
+- **Tailor:** `tailor.py [--count N]` — crafts tailored CV → I done/skip/redo
 - **LinkedIn:** scrape cards, click each for JD, save to DB
 - **Status:** `extract.py status` / `fetch.py status` / `tailor.py status`
 - **Auth wall:** `flag <jid>` → `open [<jid>]` → `--refresh`
