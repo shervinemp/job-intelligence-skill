@@ -246,15 +246,13 @@ def save_state(state):
             ),
         )
     conn.commit()
-
 def _normalize_url(url):
-    """Normalize URL for consistent job ID hashing. Strips tracking params, trailing slashes."""
+    """Normalize URL for consistent hashing. Strips tracking params, trailing slashes."""
     if not url:
         return url
     import urllib.parse
     try:
         parsed = urllib.parse.urlparse(url)
-        # Remove tracking query params
         tracked = {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
                    'fbclid', 'gclid', 'ref', 'source', 'from', 'trk', 'lipi', 'email_id',
                    'eid', 'refid', 'tk', 'co', 'hl', 'pos', 'ao', 's', 'guid', 'src', 'gh_src'}
@@ -262,8 +260,7 @@ def _normalize_url(url):
         clean_qs = {k: v for k, v in qs.items() if k.lower() not in tracked}
         clean_query = urllib.parse.urlencode(clean_qs, doseq=True) if clean_qs else ""
         clean_path = parsed.path.rstrip("/") or "/"
-        clean = urllib.parse.urlunparse((parsed.scheme, parsed.netloc.lower(), clean_path, "", clean_query, ""))
-        return clean
+        return urllib.parse.urlunparse((parsed.scheme, parsed.netloc.lower(), clean_path, "", clean_query, ""))
     except Exception:
         return url.strip("/")
 
@@ -275,15 +272,7 @@ def add_job(job_data):
     jid = hashlib.md5(url.encode()).hexdigest()[:16] if url else None
     if not jid:
         return None
-    existing = conn.execute("SELECT 1 FROM jobs WHERE id=?", (jid,)).fetchone()
-    if not existing:
-        # Check by normalized URL (catches old JIDs from un-normalized URLs)
-        norm_url = _normalize_url(raw_url)
-        for row in conn.execute("SELECT id, url FROM jobs").fetchall():
-            if _normalize_url(row["url"] or "") == norm_url and row["id"] != jid:
-                existing = row
-                break
-    if existing:
+    if conn.execute("SELECT 1 FROM jobs WHERE id=?", (jid,)).fetchone():
         if "notes" in job_data:
             conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?", (job_data["notes"], datetime.now().isoformat(), jid))
             conn.commit()
