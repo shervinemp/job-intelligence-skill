@@ -85,9 +85,13 @@ PLATFORM_LABELS = {
 
 
 def check_page(text, platform, patterns_dict):
-    """Check if page text matches any pattern for a platform."""
-    patterns = patterns_dict.get(platform) or patterns_dict.get("default", [])
+    """Check if page text matches any pattern for a platform.
+    Returns False if user is clearly signed in (has 'Settings' in nav area)."""
     text_lower = text.lower()
+    # Counter-evidence: if "Settings" appears in first 300 chars, user is signed in
+    if "settings" in text_lower[:300]:
+        return False
+    patterns = patterns_dict.get(platform) or patterns_dict.get("default", [])
     for p in patterns:
         if p in text_lower:
             return True
