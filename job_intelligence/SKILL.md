@@ -63,14 +63,14 @@
 
 ### Apply notes
 
-- **Screening** — `--answers '{"q":"val"}'`. Normalized exact match. Provide full label text to be safe.
+- **Screening** — `--answers '{"q":"val"}'`. Normalized exact match. Provide full label text to be safe. Reference `decisions.md` for sponsorship, relocation, experience estimates.
 - **Radios** — `radio.click()` via Playwright `.check()`. Verify `el.checked` changed.
 - **Resume** — `set_input_files()` on required file inputs only. Skips optional drop zones.
 - **Unfollow** — `act --fill` auto-unchecks "Follow X" on any page.
 - **Multi-page** — `act --auto` handles the loop. Manual: fill → next → fill → ... → submit.
 - **Pre-flight** — always run `detect` first. It checks stage, PDF, and page type in one call.
 - **Button priority** — Submit > Review > Next > Continue > Done (rightmost). Never Back/Cancel/Save.
-- **Common answers matching** — `--answers` exact match first, then common_answers (exact for optional, prefix for required), then profile resolver.
+- **Common answers matching** — `--answers` exact match first, then common_answers (exact for optional fields; prefix for required fields — prevents generic keys like "phone" filling optional fields like "Phone Extension"), then profile resolver.
 - **Field types:** INPUT (text/email/tel), SELECT, TEXTAREA, DROPDOWN (custom `button[aria-haspopup]`), AUTOCOMPLETE (placeholder="Search").
 - **Autocomplete** — uses JS native value setter + input/change events for Workday multiselect widgets.
 - **3x fingerprint guard** — if same page state appears 3 fills in a row, warns model to break loop.

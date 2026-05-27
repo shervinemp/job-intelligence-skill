@@ -20,7 +20,8 @@
    - **DROPDOWN** fields (detected via `button[aria-haspopup="listbox"]`): Province, Phone Device Type, Country
    - **Autocomplete** fields (detected via placeholder="Search"): How Did You Hear, Country Phone Code
    - Phone Number should NOT include country code prefix (+1), since Country Phone Code is separate
-   - Phone Extension should be empty (optional field, common_answers "phone" prefix matches it — overridden by --answers)
+   - Phone Extension should be empty (optional field, common_answers "phone" prefix matches it — guarded by `required` parameter: common_answers prefix only fills required fields)
+   - Sponsorship question ("Will you require sponsorship?") → **Yes** per decisions.md (authorized now but expires)
 4. **My Experience** (step 3 of 7)
    - Skills: autocomplete field — type skill and press Enter
    - Resume upload: hidden `input[type="file"]` behind "Select files" button. `set_input_files()` works.
