@@ -18,6 +18,7 @@ def read_page(p):
     Queries document-level (works for both modals and external ATS)."""
     result = p.evaluate("""() => {
         const inputs = document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
+        const dropdowns = document.querySelectorAll('button[aria-haspopup="listbox"]');
         const btns = document.querySelectorAll('button');
         const fields = Array.from(inputs).map(el => {
             const lbl = document.querySelector('label[for="' + el.id + '"]');
@@ -35,6 +36,20 @@ def read_page(p):
                 checked: el.type === 'radio' ? el.checked : null,
                 options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0,15) : [],
             };
+        });
+        // Custom dropdown buttons (e.g. Workday province/phone type selectors)
+        Array.from(dropdowns).forEach(btn => {
+            const parent = btn.closest('[data-automation-id^="formField"]') || btn.parentElement;
+            const label = parent.querySelector('label, legend, span');
+            const lbl = label ? label.textContent.trim().replace(/\\s+/g,' ').slice(0, 80) : '';
+            const current = (btn.textContent || '').trim().slice(0, 30);
+            fields.push({
+                tag: 'DROPDOWN', type: 'custom',
+                id: btn.id, name: btn.getAttribute('name') || '',
+                label: lbl, required: (lbl || '').includes('*'),
+                value: current, checked: null,
+                options: [],
+            });
         });
         const text = (document.body.innerText || '').toLowerCase();
         const hasFormWords = text.includes('submit') || text.includes('apply') || text.includes('application');
@@ -60,15 +75,58 @@ def read_page(p):
     return result
 
 def find_page(ctx, state):
-    """Find the page by external_url or LinkedIn jobs URL."""
-    ext = state.get("external_url", "")
+    """Find the best matching page by JID tag, then URL score."""
+    jid = state.get("jid", "")
+    ext = state.get("external_url", "").rstrip("/")
+
+    # First pass: find by JID tag on body
     for p in ctx.pages:
-        url = p.url
-        if ext and (url in ext or ext in url):
-            return p
-        if "linkedin.com/jobs/view" in url:
-            return p
+        try:
+            tag = p.evaluate("() => document.body.getAttribute('data-job-id') || ''")
+            if tag == jid:
+                return p
+        except:
+            pass
+
+    # Second pass: score by URL match quality
+    if ext:
+        best_score = -1
+        best_page = None
+        for p in ctx.pages:
+            url = p.url.rstrip("/")
+            score = -1
+            if url == ext:
+                score = 3
+            elif url.startswith(ext + "/"):
+                score = 2
+            elif ext.startswith(url + "/"):
+                score = 1
+            if score > best_score:
+                best_score = score
+                best_page = p
+        if best_page:
+            return best_page
+
+    # Third pass: LinkedIn job ID match
+    li_job_id = None
+    if "linkedin.com/jobs/view" in ext:
+        try:
+            li_job_id = ext.split("/jobs/view/")[1].split("/")[0]
+        except:
+            pass
+    if li_job_id:
+        for p in ctx.pages:
+            if li_job_id in p.url:
+                return p
+
     return None
+
+def tag_page(page, jid):
+    """Tag a page with a job ID for reliable find_page lookups."""
+    try:
+        page.evaluate(f"(jid) => document.body.setAttribute('data-job-id', jid)", jid)
+    except:
+        pass
 
 def read_and_save(p, state):
     """Read page state, save to state file, return page dict."""
