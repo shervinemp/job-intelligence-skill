@@ -18,15 +18,15 @@ Automated job discovery, description fetching, CV tailoring, and auto-apply — 
                           │   Gmail Search   │
                           └────────┬─────────┘
                                    │
-                          ┌────────▼─────────┐   ┌──────────────────┐
-                          │ stage_emails.py  │   │  linkedin.py     │
-                          └────────┬─────────┘   └────────┬─────────┘
+                          ┌────────▼─────────┐  ┌──────────────────┐
+                          │ stage_emails.py  │  │  linkedin.py     │
+                          └────────┬─────────┘  └────────┬─────────┘
                                    │                     │
                                    └──────────┬──────────┘
                                               │
                                      ┌────────▼─────────┐
-                                     │    extract.py     │
-                                     │  admit / reject   │
+                                     │    extract.py    │
+                                     │  admit / reject  │
                                      └────────┬─────────┘
                                               │
                                      ┌────────▼─────────┐
@@ -44,20 +44,20 @@ Automated job discovery, description fetching, CV tailoring, and auto-apply — 
                                      │  classify type   │
                                      └────────┬─────────┘
                                               │
-                               ┌──────────────┼──────────────┐
-                               │              │              │
-                        ┌──────▼───────┐ ┌────▼────┐ ┌──────▼───────┐
-                        │  Easy Apply  │ │External │ │   Already    │
-                        │   (modal)    │ │/ATS dir │ │   Applied    │
-                        └──────┬───────┘ └────┬────┘ └──────┬───────┘
-                               │              │              │
-                        ┌──────▼───────┐ ┌────▼────┐        │
-                        │  act --fill  │ │navigate │        │
-                        │  act --next  │ │act --fill│        │
-                        │  act --submit│ │act --next│        │
-                        └──────┬───────┘ │act --sub│        │
-                               │         └────┬────┘        │
-                               └──────────────┼──────────────┘
+                             ┌────────────────┼────────────────┐
+                             │                │                │
+                      ┌──────▼───────┐   ┌────▼────┐   ┌──-────▼───────┐
+                      │  Easy Apply  │   │External │   │    Already    │
+                      │   (modal)    │   │/ATS dir │   │    Applied    │
+                      └──────┬───────┘   └────┬────┘   └───────┬───────┘
+                             │                │                │
+                     ┌───────▼───────┐  ┌─────▼─────┐          │
+                     │  act --fill   │  │ navigate  │          │
+                     │  act --next   │  │ act --fill│          │
+                     │  act --submit │  │ act --next│          │
+                     └───────┬───────┘  │ act --sub │          │
+                             │          └─────┬─────┘          │
+                             └────────────────┼────────────────┘
                                               │
                                       ┌───────▼────────┐
                                       │   verify.py    │
