@@ -63,7 +63,7 @@ def run(jid):
     # Close the origin LinkedIn page and any safety-redirect pages
     for pg in ctx.pages:
         u = pg.url
-        if 'linkedin.com' in u and u != page.url:
+        if 'linkedin.com' in u and u != p.url:
             try: pg.close()
             except: pass
 
