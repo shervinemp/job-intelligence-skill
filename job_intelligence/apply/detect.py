@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""detect.py — Classify job entry point. Prints structured output for the model."""
+"""detect.py — Classify job entry point. Also pre-flight: checks stage, PDF, type.
+One command tells you if a job is ready for the apply pipeline.
+"""
 import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
@@ -7,6 +9,11 @@ from lib.db import get_conn
 from apply.common.page_helpers import read_page, save_state
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
+
+def _has_pdf(jid):
+    rd = os.path.expanduser(f"~/.openclaw/results/{jid}")
+    if not os.path.isdir(rd): return False
+    return any("Resume" in f and f.endswith(".pdf") for f in os.listdir(rd))
 
 def run(jid):
     c = get_conn()
@@ -17,19 +24,26 @@ def run(jid):
 
     print(f"JOB: {title or '?'} @ {company or '?'}", file=sys.stderr)
 
+    # Stage check
     if stage == "applied":
         print("TYPE: already_applied\nNEXT: none"); sys.exit(0)
+    if stage == "failed":
+        print("STATUS: failed — run tailor.py retry first\nNEXT: tailor.py retry"); sys.exit(0)
+    if stage in ("extracted", "described"):
+        if not _has_pdf(jid):
+            print(f"STATUS: not tailored (stage={stage}, no PDF)\nNEXT: tailor.py {jid}")
+            sys.exit(0)
 
+    # Classify type
     b, ctx = connect()
     p = ctx.new_page()
 
     if "linkedin.com/jobs/view" in url:
         job_id = url.split("/jobs/view/")[1].split("/")[0]
-        apply_url = f"https://www.linkedin.com/jobs/view/{job_id}/apply/?openSDUIApplyFlow=true"
-        p.goto(apply_url, wait_until="domcontentloaded", timeout=30000)
+        p.goto(f"https://www.linkedin.com/jobs/view/{job_id}/apply/?openSDUIApplyFlow=true", wait_until="domcontentloaded", timeout=30000)
         time.sleep(5)
 
-        buttons = p.evaluate("""() => Array.from(document.querySelectorAll('button')).filter(b=>b.offsetParent!==null).map(b=>({text:(b.textContent||'').trim().slice(0,25), aria:(b.getAttribute('aria-label')||'').slice(0,40)}))""")
+        buttons = p.evaluate("""() => Array.from(document.querySelectorAll('button')).filter(b=>b.offsetParent!==null).map(b=>({text:(b.textContent||'').trim().slice(0,25),aria:(b.getAttribute('aria-label')||'').slice(0,40)}))""")
         page_state = read_page(p)
 
         if page_state and page_state["fieldCount"] > 0:
