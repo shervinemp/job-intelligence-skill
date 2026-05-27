@@ -98,6 +98,12 @@ def run(jid):
             save_state({"jid": jid, "url": url, "title": title, "company": company,
                         "external_url": url, "platform": plat, "page": page_state})
         else:
+            from apply.common.platforms import detect_platform, check_page, LOGIN_WALL
+            plat = detect_platform(url)
             text = (p.evaluate("() => document.body.innerText") or "").lower()
-            print(f"TYPE: {'auth_wall' if any(w in text for w in ['sign in','log in']) else 'unknown'}\nNEXT: none")
-            save_state({"jid": jid})
+            if plat and check_page(text, plat, LOGIN_WALL):
+                print(f"TYPE: login_wall\nPLATFORM: {plat}\nNEXT: login then retry")
+                save_state({"jid": jid})
+            else:
+                print(f"TYPE: unknown\nNEXT: none")
+                save_state({"jid": jid})
