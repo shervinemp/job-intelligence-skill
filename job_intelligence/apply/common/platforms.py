@@ -49,8 +49,9 @@ LOGIN_WALL = {
         "log in to apply",
     ],
     "workday": [
-        "sign in",
+        "sign in to apply",
         "create account",
+        "sign in with email",
         "email address",
         "password",
     ],
