@@ -79,13 +79,20 @@ def run(jid):
         elif any(b["text"] == "Applied" for b in buttons):
             print("TYPE: already_applied")
             print("NEXT: none")
-        elif any("Applied" in (b.get("aria") or b["text"]) for b in buttons):
+        elif any("applied" in (b.get("aria") or b["text"]).lower() for b in buttons):
             print("TYPE: already_applied")
             print("NEXT: none")
-        elif "applied" in (p.evaluate("() => (document.body.innerText || '').toLowerCase()") or ""):
+        elif "you have applied" in (p.evaluate("() => (document.body.innerText || '').toLowerCase()") or ""):
             print("TYPE: already_applied")
             print("NEXT: none")
-        elif any("on company website" in b["aria"] for b in buttons):
+        # Check for Easy Apply button (fallback if dialog didn't auto-open)
+        easy_btn = any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons)
+        if easy_btn:
+            print("TYPE: easy_apply")
+            print("PAGE: {}")
+            print("NOTE: dialog not auto-opened, try clicking Easy Apply button")
+            print("NEXT: act --fill")
+        elif any("on company website" in (b.get("aria") or "").lower() for b in buttons):
             print("TYPE: external")
             print(f"BUTTONS: {json.dumps([b for b in buttons if 'company website' in b['aria']])}")
             print("NEXT: navigate")
