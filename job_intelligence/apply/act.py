@@ -49,6 +49,17 @@ def _handle_post_click(state, ps, page):
         state["result"] = "modal_closed"
         save_state(state)
         return True
+    # Check for validation errors
+    error_btns = [b for b in (ps.get("buttons") or []) if "error" in b.get("text","").lower()]
+    if error_btns:
+        print(f"ERRORS: {json.dumps([b['text'] for b in error_btns])}", file=sys.stderr)
+        from apply.common.page_helpers import scan_actions
+        cands = scan_actions(page, ["save and continue", "next", "continue", "review", "submit"])
+        print(f"CANDIDATES: {json.dumps(cands[:5])}", file=sys.stderr)
+        print("NEXT: model_choice — fix errors or skip", file=sys.stderr)
+        state["result"] = "validation_error"
+        save_state(state)
+        return True
     print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
     return False
 
