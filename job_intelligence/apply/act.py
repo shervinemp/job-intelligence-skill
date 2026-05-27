@@ -231,29 +231,29 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                                 if ans.lower() in opt.lower(): el.select_option(opt); break
                             else: el.select_option(ans)
                         elif f["tag"] in ("INPUT", "TEXTAREA"):
-                            el.fill(ans)
-                            # Autocomplete: if inside multiselect widget, confirm selection
+                            # Check if this is an autocomplete field (multiselect widget)
+                            is_ac = False
                             try:
-                                aid = f.get("data-automation-id", "")
-                                is_ac = "multiSelect" in aid or bool(page.locator(f'[data-automation-id="multiSelectContainer"]').count())
-                                if is_ac:
-                                    time.sleep(0.5)
-                                    # Try clicking matching option in dropdown
-                                    clicked = page.evaluate(f"""(a) => {{
-                                        var opts = document.querySelectorAll('[role="option"]');
-                                        for (var o of opts) {{
-                                            if (o.offsetParent === null) continue;
-                                            if ((o.textContent || "").trim().toLowerCase() === a.toLowerCase()) {{
-                                                o.click(); return true;
-                                            }}
-                                        }}
-                                        return false;
-                                    }}""", ans)
-                                    if not clicked:
-                                        page.keyboard.press("Enter")
-                                        time.sleep(0.3)
-                            except: pass
-                        filled += 1
+                                if f.get("placeholder") == "Search" or f.get("data_automation_id", ""):
+                                    is_ac = True
+                            except:
+                                pass
+                            if is_ac:
+                                # Use JS to set value and dispatch events (Workday multiselect needs native events)
+                                page.evaluate("""(args) => {
+                                    var ans = args[0], sel = args[1];
+                                    var el = document.querySelector(sel);
+                                    if (!el) return;
+                                    el.focus();
+                                    var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                                    nativeInputValueSetter.call(el, ans);
+                                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                                }""", [ans, sel])
+                                time.sleep(0.5)
+                            else:
+                                el.fill(ans)
+                            filled += 1
                 except: pass
         elif f.get("required"):
             unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
