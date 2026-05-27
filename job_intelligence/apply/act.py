@@ -15,25 +15,26 @@ def _match_word(needle, haystack):
     """Word-boundary match: 'phone' matches 'phone number' but NOT 'phone extension'."""
     return f" {needle} " in f" {haystack} " or haystack.startswith(f"{needle} ") or haystack.endswith(f" {needle}")
 
-def _find_answer(label, label_norm, answers, ca, profile):
-    """Find answer from --answers, common_answers, or profile. Returns None if uncertain.
-    For common_answers, prefers the most specific (most words) match."""
+def _find_answer(label, label_norm, answers, ca, profile, required=False):
+    """Find answer from --answers, common_answers, or profile.
+    For common_answers: optional fields only use exact matches; required fields can use prefix matches."""
     for k, v in answers.items():
         k_norm = re.sub(r'[^a-z0-9]+', ' ', k.lower()).strip()
         if k_norm == label_norm or label_norm.startswith(k_norm):
             return v
-    # common_answers: find all matches, pick the one with most words (most specific)
-    best_key, best_val = "", None
-    best_words = 0
+    # common_answers: optional fields only use exact matches
+    best_key, best_val, best_words = "", None, 0
     for ck, cv in ca.items():
         if not cv: continue
         kn = ck.lower().replace('_', ' ').strip()
-        kw_count = len(kn.split())
         if kn == label_norm:
-            return cv  # exact match wins immediately regardless of specificity
-        if label_norm.startswith(kn) and kw_count > best_words:
-            best_key, best_val = kn, cv
-            best_words = kw_count
+            return cv  # exact match always works
+        if required and label_norm.startswith(kn):
+            # Prefix match: prefer more specific (more words) key
+            kw_count = len(kn.split())
+            if kw_count > best_words:
+                best_key, best_val = kn, cv
+                best_words = kw_count
     if best_val:
         return best_val
     from apply.common.page_helpers import resolve_label
@@ -193,7 +194,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                 continue  # already filled
             lbl = f["label"]
             lbl_norm = re.sub(r'[^a-z0-9]+', ' ', lbl.lower()).strip()
-            ans = _find_answer(lbl, lbl_norm, answers, ca, profile)
+            ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
             if ans and f.get("id"):
                 try:
                     btn = page.locator(f'[id="{f["id"]}"]')
@@ -215,7 +216,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         lbl = f["label"]
         lbl_norm = re.sub(r'[^a-z0-9]+', ' ', lbl.lower()).strip()
 
-        ans = _find_answer(lbl, lbl_norm, answers, ca, profile)
+        ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
 
         if ans is not None:
             sel = ""
