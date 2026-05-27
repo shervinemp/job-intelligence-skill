@@ -59,64 +59,50 @@ class PageManager:
         _save(self.reg)
 
     def find(self, fallback_url=""):
-        """Find best page by scoring: focus > tag > URL match > domain."""
-        entry = self.reg.get(self.jid, {"urls": [], "fp": ""})
-        url_stack = entry.get("urls", [])
-        old_fp = entry.get("fp", "")
+        """Find page for this JID. Returns (page, candidates, confidence).
+        confidence: 'tagged', 'domain', 'multiple', or None."""
         fallback_domain = urlparse(fallback_url).netloc.lower() if fallback_url else ""
 
-        best_score, best_page = -1, None
+        tagged = None
+        domain_matches = []
+
         for p in self.ctx.pages:
             url = p.url.lower()
             if "about:blank" in url or "chrome-error" in url:
                 continue
 
             tag = _get_tag(p)
-            has_focus = False
-            try:
-                has_focus = p.evaluate("() => document.hasFocus()")
-            except:
-                pass
-
-            score = 0
-            # Tag match
             if tag == self.jid:
-                score = 3
-            # URL stack match (case-insensitive)
-            for stored in reversed(url_stack):
-                s = stored.rstrip("/").lower()
-                if url.rstrip("/") == s:
-                    score = max(score, 2)
-                elif url.rstrip("/").startswith(s + "/"):
-                    score = max(score, 2)
-                elif s.startswith(url.rstrip("/") + "/"):
-                    score = max(score, 1)
-            # Domain match
-            try:
-                if fallback_domain and urlparse(url).netloc.lower() == fallback_domain:
-                    score = max(score, 1)
-            except:
-                pass
-            # Focus bonus
-            if has_focus:
-                score += 2
+                tagged = p
+                break
 
-            if score > best_score:
-                best_score, best_page = score, p
+            if not tag and fallback_domain:
+                try:
+                    if urlparse(url).netloc.lower() == fallback_domain:
+                        domain_matches.append(p)
+                except:
+                    pass
 
-        if best_page:
-            # Disambiguate ties: same score, multiple pages → prefer tag match
-            if best_score < 3:
-                ties = [p for p in self.ctx.pages if p != best_page and self._score(p, url_stack, fallback_domain) == best_score]
-                if ties and old_fp:
-                    for p in ties:
-                        if _fingerprint(p) == old_fp:
-                            best_page = p; break
-            _tag(best_page, self.jid)
-            self.register(best_page)
-            return best_page
+        if tagged:
+            self.register(tagged)
+            return tagged, [], "tagged"
 
-        return None
+        if len(domain_matches) == 1:
+            self.register(domain_matches[0])
+            return domain_matches[0], [], "domain"
+
+        if domain_matches:
+            # Multiple candidates — return them all for model to pick
+            for p in domain_matches:
+                try:
+                    fp = (p.evaluate("() => (document.body.innerText || '').trim().slice(0, 60)") or "")[:60]
+                except:
+                    fp = ""
+                self.reg.setdefault("_candidates", []).append({"url": p.url, "fp": fp})
+            _save(self.reg)
+            return None, domain_matches, "multiple"
+
+        return None, [], None
 
     def _score(self, page, url_stack, fallback_domain):
         """Calculate match score for a single page."""
