@@ -72,6 +72,7 @@ GUEST_APPLY = {
     "workday": [
         "continue without signing in",
         "apply as guest",
+        "apply manually",
     ],
 }
 

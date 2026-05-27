@@ -182,8 +182,8 @@ def cmd_fill(jid, answers_json=None):
                 print(f"GUEST_APPLY: clicked '{gp}'", file=sys.stderr)
                 break
         if not guest_clicked:
-            print("LOGIN_WALL: sign-in required — ask user to login in their Chrome browser, then retry", file=sys.stderr)
-            print("NEXT: ask user", file=sys.stderr)
+            print("LOGIN_WALL: sign in required — login in your Chrome browser, then retry this command", file=sys.stderr)
+            print("NEXT: retry after login", file=sys.stderr)
             return
 
     # If no fields detected but page has form hints, try to find and click apply link
