@@ -67,13 +67,20 @@ def _fill_text(page, fields, answers, ca, profile, jid):
             if file_uploaded or not f.get("required", False): continue
             results_dir = os.path.expanduser(f"~/.openclaw/results/{jid}")
             if os.path.isdir(results_dir):
+                # Find resume: prefer one matching job title or company
+                candidates = []
                 for fn in os.listdir(results_dir):
                     if "Resume" in fn and fn.endswith(".pdf"):
-                        try:
-                            fi = page.query_selector('input[type="file"][required]') or page.query_selector('input[type="file"]')
-                            if fi: fi.set_input_files(os.path.join(results_dir, fn)); file_uploaded = True; filled += 1
-                        except: pass
-                        break
+                        score = 0
+                        if state.get("title","").split(" ")[0].lower() in fn.lower(): score += 2
+                        if state.get("company","").lower() in fn.lower(): score += 1
+                        candidates.append((score, fn))
+                candidates.sort(key=lambda x: -x[0])
+                if candidates:
+                    try:
+                        fi = page.query_selector('input[type="file"][required]') or page.query_selector('input[type="file"]')
+                        if fi: fi.set_input_files(os.path.join(results_dir, candidates[0][1])); file_uploaded = True; filled += 1
+                    except: pass
             continue
 
         lbl = f["label"]
@@ -143,8 +150,11 @@ def cmd_fill(jid, answers_json=None):
         const cbs = c.querySelectorAll('input[type="checkbox"]');
         for (const cb of cbs) {
             const lbl = c.querySelector('label[for="' + cb.id + '"]');
-            if (lbl && (lbl.textContent||'').includes('Follow') && cb.checked) {
-                cb.checked = false; cb.dispatchEvent(new Event('change', {bubbles:true}));
+            if (lbl) {
+                const t = (lbl.textContent||'').toLowerCase();
+                if (t.includes('follow') && t.includes('up to date')) {
+                    cb.checked = false; cb.dispatchEvent(new Event('change', {bubbles:true}));
+                }
             }
         }
     }""")
@@ -217,10 +227,11 @@ def cmd_next(jid):
                 print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
                 state["result"] = "submitted"
                 save_state(state)
-                sys.exit(0)
+                return
         print("STATUS: modal_closed\nNEXT: verify", file=sys.stderr)
         state["result"] = "modal_closed"
         save_state(state)
+        return
 
     print(f"PAGE: {json.dumps(ps2)}", file=sys.stderr)
     has_submit = any(b["text"].lower() in ("submit", "submit application") and not b["disabled"] for b in ps2.get("buttons",[]))
