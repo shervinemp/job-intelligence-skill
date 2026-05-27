@@ -26,16 +26,16 @@ def run(jid):
 
     # Stage check
     if stage == "applied":
-        print("TYPE: already_applied\nNEXT: none"); sys.exit(0)
+        print("TYPE: already_applied\nNEXT: none"); save_state({"jid": jid}); sys.exit(0)
     if stage == "failed":
-        print("STATUS: failed — run tailor.py retry first\nNEXT: tailor.py retry"); sys.exit(0)
+        print("STATUS: failed — run tailor.py retry first\nNEXT: tailor.py retry"); save_state({"jid": jid}); sys.exit(0)
     if stage in ("extracted", "described"):
         if not _has_pdf(jid):
             if desc_exists(jid):
                 print(f"STATUS: needs advance + tailor (stage={stage}, has desc, no PDF)\nNEXT: tailor.py --jid {jid}")
             else:
                 print(f"STATUS: needs description (stage={stage}, no desc, no PDF)\nNEXT: fetch.py  then  tailor.py --jid {jid}")
-            sys.exit(0)
+            save_state({"jid": jid}); sys.exit(0)
 
     # Classify type
     b, ctx = connect()
@@ -53,8 +53,10 @@ def run(jid):
             print(f"TYPE: easy_apply\nPAGE: {json.dumps(page_state)}\nNEXT: act --fill")
         elif any(b["text"] == "Applied" for b in buttons):
             print("TYPE: already_applied\nNEXT: none")
+            get_conn().execute("UPDATE jobs SET stage=? WHERE id=?", ("applied", jid)).connection.commit()
         elif any("applied" in (b.get("aria") or b["text"]).lower() for b in buttons):
             print("TYPE: already_applied\nNEXT: none")
+            get_conn().execute("UPDATE jobs SET stage=? WHERE id=?", ("applied", jid)).connection.commit()
         elif "you have applied" in (p.evaluate("() => (document.body.innerText || '').toLowerCase()") or ""):
             print("TYPE: already_applied\nNEXT: none")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):

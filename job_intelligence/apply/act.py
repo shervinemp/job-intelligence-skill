@@ -31,7 +31,7 @@ def _fill_radios(page, fields, answers, ca, jid):
                 ans = v; break
         if not ans:
             for ck, cv in ca.items():
-                if cv and ck.lower() in q_norm:
+                if cv and ck.lower().replace('_', ' ') in q_norm:
                     ans = cv; break
         if ans:
             for opt in opts:
@@ -40,6 +40,13 @@ def _fill_radios(page, fields, answers, ca, jid):
                         if rf["label"] == opt and rf["id"]:
                             try:
                                 el = page.query_selector(f'[id="{rf["id"]}"]')
+                                if el and not el.is_checked():
+                                    el.check(); filled += 1
+                            except: pass
+                            break
+                        elif rf["label"] == opt and rf["name"]:
+                            try:
+                                el = page.query_selector(f'[name="{rf["name"]}"][value="on"]')
                                 if el and not el.is_checked():
                                     el.check(); filled += 1
                             except: pass
@@ -79,7 +86,7 @@ def _fill_text(page, fields, answers, ca, profile, jid):
                 ans = v; break
         if not ans:
             for ck, cv in ca.items():
-                if cv and ck.lower() in lbl_norm:
+                if cv and ck.lower().replace('_', ' ') in lbl_norm:
                     ans = cv; break
         if not ans:
             ans = resolve_label(lbl, profile)
@@ -165,7 +172,13 @@ def cmd_next(jid):
     b, ctx = connect()
     page = find_page(ctx, state)
     if not page:
-        print("ERROR: no page found", file=sys.stderr); sys.exit(1)
+        ext = state.get("external_url", "")
+        if ext:
+            page = ctx.new_page()
+            page.goto(ext, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(5)
+        else:
+            print("ERROR: no page found and no external URL", file=sys.stderr); sys.exit(1)
 
     ps = read_page(page)
     btns = ps.get("buttons", [])
@@ -173,7 +186,7 @@ def cmd_next(jid):
     # Find forward button: rightmost non-excluded inside dialog
     candidates = [b for b in btns if not b["disabled"] and b["text"].lower().strip() not in _EXCLUDED_BUTTONS]
     target = None
-    for kw in ["submit", "submit application", "review", "next", "continue", "done"]:
+    for kw in ["review", "next", "continue", "done"]:  # No "submit" — use --submit for that
         for b in candidates:
             if b["text"].lower().strip() == kw:
                 target = b; break
@@ -201,8 +214,13 @@ def cmd_next(jid):
         text = (page.evaluate("() => document.body.innerText") or "").lower()
         for w in ["thank you", "submitted", "your application", "has been sent"]:
             if w in text:
-                print("STATUS: submitted\nNEXT: verify", file=sys.stderr); sys.exit(0)
-        print("STATUS: modal_closed\nNEXT: verify", file=sys.stderr); sys.exit(0)
+                print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
+                state["result"] = "submitted"
+                save_state(state)
+                sys.exit(0)
+        print("STATUS: modal_closed\nNEXT: verify", file=sys.stderr)
+        state["result"] = "modal_closed"
+        save_state(state)
 
     print(f"PAGE: {json.dumps(ps2)}", file=sys.stderr)
     has_submit = any(b["text"].lower() in ("submit", "submit application") and not b["disabled"] for b in ps2.get("buttons",[]))
@@ -229,11 +247,11 @@ def cmd_submit(jid, confirm=False):
     ps = read_page(page)
     btns = [b for b in ps.get("buttons", []) if b["text"].lower().strip() in ("submit", "submit application")]
     if not btns:
-        print("NO_SUBMIT_BUTTON\nNEXT: none", file=sys.stderr); sys.exit(0)
+        print("NO_SUBMIT_BUTTON\nNEXT: none", file=sys.stderr); return
     btn = btns[0]
     print(f"SUBMIT: {btn['text']}\nDISABLED: {btn['disabled']}", file=sys.stderr)
     if not confirm:
-        print("DRY_RUN: pass --confirm to submit\nNEXT: act --submit --confirm", file=sys.stderr); sys.exit(0)
+        print("DRY_RUN: pass --confirm to submit\nNEXT: act --submit --confirm", file=sys.stderr); return
 
     try:
         b_loc = page.locator(f'button:has-text("{btn["text"]}")')
@@ -263,9 +281,14 @@ def cmd_auto(jid, answers_json=None):
             print(f"AUTO: page {pn} — {len(unfilled)} unfilled, stop", file=sys.stderr)
             return
         print(f"AUTO: page {pn} — filled, advancing", file=sys.stderr)
-        cmd_next(jid)
-        if "submitted" in open(os.path.join(os.path.dirname(__file__), "..", STATE_PATH)).read():
-            print(f"AUTO: submitted", file=sys.stderr); return
+        try:
+            cmd_next(jid)
+        except SystemExit:
+            pass  # cmd_next may sys.exit on success
+        state = load_state()
+        if state.get("result") in ("submitted", "modal_closed"):
+            print(f"AUTO: {state['result']}", file=sys.stderr)
+            return
     print(f"AUTO: max pages reached without submit", file=sys.stderr)
 
 def run(args):
