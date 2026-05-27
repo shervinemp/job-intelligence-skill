@@ -14,41 +14,44 @@ def save_state(state):
         json.dump(state, f, indent=2)
 
 def read_page(p):
-    """Read dialog (LinkedIn modal) or document (external ATS). Returns dict with page hints."""
+    """Read page content including fields, buttons, page type hints.
+    Queries document-level (works for both modals and external ATS)."""
     result = p.evaluate("""() => {
-        const container = document.querySelector('[role="dialog"]') || document;
-        const inputs = container.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
-        const btns = container.querySelectorAll('button');
+        const inputs = document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
+        const btns = document.querySelectorAll('button');
         const fields = Array.from(inputs).map(el => {
-            const lbl = container.querySelector('label[for="' + el.id + '"]');
-            const parent = el.closest('div,fieldset,section,li');
+            const lbl = document.querySelector('label[for="' + el.id + '"]');
+            const parentLabel = el.closest('label');
+            const parent = el.closest('div,fieldset,section,li,form');
             const plbl = parent ? parent.querySelector('label, legend, strong, span') : null;
             let label = (lbl ? lbl.textContent.trim() : '') || el.placeholder || el.getAttribute('aria-label') || '';
+            if (!label && parentLabel) label = parentLabel.textContent.trim();
             if (!label && plbl) label = plbl.textContent.trim();
             return {
                 tag: el.tagName, type: el.getAttribute('type') || '',
                 id: el.id, name: el.getAttribute('name') || '',
-                label: label.replace(/\\s+/g,' ').trim().slice(0, 80),
-                required: el.required, value: el.value || '',
+                label: (label || '').replace(/\\s+/g,' ').trim().slice(0, 80),
+                required: !!el.required, value: el.value || '',
                 checked: el.type === 'radio' ? el.checked : null,
                 options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0,15) : [],
             };
         });
-        // Page type hints
         const text = (document.body.innerText || '').toLowerCase();
         const hasFormWords = text.includes('submit') || text.includes('apply') || text.includes('application');
-        const hasSignIn = text.includes('sign in') || text.includes('log in') || text.includes('email') && text.includes('password');
+        const hasSignIn = text.includes('sign in') || text.includes('log in') || (text.includes('email') && text.includes('password'));
         let pageType = 'unknown';
         if (fields.length > 0) pageType = 'form';
         else if (hasSignIn) pageType = 'login_wall';
         else if (hasFormWords) pageType = 'maybe_form';
         return {
-            fieldCount: fields.length, fields: fields.slice(0,35),
+            fieldCount: fields.length,
+            fields: fields.slice(0, 35),
             pageType: pageType,
-            hasFileInput: container.querySelectorAll('input[type="file"]').length > 0,
-            hasRequiredFile: container.querySelectorAll('input[type="file"][required]').length > 0,
+            hasFileInput: document.querySelectorAll('input[type="file"]').length > 0,
+            hasRequiredFile: document.querySelectorAll('input[type="file"][required]').length > 0,
             buttons: Array.from(btns).filter(b => b.offsetParent !== null).map(b => ({
-                text: (b.textContent || '').trim().slice(0,30), disabled: b.disabled
+                text: (b.textContent || '').trim().slice(0, 30),
+                disabled: b.disabled
             })),
         };
     }""")

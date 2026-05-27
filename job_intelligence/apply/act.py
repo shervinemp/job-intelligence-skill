@@ -142,25 +142,92 @@ def cmd_fill(jid, answers_json=None):
         print("WARN: page looks unchanged from last fill — verify the form advanced", file=sys.stderr)
     state["page_fingerprint"] = current_fingerprint
 
-    # Check for login wall — if the page is a sign-in form, abort
+    # Check for login wall — try guest apply first, then abort
     text = page.evaluate("() => document.body.innerText") or ""
-    from apply.common.platforms import check_page, LOGIN_WALL
+    from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
     plat = state.get("platform", "")
     if check_page(text, plat, LOGIN_WALL):
-        print("LOGIN_WALL: sign-in required, try guest apply or open the page manually", file=sys.stderr)
-        return
+        # Try guest apply buttons
+        guest_patterns = GUEST_APPLY.get(plat, []) + GUEST_APPLY["default"]
+        guest_clicked = False
+        for gp in guest_patterns:
+            btn = page.evaluate(f"""(gp) => {{
+                const all = document.querySelectorAll('button, a, span, div');
+                for (const el of all) {{
+                    if (el.offsetParent === null) continue;
+                    const t = (el.textContent || '').trim().toLowerCase();
+                    if (t === gp || t.startsWith(gp)) {{
+                        if (el.tagName === 'A') return {{tag: 'A', href: el.href}};
+                        return {{tag: el.tagName}};
+                    }}
+                }}
+                return null;
+            }}""", gp)
+            if btn:
+                if btn.get("tag") == "A" and btn.get("href"):
+                    page.goto(btn["href"], wait_until="domcontentloaded", timeout=15000)
+                else:
+                    page.evaluate(f"""(gp) => {{
+                        const all = document.querySelectorAll('button');
+                        for (const el of all) {{
+                            if (el.offsetParent === null) continue;
+                            if ((el.textContent || '').trim().toLowerCase() === gp) {{
+                                el.click(); return;
+                            }}
+                        }}
+                    }}""", gp)
+                time.sleep(5)
+                ps = read_page(page)
+                guest_clicked = True
+                print(f"GUEST_APPLY: clicked '{gp}'", file=sys.stderr)
+                break
+        if not guest_clicked:
+            print("LOGIN_WALL: sign-in required, no guest apply option found", file=sys.stderr)
+            return
 
-    # If no fields detected but page has form hints, warn
-    if ps["fieldCount"] == 0 and ps.get("pageType") == "maybe_form":
-        print("WARN: no form fields found (likely custom UI or shadow DOM)", file=sys.stderr)
-        print("PAGE: form-like content detected but no standard inputs — try manual review or skip", file=sys.stderr)
-        state["page"] = ps
-        state["filled"] = 0
-        save_state(state)
-        return
-    if ps["fieldCount"] == 0 and ps.get("pageType") == "unknown":
-        print("WARN: no form fields found — page may not be an application form", file=sys.stderr)
-        return
+    # If no fields detected but page has form hints, try to find and click apply link
+    if ps["fieldCount"] == 0:
+        if ps.get("pageType") == "maybe_form" or ps.get("pageType") == "unknown":
+            # Search for apply link/button and follow it
+            apply_link = page.evaluate("""() => {
+                const all = document.querySelectorAll('a, button');
+                for (const el of all) {
+                    if (el.offsetParent === null) continue;
+                    const t = (el.textContent || '').trim().toLowerCase();
+                    const h = (el.href || '').toLowerCase();
+                    if (t.includes('apply') || h.includes('/apply')) {
+                        if (el.tagName === 'A') return {tag: 'A', href: el.href, text: t.slice(0,30)};
+                        return {tag: el.tagName, text: t.slice(0,30)};
+                    }
+                }
+                return null;
+            }""")
+            if apply_link:
+                if apply_link["tag"] == "A":
+                    page.goto(apply_link["href"], wait_until="domcontentloaded", timeout=15000)
+                else:
+                    page.evaluate("""() => {
+                        const btns = document.querySelectorAll('button');
+                        for (const b of btns) {
+                            if (b.offsetParent === null) continue;
+                            if ((b.textContent || '').trim().toLowerCase().includes('apply')) {
+                                b.click(); return;
+                            }
+                        }
+                    }""")
+                time.sleep(5)
+                ps = read_page(page)
+                print(f"APPLY_LINK: followed '{apply_link['text']}' → {ps['fieldCount']} fields", file=sys.stderr)
+            elif ps.get("pageType") == "maybe_form":
+                print("WARN: no form fields found (likely custom UI or shadow DOM)", file=sys.stderr)
+                print("PAGE: form-like content detected but no standard inputs nor apply link", file=sys.stderr)
+                state["page"] = ps
+                state["filled"] = 0
+                save_state(state)
+                return
+            else:
+                print("WARN: no form fields found — page may not be an application form", file=sys.stderr)
+                return
 
     profile = {}
     if os.path.exists(profile_path):
@@ -197,7 +264,7 @@ def cmd_fill(jid, answers_json=None):
         print(f"  {f['label']}{opts}", file=sys.stderr)
 
     btns = ps.get("buttons", [])
-    has_submit = any(b["text"].lower() in ("submit", "submit application") and not b["disabled"] for b in btns)
+    has_submit = any(b["text"].lower() in ("submit", "submit application", "apply", "send application") and not b["disabled"] for b in btns)
     has_next = any(b["text"].lower() in ("next", "review", "continue", "done") and not b["disabled"] for b in btns)
     if unfilled:
         print("NEXT: act --fill --answers '{\"<question>\": \"<answer>\"}'", file=sys.stderr)
@@ -273,7 +340,7 @@ def cmd_next(jid):
         return
 
     print(f"PAGE: {json.dumps(ps2)}", file=sys.stderr)
-    has_submit = any(b["text"].lower() in ("submit", "submit application") and not b["disabled"] for b in ps2.get("buttons",[]))
+    has_submit = any(b["text"].lower() in ("submit", "submit application", "apply", "send application") and not b["disabled"] for b in ps2.get("buttons",[]))
     print(f"NEXT: {'act --submit' if has_submit else 'act --fill'}", file=sys.stderr)
 
 def cmd_back(jid):
@@ -299,16 +366,28 @@ def cmd_submit(jid, confirm=False):
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
 
     ps = read_page(page)
-    btns = [b for b in ps.get("buttons", []) if b["text"].lower().strip() in ("submit", "submit application")]
-    if not btns:
+    submit_kw_order = ("submit application", "submit", "send application", "apply", "send")
+    btns = ps.get("buttons", [])
+    target = None
+    for kw in submit_kw_order:
+        for b in btns:
+            if b["text"].lower().strip() == kw and not b["disabled"]:
+                target = b; break
+        if target: break
+    if not target:
+        for kw in submit_kw_order:
+            for b in btns:
+                if kw in b["text"].lower().strip() and not b["disabled"]:
+                    target = b; break
+            if target: break
+    if not target:
         print("NO_SUBMIT_BUTTON\nNEXT: none", file=sys.stderr); return
-    btn = btns[0]
-    print(f"SUBMIT: {btn['text']}\nDISABLED: {btn['disabled']}", file=sys.stderr)
+    print(f"SUBMIT: {target['text']}\nDISABLED: {target['disabled']}", file=sys.stderr)
     if not confirm:
         print("DRY_RUN: pass --confirm to submit\nNEXT: act --submit --confirm", file=sys.stderr); return
 
     try:
-        b_loc = page.locator(f'button:has-text("{btn["text"]}")')
+        b_loc = page.locator(f'button:has-text("{target["text"]}")')
         b_loc.first.click(timeout=5000)
     except: pass
     time.sleep(5)
