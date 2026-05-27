@@ -12,30 +12,32 @@ profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 _EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
 
 def _click_candidate(page, c, state=None):
-    try:
-        loc = page.locator(f'a:has-text("{c["text"]}"), button:has-text("{c["text"]}")')
-        if loc.count() > 0:
-            loc.first.click(force=True, timeout=5000)
-        else:
-            page.evaluate(f"""(txt) => {{
-                const all = document.querySelectorAll('a, button');
-                for (const el of all) {{
-                    if (el.offsetParent === null) continue;
-                    if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return; }}
-                }}
-            }}""", c["text"])
-    except:
-        page.evaluate(f"""(txt) => {{
-            const all = document.querySelectorAll('a, button');
-            for (const el of all) {{
-                if (el.offsetParent === null) continue;
-                if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.dispatchEvent(new MouseEvent('click', {{bubbles:true}})); return; }}
-            }}
-        }}""", c["text"])
+    if c["tag"] == "A" and c.get("href"):
+        page.goto(c["href"], wait_until="domcontentloaded", timeout=15000)
+    else:
+        try:
+            loc = page.locator(f'button:has-text("{c["text"]}")')
+            if loc.count() > 0:
+                loc.first.click(force=True, timeout=5000)
+            else:
+                page.evaluate(f"""(txt) => {{
+                    const all = document.querySelectorAll('button');
+                    for (const el of all) {{
+                        if (el.offsetParent === null) continue;
+                        if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return; }}
+                    }}
+                }}""", c["text"])
+        except:
+                page.evaluate(f"""(txt) => {{
+                    const all = document.querySelectorAll('button');
+                    for (const el of all) {{
+                        if (el.offsetParent === null) continue;
+                        if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.dispatchEvent(new MouseEvent('click', {{bubbles:true}})); return; }}
+                    }}
+                }}""", c["text"])
     if state:
         state["external_url"] = page.url
     time.sleep(5)
-
 def _handle_post_click(state, ps, page):
     if not ps or ps["fieldCount"] == 0:
         text = (page.evaluate("() => document.body.innerText") or "").lower()
