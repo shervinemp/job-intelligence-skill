@@ -1,212 +1,218 @@
-# Apply pipeline — consolidation plan
+# Apply pipeline — consolidation plan v2
 
 ## Architecture
 
-3 scripts: **detect** → **act** → **verify**
+4 scripts: **detect → act → verify**
 
-No page-order scripts (no 01_click, 04_resume, 04_screening, 05_click_next). Everything is handled by `act --fill`, `act --next`, `act --submit`.
+`act` handles ALL interactions: fill, next, back, submit, auto. No page-order scripts (no 01_click, 04_resume, etc.).
 
 ---
 
 ## `detect.py`
 
-**Purpose:** Classify the job type and set up the session.
+Classifies job entry point. Does ONE thing — no side effects.
 
-**Usage:**
-```
-python3 detect.py <jid>
-```
+**Usage:** `python3 detect.py <jid>`
 
 **Logic:**
-1. Check DB stage — if "applied", print `STATUS: already_applied`, exit
-2. If LinkedIn URL, navigate to `/apply/` URL
-3. If external URL, navigate directly
-4. Check page state:
-   - Dialog visible with fields → `TYPE: easy_apply`
-   - "Applied" button visible → `TYPE: already_applied`
-   - "Apply on company website" → `TYPE: external`
-   - Dialog with no fields → `TYPE: unknown`
-5. Print job info + detected type
-6. Save state to `~/.openclaw/apply_state.json`
+1. DB stage = "applied" → `STATUS: already_applied`
+2. LinkedIn URL → navigate to `/apply/`:
+   - Dialog with fields → `TYPE: easy_apply`
+   - "Applied" button → `TYPE: already_applied`
+   - "On company website" → `TYPE: external`
+   - Nothing → `TYPE: unknown`
+3. External URL → navigate directly:
+   - Form detected → `TYPE: ats_direct`
+   - Auth wall → `TYPE: auth_wall`
+4. Prints job info + type + page state
 
 **Stdout:**
 ```
 JOB: Senior Engineer @ Acme
 TYPE: easy_apply
-STAGE: page1
-PAGE: {
-  "fieldCount": 3,
-  "fields": [...],
-  "buttons": [{"text": "Next", "disabled": false}],
-  "hasFileInput": true,
-  "hasUnfilledRequired": false
-}
+PAGE: { 3 fields, buttons: [Next], fileInput: false }
 NEXT: act --fill
+```
+
+---
+
+## `navigate.py`
+
+Handles the LinkedIn → External ATS transition. Separate from detect because it's a multi-step action.
+
+**Usage:** `python3 navigate.py <jid>`
+
+**Logic:**
+1. Navigate to LinkedIn jobs/view URL
+2. Click "Apply on company website" button
+3. Wait for new tab or URL change
+4. Detect ATS platform (Ashby, Greenhouse, etc.)
+5. Save external URL to state
+
+**Stdout:**
+```
+EXTERNAL_URL: https://jobs.ashbyhq.com/acme/xxx
+PLATFORM: ashby
+NEXT: act --fill
+```
+
+If button not found or no new tab:
+```
+ERROR: no external URL — job may be closed or premium-walled
+NEXT: none
 ```
 
 ---
 
 ## `act.py`
 
-**Purpose:** Perform ONE action. Always reads fresh state, always prints result.
+ONE action per call. Always reads fresh state. Always verifies before/after.
 
-**Subcommands:**
+### `act --fill <jid> [--answers '{}']`
 
-### `act --fill <jid>`
-
-Fills ALL fields on current page from `--answers` + common_answers + profile. Uploads resume if file input present. Prints what was filled and what remains.
-
-**Usage:**
-```
-python3 act.py --fill <jid> [--answers '{"q":"val"}']
-```
+Fills ALL fields on current page. Targets required file inputs only (skips optional drop zones). Handles radios, selects, text, checkboxes, file inputs.
 
 **Logic:**
-1. Read page state (all inputs, selects, radios, buttons, file inputs)
-2. Fill from `--answers` (substring match) + common_answers (fuzzy match) + profile (name, email, phone, linkedin)
-3. Upload resume to ALL file inputs via `set_input_files`
-4. Skip already-checked radios, already-filled fields
-5. Print filled count + unfilled required fields
+1. Read all fields + file inputs + buttons
+2. Apply --answers (substring match, longest unique prefix wins)
+3. Apply common_answers (fuzzy word overlap)
+4. Fill profile fields (name, email, phone, linkedin — deterministic)
+5. Upload resume to required file inputs via `set_input_files`
+6. Uncheck "Follow company" checkbox if present (always)
+7. Verify each change: `el.value` / `el.checked` changed
 
-**Stdout (page fully filled):**
+**Stdout (done):**
 ```
-FILLED: 3  UNFILLED: 0
-FIELDS: [
-  {"label": "Full Name", "value": "Shervin Naseri"},
-  {"label": "Email", "value": "shervin.naseri@gmail.com"},
-  {"label": "Resume", "file": "uploaded"}
-]
+FILLED: 4  UNFILLED: 0
 BUTTONS: [{"text": "Next", "disabled": false}]
 NEXT: act --next
 ```
 
 **Stdout (unfilled remain):**
 ```
-FILLED: 0  UNFILLED: 2
-UNFILLED: [
-  {"label": "How many years of Python?", "tag": "INPUT:text"},
-  {"label": "Willing to relocate?", "tag": "SELECT", "options": ["Yes","No"]}
-]
-NEXT: act --fill --answers '{"How many years of Python?": "5", "Willing to relocate?": "Yes"}'
+FILLED: 2  UNFILLED: 1
+UNFILLED: [{"label": "Years of Python?", "tag": "INPUT:text", "options": []}]
+NEXT: act --fill --answers '{"Years of Python?": "5"}'
 ```
 
 ### `act --next <jid>`
 
-Clicks the primary button (Next / Review / Submit). Waits for new state. Prints result.
-
-**Usage:**
-```
-python3 act.py --next <jid>
-```
+Clicks the best forward button. Never clicks Back, Cancel, Save, Edit.
 
 **Logic:**
-1. Read dialog buttons
-2. Find the best button to click: Submit > Review > Next
-3. Click it (Playwright native click, disable overlay)
-4. Wait 3s
-5. Read new dialog state
+1. Read all buttons
+2. Pick forward button by priority: Submit > Review > Next > Continue > Done
+3. If none found → `NO_BUTTON`
+4. If disabled → `BUTTON_DISABLED: Next is disabled — 2 required fields empty`
+5. Click via Playwright (disable overlay)
+6. Wait 3s
+7. Read new page state
 
-**Stdout (next page loaded):**
+**Stdout (advanced):**
 ```
-ACTION: Next -> clicked
-PAGE: {
-  "fieldCount": 5,
-  "fields": [...],
-  "buttons": [{"text": "Review", "disabled": false}]
-}
+ACTION: Next  BUTTON: Review
+PAGE: { 5 fields, buttons: [Back, Submit], fileInput: false }
 NEXT: act --fill
 ```
 
-**Stdout (submit or modal closed):**
+**Stdout (submit):**
 ```
-ACTION: Submit -> clicked
-STATUS: submitted
-NEXT: verify <jid>
+ACTION: Next  BUTTON: Submit application
+PAGE: { 0 fields, buttons: [], modal: false }
+NEXT: verify
 ```
 
-### `act --submit <jid>`
+### `act --back <jid>`
 
-Like --next but specifically clicks Submit. Dry-run safe (prints what it would do, requires `--confirm` to actually click). Only used on the review page.
+Clicks the Back button. Returns to previous page. Used if model detects wrong answer.
 
-**Usage:**
+**Logic:** Same as --next but clicks Back.
+
+**Stdout:**
 ```
-python3 act.py --submit <jid> [--confirm]
+ACTION: Back
+PAGE: { ... }
+NEXT: act --fill
+```
+
+### `act --submit <jid> [--confirm]`
+
+Specifically clicks Submit on the review page. Without --confirm, dry-run.
+
+### `act --auto <jid>`
+
+Runs the full loop without model intervention: fill → next → fill → next → ... → submit. Reports progress at each step.
+
+**Logic:**
+1. Loop: fill → check unfilled → if none, next → check result → if more fields, loop
+2. If unfilled remain → print them and STOP (model provides --answers, re-run --auto)
+3. If Submit clicked → verify
+4. If error → print and STOP
+
+**Stdout:**
+```
+AUTO: page 1 — 3 fields filled
+AUTO: next → page 2 — 1 field filled, 1 unfilled
+AUTO: STOP — 1 unfilled: {"Years of Python?"}
+NEXT: act --fill --answers '{"Years of Python?": "5"}'
 ```
 
 ---
 
 ## `verify.py`
 
-**Purpose:** Check if submission was successful. Reads page state and DB. No state mutation.
+Checks submission result. Reads page state + DB.
 
-**Usage:**
-```
-python3 verify.py <jid>
-```
+**Usage:** `python3 verify.py <jid>`
 
 **Logic:**
-1. Check if modal is closed → submitted
-2. Check if LinkedIn shows "Applied" button → submitted
-3. Check if page shows "thank you" / "submitted" → submitted
-4. Check DB stage already "applied" → submitted
-5. Otherwise → unknown
-
-**Stdout:**
-```
-STATUS: submitted
-```
-
-or
-
-```
-STATUS: unknown
-PAGE: dialog still open, 3 fields unfilled
-NEXT: act --fill --answers '{"q":"val"}'
-```
+1. Modal closed → `STATUS: submitted`
+2. LinkedIn "Applied" button → `STATUS: submitted`
+3. "Thank you" / "submitted" text → `STATUS: submitted`
+4. DB stage = "applied" → `STATUS: submitted`
+5. None → `STATUS: unknown`
 
 ---
 
-## Flow loop (model follows)
+## Flow
 
 ```
 detect <jid>
-  ├── TYPE: easy_apply → act --fill → act --next → act --fill → ... → act --submit → verify
-  ├── TYPE: external   → act --navigate → act --fill → act --next → ... → act --submit → verify
-  ├── TYPE: already_applied → done
-  └── TYPE: unknown → report, skip
+  easy_apply:
+    act --fill → act --next → act --fill → ... → act --auto (loop)
+    If unfilled remain → model provides --answers, re-run --fill
+  external:
+    navigate → act --fill → act --next → ... → act --auto
+  ats_direct:
+    act --fill → act --next → ... → act --auto
+  already_applied:
+    done
+
+At any point:
+  act --back → act --fill (fix answers) → act --next
+  verify → confirm submission
 ```
-
-At each `act --fill`, if unfilled remain, model provides `--answers` and re-runs `act --fill`. Loop continues until Submit clicked or error.
-
----
 
 ## Files to create
 
 | File | Purpose |
 |------|---------|
-| `apply.py` | Root orchestrator: detect | act | verify subcommands |
+| `apply.py` | Root: detect | navigate | act (--fill/--next/--back/--submit/--auto) | verify |
 | `apply/detect.py` | Job type classification |
-| `apply/act.py` | All actions: --fill, --next, --submit |
+| `apply/navigate.py` | LinkedIn → External ATS transition |
+| `apply/act.py` | All actions |
 | `apply/verify.py` | Post-submit verification |
 
 ## Files to remove
 
-| File | Reason |
-|------|--------|
-| `apply/linkedin/detect.py` | Merged into apply/detect.py |
-| `apply/linkedin/easy_apply/*` | All 6 scripts — covered by act --fill/--next/--submit |
-| `apply/linkedin/external/01_navigate.py` | Covered by detect.py |
-| `apply/linkedin/external/03_submit.py` | Covered by act --submit |
-| `apply/common/01_fill_fields.py` | Covered by act --fill |
-| `apply/common/02_click_next.py` | Covered by act --next |
-| `apply/detect_ats.py` | Merged into apply/detect.py |
-| `apply/common/__init__.py` | find_apply_page no longer needed (each step navigates fresh) |
+All under `apply/`: linkedin/, common/, detect_ats.py — replaced by the 4 scripts above.
 
-## Notes
+## Key design decisions
 
-- Each script reads fresh state — no shared page objects, no stale markers
-- `--answers` is the ONLY source of model decisions — no resolve(), no fuzzy_match() auto-guessing
-- File inputs handled automatically by act --fill (set_input_files on ALL found)
-- Radios: direct `radio.click()`, verify `el.checked` changed
-- Selects: Playwright `.select_option()`
-- Unfollow company checkbox: auto-unchecked by act --fill if found on any page
+- **Fresh navigation for LinkedIn Easy Apply** — `/apply/` URL reliably re-opens modal. Lost state on crash is acceptable (max 3 pages).
+- **Reuse existing page for external ATS** — navigate.py leaves the tab open. act --fill/--next find it by URL match. Avoids losing multi-page state.
+- **--answers is the ONLY answer source** — no resolve(), no fuzzy_match() auto-guessing. Common_answers only used for previously saved answers.
+- **Resume upload to required file inputs only** — `input[type="file"][required]` — skips optional drop zones.
+- **Button priority: Submit > Review > Next > Continue > Done** — explicit list, never clicks Back/Cancel/Save/Edit.
+- **Disabled button detection** — --next checks `disabled` before attempting. If disabled, reports why.
+- **act --auto for batch** — full loop with model override points on unfilled fields.
