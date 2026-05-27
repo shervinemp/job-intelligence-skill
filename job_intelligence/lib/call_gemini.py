@@ -13,6 +13,13 @@ _SKILL_DIR = os.path.dirname(_LIB_DIR)
 _WORKSPACE_ROOT = os.path.abspath(os.path.join(_SKILL_DIR, "..", ".."))
 GEMINI_JS = os.path.join(_WORKSPACE_ROOT, "skills", "gemini-browser", "gemini.js")
 
+# Auto-detect node_modules: check workspace root first, then up-tree
+_NODE_MODULES = os.path.join(_WORKSPACE_ROOT, "node_modules")
+if not os.path.isdir(_NODE_MODULES):
+    _NODE_MODULES = os.path.join(os.path.dirname(_WORKSPACE_ROOT), "node_modules")
+if os.path.isdir(_NODE_MODULES):
+    os.environ.setdefault("NODE_PATH", _NODE_MODULES)
+
 
 def call_gemini_node(*args, timeout_seconds=600, gem=None, **kwargs):
     """Run gemini.js. Prompt goes via file (avoids Windows cmd length limit).

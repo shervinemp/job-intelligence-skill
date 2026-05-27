@@ -129,6 +129,10 @@ Each job has a category that guides admission. All categories use the same gem (
 
 Required on first `admit` via `--category tech <jid>`. Re-run to update.
 
+## Decision rules
+
+See `decisions.md` — compact reference for screening question answers, relocation, sponsorship, and experience estimation. Core principle: **don't self-reject**.
+
 ## Auth walls
 
 Detected automatically during fetch — sign-in keywords flag the job.  
