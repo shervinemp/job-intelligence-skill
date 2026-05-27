@@ -224,8 +224,16 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                             for opt in f["options"]:
                                 if ans.lower() in opt.lower(): el.select_option(opt); break
                             else: el.select_option(ans)
-                        elif f["tag"] in ("INPUT", "TEXTAREA"): el.fill(ans)
-                        filled += 1
+                        elif f["tag"] in ("INPUT", "TEXTAREA"):
+                            el.fill(ans)
+                            # Autocomplete: if part of multiselect widget, press Enter to confirm
+                            try:
+                                if f.get("id") and page.locator(f'[data-automation-id="multiSelectContainer"] #{f["id"]}').count() > 0:
+                                    page.keyboard.press("Enter")
+                                    time.sleep(0.3)
+                            except:
+                                pass
+                            filled += 1
                 except: pass
         elif f.get("required"):
             unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})

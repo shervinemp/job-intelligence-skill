@@ -39,9 +39,9 @@ def read_page(p):
         });
         // Custom dropdown buttons (button[aria-haspopup="listbox"]) — used by Workday, Lever, etc.
         Array.from(dropdowns).forEach(btn => {
-            // Skip if inside nav/header — these are nav-level controls (language, settings, etc.)
-            if (btn.closest('nav, header, [role="navigation"], [data-automation-id*="header"], [data-automation-id*="nav"]')) return;
-            const parent = btn.closest('[data-automation-id^="formField"], div, fieldset, section, li') || btn.parentElement;
+            // Only process buttons inside formField containers (not nav-level controls)
+            const parent = btn.closest('[data-automation-id^="formField"]');
+            if (!parent) return;
             const label = parent.querySelector('label, legend, span');
             const lbl = label ? label.textContent.trim().replace(/\\s+/g,' ').slice(0, 80) : '';
             const current = (btn.textContent || '').trim().slice(0, 30);
