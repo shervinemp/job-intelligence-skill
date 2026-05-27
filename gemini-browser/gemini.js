@@ -384,6 +384,18 @@ async function read(page, timeout = 360000) {
   return '(empty)';
 }
 
+async function ensureSidebar(page, open = true) {
+  const btn = page.locator('[data-test-id="side-nav-sparkle-button"]');
+  const visible = await btn.isVisible().catch(() => false);
+  if (!visible) return; // sidebar not togglable
+  const label = await btn.getAttribute('aria-label').catch(() => '');
+  const want = open ? 'open' : 'close';
+  if (label && label.toLowerCase().includes(want + ' sidebar')) {
+    await btn.click();
+    await wait(1000);
+  }
+}
+
 // ─── Delete last conversation ──────────────────────────
 
 async function deleteChat(page) {
@@ -403,6 +415,9 @@ async function deleteChat(page) {
     // Navigate to home to ensure sidebar is current
     await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
     await wait(3000);
+
+    // Ensure sidebar is expanded so conversation elements are interactive
+    await ensureSidebar(page, true);
 
     // Find conversation by convId and click its actions menu
     let clicked = 'not_found';
@@ -500,7 +515,7 @@ async function dump(page) {
     if (opts.action === 'dump') {
       await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
       await wait(5000);
-      await dump(page); browser.close(); return;
+      await dump(page); await browser.close().catch(()=>{}); return;
     }
 
     if (opts.action === 'state') {
@@ -510,14 +525,14 @@ async function dump(page) {
       }
       const mode = await checkMode(page);
       console.log(`URL: ${page.url()}\nTitle: ${await page.title()}\nMode: ${mode.activeTier} | Thinking: ${mode.thinkingLevel}`);
-      await saveSession(page); browser.close(); return;
+      await saveSession(page); await browser.close().catch(()=>{}); return;
     }
 
     if (opts.action === 'login') {
       const ok = await page.evaluate(() => (document.body.innerText.includes('New chat') || document.body.innerText.includes('Conversation with')) && !document.body.innerText.includes('Sign in'));
       log(ok ? 'Valid.' : 'Not signed in.');
       if (ok) await saveSession(page);
-      browser.close(); return;
+      await browser.close().catch(()=>{}); return;
     }
 
     if (opts.action === 'gems') {
@@ -528,7 +543,7 @@ async function dump(page) {
       });
       console.log(`${mode.activeTier} | Thinking: ${mode.thinkingLevel}\n`);
       if (gems.length) gems.forEach(g => console.log(`  - ${g}`));
-      await saveSession(page); browser.close(); return;
+      await saveSession(page); await browser.close().catch(()=>{}); return;
     }
 
     if (!opts.prompt) die('Usage: node gemini.js "your prompt"');
