@@ -41,7 +41,27 @@ if 'Upload resume' not in dlg_text and 'Select resume' not in dlg_text:
     print("NEXT: apply/linkedin/easy_apply/05_click_next.py", file=sys.stderr)
     sys.exit(0)
 
-# Upload via file input directly (don't click "Upload resume" — that closes the modal)
+# Click "Upload resume" to open file picker
+clicked = page.evaluate("""() => {
+    const d = document.querySelector('[role="dialog"]');
+    if (!d) return false;
+    const labels = d.querySelectorAll('label, span, div');
+    for (const el of labels) {
+        const t = (el.textContent || '').trim().toLowerCase();
+        if (t.includes('upload resume') && el.offsetParent !== null) {
+            el.click(); return true;
+        }
+    }
+    // Fallback: click the file input directly
+    const fileInput = d.querySelector('input[type="file"]');
+    if (fileInput) { fileInput.click(); return true; }
+    return false;
+}""")
+print(f"Clicked upload: {clicked}", file=sys.stderr)
+
+time.sleep(2)
+
+# Upload via file input — use query_selector, not evaluate
 file_input = page.query_selector('[role="dialog"] input[type="file"]')
 if file_input:
     try:
