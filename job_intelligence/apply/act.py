@@ -142,6 +142,15 @@ def cmd_fill(jid, answers_json=None):
         print("WARN: page looks unchanged from last fill — verify the form advanced", file=sys.stderr)
     state["page_fingerprint"] = current_fingerprint
 
+    # Check for login wall — if the page is a sign-in form, abort
+    text = page.evaluate("() => document.body.innerText") or ""
+    from apply.common.platforms import check_page, LOGIN_WALL
+    plat = state.get("platform", "")
+    if check_page(text, plat, LOGIN_WALL):
+        print("LOGIN_WALL: sign-in required, try guest apply or open the page manually", file=sys.stderr)
+        print("PAGE: login form detected, not filling", file=sys.stderr)
+        return
+
     profile = {}
     if os.path.exists(profile_path):
         with open(profile_path) as f: profile = json.load(f)
