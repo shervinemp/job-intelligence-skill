@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """verify.py — Check if a job was submitted. No state mutation."""
-import sys
+import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
 from lib.chrome_manager import connect
