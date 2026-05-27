@@ -56,10 +56,11 @@ def _pw_fetch(url, timeout=30):
                 time.sleep(0.5)
             text = fetch_description(url, page)
             if text and len(text.strip()) > 80:
-                return True, text.strip()
+                page_title = (page.title() or "").strip()
+                return True, text.strip(), page_title
             if _detect_auth_wall(text):
-                return False, "auth_wall"
-            return False, f"Short text ({len(text or '')} chars)"
+                return False, "auth_wall", None
+            return False, f"Short text ({len(text or '')} chars)", None
         else:
             with sync_playwright() as spw:
                 ctx = spw.chromium.launch_persistent_context(BROWSER_PROFILE, headless=True, no_viewport=True)
@@ -74,12 +75,13 @@ def _pw_fetch(url, timeout=30):
                     time.sleep(0.5)
                 text = fetch_description(url, page)
                 if text and len(text.strip()) > 80:
-                    return True, text.strip()
+                    page_title = (page.title() or "").strip()
+                    return True, text.strip(), page_title
                 if _detect_auth_wall(text):
-                    return False, "auth_wall"
-                return False, f"Short text ({len(text or '')} chars)"
+                    return False, "auth_wall", None
+                return False, f"Short text ({len(text or '')} chars)", None
     except Exception as e:
-        return False, str(e)[:120]
+        return False, str(e)[:120], None
     finally:
         try:
             if page:
@@ -91,11 +93,11 @@ def _pw_fetch(url, timeout=30):
 
 def _fetch_from_url(url, use_playwright=False):
     if use_playwright:
-        ok, text = _pw_fetch(url)
+        ok, text, page_title = _pw_fetch(url)
         if ok:
-            return True, text
+            return True, text, page_title
         if text == "auth_wall":
-            return False, "auth_wall"
+            return False, "auth_wall", None
     try:
         r = subprocess.run(
             ["curl", "-s", "-L", "--max-time", "30",
@@ -105,15 +107,19 @@ def _fetch_from_url(url, use_playwright=False):
         out = r.stdout
         if r.returncode == 0 and out and len(out) > 100:
             text = out.decode('utf-8', errors='replace')
+            # Extract title from HTML
+            title_match = re.search(r'<title[^>]*>(.*?)</title>', text, re.DOTALL)
+            page_title = title_match.group(1).strip()[:200] if title_match else ""
             text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
             text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
             text = re.sub(r'<[^>]+>', '\n', text)
             text = re.sub(r'\n\s*\n', '\n\n', text)
             text = re.sub(r'\s{3,}', '  ', text).strip()
             if len(text) > 100:
-                return True, text[:MAX_DESC_LEN]
+                return True, text[:MAX_DESC_LEN], page_title
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
+    return False, "Fetch failed", None
     return False, "Fetch failed"
 
 
@@ -146,9 +152,15 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
         title = entry.get("title", "")
         company = entry.get("company", "")
         url = entry.get("url", "")
-        ok, result = _fetch_from_url(url, use_playwright=use_playwright)
+        ok, result, page_title = _fetch_from_url(url, use_playwright=use_playwright)
         if ok:
             save_description(jid, result)
+            # Save page title if available (and current title is empty)
+            if page_title and not entry.get("title"):
+                from lib.db import get_conn
+                get_conn().execute("UPDATE jobs SET title=? WHERE id=?", (page_title[:200], jid))
+                get_conn().commit()
+                entry["title"] = page_title[:200]
             limit = 2000 if verbose else 500
             snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
             print(f"IS THIS A JOB POSTING? (admit/reject)", file=sys.stderr)
