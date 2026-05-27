@@ -148,7 +148,18 @@ def cmd_fill(jid, answers_json=None):
     plat = state.get("platform", "")
     if check_page(text, plat, LOGIN_WALL):
         print("LOGIN_WALL: sign-in required, try guest apply or open the page manually", file=sys.stderr)
-        print("PAGE: login form detected, not filling", file=sys.stderr)
+        return
+
+    # If no fields detected but page has form hints, warn
+    if ps["fieldCount"] == 0 and ps.get("pageType") == "maybe_form":
+        print("WARN: no form fields found (likely custom UI or shadow DOM)", file=sys.stderr)
+        print("PAGE: form-like content detected but no standard inputs — try manual review or skip", file=sys.stderr)
+        state["page"] = ps
+        state["filled"] = 0
+        save_state(state)
+        return
+    if ps["fieldCount"] == 0 and ps.get("pageType") == "unknown":
+        print("WARN: no form fields found — page may not be an application form", file=sys.stderr)
         return
 
     profile = {}

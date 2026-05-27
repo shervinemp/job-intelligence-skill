@@ -14,8 +14,8 @@ def save_state(state):
         json.dump(state, f, indent=2)
 
 def read_page(p):
-    """Read dialog (LinkedIn modal) or document (external ATS). Returns dict."""
-    return p.evaluate("""() => {
+    """Read dialog (LinkedIn modal) or document (external ATS). Returns dict with page hints."""
+    result = p.evaluate("""() => {
         const container = document.querySelector('[role="dialog"]') || document;
         const inputs = container.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
         const btns = container.querySelectorAll('button');
@@ -34,8 +34,17 @@ def read_page(p):
                 options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0,15) : [],
             };
         });
+        // Page type hints
+        const text = (document.body.innerText || '').toLowerCase();
+        const hasFormWords = text.includes('submit') || text.includes('apply') || text.includes('application');
+        const hasSignIn = text.includes('sign in') || text.includes('log in') || text.includes('email') && text.includes('password');
+        let pageType = 'unknown';
+        if (fields.length > 0) pageType = 'form';
+        else if (hasSignIn) pageType = 'login_wall';
+        else if (hasFormWords) pageType = 'maybe_form';
         return {
             fieldCount: fields.length, fields: fields.slice(0,35),
+            pageType: pageType,
             hasFileInput: container.querySelectorAll('input[type="file"]').length > 0,
             hasRequiredFile: container.querySelectorAll('input[type="file"][required]').length > 0,
             buttons: Array.from(btns).filter(b => b.offsetParent !== null).map(b => ({
@@ -43,6 +52,7 @@ def read_page(p):
             })),
         };
     }""")
+    return result
 
 def find_page(ctx, state):
     """Find the page by external_url or LinkedIn jobs URL."""
