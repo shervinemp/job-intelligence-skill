@@ -201,24 +201,24 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     if state.get("jid") != jid:
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
-    page = find_page(ctx, state)
+    from apply.common.page_manager import PageManager
+    pm = PageManager(ctx, jid)
+    page = pm.find()
     if not page:
         ext = state.get("external_url", "")
         if ctx.pages:
-            # List available pages so user can pick
-            print("NO_MATCH: no page matches external_url. Open pages:", file=sys.stderr)
+            print("NO_MATCH: no page matches. Open pages:", file=sys.stderr)
             for i, p in enumerate(ctx.pages):
                 print(f"  [{i}] {p.url[:100]}", file=sys.stderr)
             if ext:
                 print(f"WANTED: {ext[:100]}", file=sys.stderr)
-            print("TIP: navigate to the job URL in an existing page, or close irrelevant tabs", file=sys.stderr)
+            print("TIP: navigate to the job URL, then retry", file=sys.stderr)
             print("NEXT: retry", file=sys.stderr); return
         elif ext:
             page = ctx.new_page()
             page.goto(ext, wait_until="domcontentloaded", timeout=30000)
             time.sleep(5)
-            from apply.common.page_helpers import tag_page
-            tag_page(page, state.get("jid", ""))
+            pm.register(page)
         else:
             print("ERROR: no page found and no external URL", file=sys.stderr); sys.exit(1)
     ps = read_page(page)
@@ -357,15 +357,16 @@ def cmd_next(jid, candidate=None):
     if state.get("jid") != jid:
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
-    page = find_page(ctx, state)
+    from apply.common.page_manager import PageManager
+    pm = PageManager(ctx, jid)
+    page = pm.find()
     if not page:
         ext = state.get("external_url", "")
         if ext:
             page = ctx.new_page()
             page.goto(ext, wait_until="domcontentloaded", timeout=30000)
             time.sleep(5)
-            from apply.common.page_helpers import tag_page
-            tag_page(page, state.get("jid", ""))
+            pm.register(page)
         else:
             print("ERROR: no page found and no external URL", file=sys.stderr); return
 
@@ -416,7 +417,8 @@ def cmd_back(jid):
     if state.get("jid") != jid:
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
-    page = find_page(ctx, state)
+    from apply.common.page_manager import PageManager
+    page = PageManager(ctx, jid).find()
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
     page.evaluate("""() => { const c = document.querySelector('[role="dialog"]') || document; c.querySelectorAll('button').forEach(b => { if ((b.textContent||'').trim().toLowerCase() === 'back' && !b.disabled) b.click(); }); }""")
     time.sleep(3)
@@ -430,7 +432,8 @@ def cmd_submit(jid, confirm=False, candidate=None):
     if state.get("jid") != jid:
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
-    page = find_page(ctx, state)
+    from apply.common.page_manager import PageManager
+    page = PageManager(ctx, jid).find()
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
 
     from apply.common.page_helpers import scan_actions

@@ -69,13 +69,13 @@ class PageManager:
         url_stack = entry.get("urls", [])
         old_fp = entry.get("fp", "")
 
-        # 2. URL stack match, scored
+        # 2. URL stack match, scored (case-insensitive)
         best_score, best_page = -1, None
         for p in self.ctx.pages:
-            url = p.url.rstrip("/")
+            url = p.url.rstrip("/").lower()
             score = -1
             for stored in reversed(url_stack):
-                s = stored.rstrip("/")
+                s = stored.rstrip("/").lower()
                 if url == s:
                     score = 3; break
                 elif url.startswith(s + "/"):
