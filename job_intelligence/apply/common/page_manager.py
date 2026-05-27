@@ -74,7 +74,7 @@ class PageManager:
                 tagged = p
                 break
 
-            if not tag and fallback_domain:
+            if fallback_domain:
                 try:
                     if urlparse(url).netloc.lower() == fallback_domain:
                         domain_matches.append(p)
