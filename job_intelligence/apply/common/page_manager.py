@@ -156,6 +156,52 @@ class PageManager:
                     return p
         return None
 
+    def same_page(self, snap):
+        """True if fingerprint hasn't changed (stuck detection)."""
+        for p in self.ctx.pages:
+            if _get_tag(p) == self.jid:
+                return _fingerprint(p) == snap.get("fp", "")
+        return False
+
+    def next_page(self, page, timeout=8):
+        """After clicking, wait for navigation/SPA update. Returns new page or None."""
+        import time
+        snap = self.snapshot(page)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(1)
+            # Check URL change on current page
+            if page.url != snap["url"]:
+                self.register(page); return page
+            # Check fingerprint change (SPA)
+            if _fingerprint(page) != snap["fp"]:
+                self.register(page); return page
+            # Check for new tab
+            new_tab = self.find_new_tab()
+            if new_tab:
+                return new_tab
+        return page  # timeout — no change detected
+
+    def cleanup_all(self):
+        """Close untagged blank/error tabs. Leave tagged ones alone."""
+        for p in self.ctx.pages:
+            if not _get_tag(p):
+                url = p.url.lower()
+                if "about:blank" in url or "chrome-error" in url or "newtab" in url:
+                    try:
+                        p.close()
+                    except:
+                        pass
+
+    def close_others(self, keep_page):
+        """Close all pages tagged with our JID except keep_page."""
+        for p in self.ctx.pages:
+            if p != keep_page and _get_tag(p) == self.jid:
+                try:
+                    p.close()
+                except:
+                    pass
+
     def cleanup(self):
         """Remove stale entries (closed pages)."""
         active_tags = set()
