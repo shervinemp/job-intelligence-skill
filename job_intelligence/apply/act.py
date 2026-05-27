@@ -134,8 +134,14 @@ def cmd_fill(jid, answers_json=None):
             time.sleep(5)
         else:
             print("ERROR: no page found and no external URL", file=sys.stderr); sys.exit(1)
-
     ps = read_page(page)
+    # Guard: if this page was already filled, warn but proceed
+    last_fingerprint = state.get("page_fingerprint", "")
+    current_fingerprint = str(len(ps["fields"])) + ":" + str(len(ps.get("buttons", [])))
+    if current_fingerprint == last_fingerprint and state.get("filled", 0) > 0:
+        print("WARN: page looks unchanged from last fill — verify the form advanced", file=sys.stderr)
+    state["page_fingerprint"] = current_fingerprint
+
     profile = {}
     if os.path.exists(profile_path):
         with open(profile_path) as f: profile = json.load(f)
@@ -162,6 +168,7 @@ def cmd_fill(jid, answers_json=None):
     }""")
 
     from apply.common.page_helpers import read_and_save as rs
+    state["filled"] = filled
     rs(page, state)
 
     print(f"FILLED: {filled}  UNFILLED: {len(unfilled)}", file=sys.stderr)
@@ -208,13 +215,21 @@ def cmd_next(jid):
     if not target and candidates:
         target = candidates[-1]  # rightmost
 
-    if not target:
-        # Check if any forward button is disabled
-        for b in btns:
-            if b["text"].lower().strip() in ("submit","review","next","continue","done") and b["disabled"]:
-                print(f"BUTTON_DISABLED: {b['text']} — fill required fields first", file=sys.stderr)
-                print("NEXT: act --fill", file=sys.stderr); return
-        print("NO_BUTTON\nNEXT: none", file=sys.stderr); return
+        if not target:
+            for b in btns:
+                bt = b["text"].lower().strip()
+                if bt in ("submit", "submit application") and b["disabled"]:
+                    print(f"BUTTON_DISABLED: {b['text']} — fill required fields first", file=sys.stderr)
+                    print("NEXT: act --fill", file=sys.stderr); return
+                if bt in ("next", "review", "continue", "done") and b["disabled"]:
+                    print(f"BUTTON_DISABLED: {b['text']} — fill required fields first", file=sys.stderr)
+                    print("NEXT: act --fill", file=sys.stderr); return
+            # Check if a dry-run submit was done (submit button exists but no forward button found)
+            submit_exists = any(b["text"].lower().strip() in ("submit", "submit application") for b in btns)
+            if submit_exists:
+                print("NO_BUTTON — use act --submit (or --submit --confirm) for the submit button", file=sys.stderr)
+            else:
+                print("NO_BUTTON\nNEXT: none", file=sys.stderr); return
 
     print(f"ACTION: {target['text']}", file=sys.stderr)
     try:
