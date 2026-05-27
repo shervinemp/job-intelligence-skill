@@ -58,7 +58,7 @@ class PageManager:
         entry["fp"] = fp
         _save(self.reg)
 
-    def find(self):
+    def find(self, fallback_url=""):
         """Find page by: tag → URL stack + fingerprint → untagged tabs."""
         # 1. Direct tag match
         for p in self.ctx.pages:
@@ -111,7 +111,12 @@ class PageManager:
                         self.register(p); return p
 
         # 4. Domain-level fallback: any open page on the same domain
+        domain = ""
         if url_stack:
+            domain = urlparse(url_stack[0]).netloc.lower()
+        elif fallback_url:
+            domain = urlparse(fallback_url).netloc.lower()
+        if domain:
             target_domain = urlparse(url_stack[0]).netloc.lower()
             for p in self.ctx.pages:
                 try:
