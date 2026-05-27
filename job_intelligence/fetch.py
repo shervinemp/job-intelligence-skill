@@ -336,6 +336,9 @@ def cmd_open(*jids):
         except Exception:
             pass
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
+        if jids:
+            from apply.common.page_manager import PageManager
+            PageManager(ctx, jids[0]).register(p)
         print("Opened. Close tab when done.", file=sys.stderr)
     else:
         print("Could not open Chrome.", file=sys.stderr)
