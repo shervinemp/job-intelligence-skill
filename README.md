@@ -7,7 +7,7 @@
 
 # Job Intelligence Pipeline
 
-Automated job discovery, description fetching, and CV tailoring — orchestrated by an SLM.
+Automated job discovery, description fetching, CV tailoring, and auto-apply — orchestrated by an SLM.
 
 ---
 
@@ -18,35 +18,51 @@ Automated job discovery, description fetching, and CV tailoring — orchestrated
                           │   Gmail Search   │
                           └────────┬─────────┘
                                    │
-                          ┌────────▼─────────┐
-                          │ stage_emails.py  │
-                          └────────┬─────────┘
-                                   │
                           ┌────────▼─────────┐   ┌──────────────────┐
-                          │   extract.py     │   │  linkedin.py     │
+                          │ stage_emails.py  │   │  linkedin.py     │
                           └────────┬─────────┘   └────────┬─────────┘
                                    │                     │
                                    └──────────┬──────────┘
                                               │
                                      ┌────────▼─────────┐
-                                     │  admit / reject  │
+                                     │    extract.py     │
+                                     │  admit / reject   │
                                      └────────┬─────────┘
                                               │
                                      ┌────────▼─────────┐
                                      │    fetch.py      │
-                                     └────────┬─────────┘
-                                              │
-                                     ┌────────▼─────────┐
                                      │ admit/reject/flag│
                                      └────────┬─────────┘
                                               │
                                      ┌────────▼─────────┐
                                      │   tailor.py      │
+                                     │   done / skip    │
                                      └────────┬─────────┘
                                               │
                                      ┌────────▼─────────┐
-                                     │   done / skip    │
-                                     └──────────────────┘
+                                     │   apply detect   │
+                                     │  classify type   │
+                                     └────────┬─────────┘
+                                              │
+                            ┌─────────────────┼─────────────────┐
+                            │                 │                 │
+                    ┌───────▼────────┐ ┌──────▼───────┐ ┌───────▼────────┐
+                    │   Easy Apply   │ │  External /  │ │ Already        │
+                    │   (modal)      │ │  ATS direct  │ │ Applied        │
+                    └───────┬────────┘ └──────┬───────┘ └───────┬────────┘
+                            │                 │                 │
+                    ┌───────▼────────┐ ┌──────▼───────┐         │
+                    │   act --fill   │ │  navigate    │         │
+                    │   act --next   │ │  act --fill  │         │
+                    │   act --submit │ │  act --next  │         │
+                    └───────┬────────┘ │  act --submit│         │
+                            │         └──────┬───────┘         │
+                            └────────────────┼─────────────────┘
+                                             │
+                                     ┌───────▼────────┐
+                                     │   verify.py    │
+                                     │  confirm done  │
+                                     └────────────────┘
 ```
 
 ---
@@ -54,34 +70,41 @@ Automated job discovery, description fetching, and CV tailoring — orchestrated
 ## Project Structure
 
 ```
-skills/
-├── README.md
-├── gmail-cli/
-│   └── gmail_cli.py          # Gmail API client
-├── gemini-browser/
-│   ├── gemini.js             # CDP-based Gemini automation
-│   └── gems.json             # Gem alias → ID mapping
-└── job_intelligence/
-    ├── stage_emails.py       # Stage emails from Gmail
-    ├── extract.py            # URL extraction + admit/reject
-    ├── linkedin.py           # LinkedIn job scraping
-    ├── fetch.py              # Job description fetching
-    ├── tailor.py             # CV tailoring via Gemini
-    ├── apply.py              # Auto-apply via Gemini
-    ├── report.py             # Pipeline data inspection
-    ├── categories.json       # Category → gem mapping
-    ├── lib/
-    │   ├── db.py             # SQLite backend
-    │   ├── chrome_manager.py # Shared Chrome lifecycle
-    │   ├── auth_walls.py     # Auth wall tracking
-    │   ├── call_gemini.py    # gemini.js subprocess wrapper
-    │   ├── extract_pdf.py    # PDF extraction from Gemini output
-    │   └── platforms/        # Site-specific description cleaners
-    │       ├── __init__.py   # Registry + fetch_description/clean
-    │       ├── _shared.py    # Shared text-processing helpers
-    │       ├── linkedin.py   # LinkedIn: click "…more" + strip chrome
-    │       └── jobright.py   # Jobright: section-level DOM extraction
-    └── SKILL.md              # Detailed operations manual
+job_intelligence/
+├── stage_emails.py       # Stage Gmail threads → DB
+├── extract.py            # URL extraction + admit/reject
+├── linkedin.py           # LinkedIn job scraper (alt entry)
+├── fetch.py              # Job description fetching
+├── tailor.py             # CV tailoring via Gemini
+├── apply.py              # Unified apply entry point
+├── report.py             # Pipeline data inspection
+├── categories.json       # Category → gem mapping
+├── profile.json          # User answers for auto-apply (gitignored)
+├── decisions.md          # Screening question decision rules
+├── SKILL.md              # Full operations manual
+├── lib/
+│   ├── db.py             # SQLite backend
+│   ├── chrome_manager.py # Shared Chrome CDP lifecycle
+│   ├── auth_walls.py     # Auth wall tracking
+│   ├── call_gemini.py    # gemini.js subprocess wrapper
+│   ├── extract_pdf.py    # PDF extraction from Gemini output
+│   └── platforms/        # Site-specific description cleaners
+│       ├── linkedin.py   # LinkedIn: click "…more" + strip chrome
+│       └── jobright.py   # Jobright: section-level DOM extraction
+└── apply/
+    ├── detect.py          # Job type classification (pre-flight)
+    ├── navigate.py        # LinkedIn → External ATS navigation
+    ├── verify.py          # Post-submit verification
+    ├── common/
+    │   ├── page_helpers.py  # read_page, scan_actions, page finding
+    │   ├── page_manager.py  # Page registry (tag → domain → candidates)
+    │   └── platforms.py     # Platform detection + login wall patterns
+    └── platforms/
+        ├── ashby.md
+        ├── greenhouse.md
+        ├── lever.md
+        ├── linkedin.md
+        └── workday.md
 ```
 
 ---
@@ -119,78 +142,84 @@ Features:
 
 | Stage | Script | Command | SLM Action |
 |-------|--------|---------|------------|
-| 1 | Email staging | `stage_emails.py` | Auto (filters by `job`/`jobs` keyword) |
+| 1 | Email staging | `stage_emails.py` | Auto |
 | 2 | URL extraction | `extract.py` | `admit --category <name> <jid>` or `reject` |
-| 3 | LinkedIn scrape | `linkedin.py` | Same admit/reject flow |
-| 4 | Fetch description | `fetch.py` | `admit`, `reject`, or `flag` (auth wall) |
-| 5 | CV tailoring | `tailor.py` | `done`, `skip`, `redo`, `retry` |
-| — | Auto-apply | `apply.py` | `auto <jid>`, `batch [--count N]` |
-| — | Data inspection | `report.py` | `stats`, `inspect`, `search`, `export`, `summary` |
+| 3 | LinkedIn scrape | `linkedin.py` | admit/reject |
+| 4 | Fetch description | `fetch.py` | `admit` / `reject` / `flag` |
+| 5 | CV tailoring | `tailor.py` | `done` / `skip` / `redo` |
+| 6 | Classify type | `apply.py detect <jid>` | Follow TYPE hint (easy_apply / external / applied) |
+| 7 | Navigate ATS | `apply.py navigate <jid>` | Auto (finds external Apply button) |
+| 8 | Fill form | `apply.py act --fill <jid>` | Provide `--answers` for unmatched fields |
+| 9 | Advance page | `apply.py act --next <jid>` | Follow CANDIDATES or use `--candidate N` |
+| 10 | Submit | `apply.py act --submit <jid> --confirm` | Confirm submission |
+| 11 | Verify | `apply.py verify <jid>` | Auto |
+| — | Data inspection | `report.py` | `stats`, `inspect`, `search`, `export` |
 
-All stage scripts respond to `help` and `status` subcommands.
+All scripts respond to `help` and `status` subcommands.
 
 ---
 
 ## Key Features
 
+### Apply Pipeline
+
+`detect` classifies job type (Easy Apply / External / Applied).  
+`navigate` clicks "Apply on company website" on LinkedIn, decodes safety redirect, lands on ATS form.  
+`act --fill` fills all fields from `--answers` → common_answers → profile. Supports INPUT, SELECT, TEXTAREA, DROPDOWN (custom `button[aria-haspopup]`), and autocomplete widgets.  
+`act --next` advances through multi-page forms. Ambiguous buttons → prints CANDIDATES, model picks with `--candidate N`.  
+`act --submit` clicks Submit. Requires `--confirm` to actually send.  
+`verify` checks DB stage + LinkedIn page for "you have applied" text.
+
+### PageManager
+
+Each page is tagged with a `data-job-id` attribute on `<body>`. `PageManager.find()` locates pages by tag → domain match → candidate list. When multiple pages match, the model picks with `--page N`.
+
 ### Categories
 
-Jobs are tagged with a category on first admit. The category determines which Gemini gem handles the CV tailoring.
+Jobs tagged with a category on first admit. Determines which Gemini gem handles CV tailoring.
 
 ```
-python3 extract.py admit --category tech abc123def4567890
+extract.py admit --category tech <jid>
 ```
-
-Available categories (defined in `categories.json`):
 
 | Category | Gem | Use Case |
 |----------|-----|----------|
-| `tech` | Application Optimizer | SWE, data, infra roles |
+| `tech` | Application Optimizer | SWE, data, infra |
 | `general` | Default Gemini | All other roles |
 
-Resolution chain: `categories.json` → `gems.json` → `gemini.js`.
+Resolution: `categories.json` → `gems.json` → `gemini.js`.
 
 ### Notes
 
-Attach human context to any job — referral mentions, priorities, deadlines. The notes field persists across all stage transitions and is appended to the Gemini prompt as supplementary context.
+Attach human context via `extract.py submit`. Persists across all stages. Appended to Gemini prompt.
 
 ```
-python3 extract.py submit '{"url":"https://...","notes":"John can refer at Google"}'
+extract.py submit '{"url":"...","notes":"John can refer at Google"}'
 ```
-
-Clear with: `python3 extract.py submit '{"url":"https://...","notes":""}'`
 
 ### Auth Walls
 
-Jobs behind sign-in pages are auto-detected during fetch. Flagged jobs can be opened in Chrome's persistent profile (where you're already logged in) to bypass.
+Auto-detected during fetch. Flagged jobs can be opened in Chrome's persistent profile.
 
 ```
-python3 fetch.py flag <jid>       # manual flag
-python3 fetch.py open [<jid>]     # open in Chrome
+fetch.py flag <jid>
+fetch.py open [<jid>]
 ```
-
-Stale entries are auto-pruned when the job's stage progresses past `failed` or `extracted`.
 
 ### Per-Job Reset
 
-Reset a single job to re-extract it from its source email. The source thread gets re-scanned on the next `extract.py` run.
-
 ```
-python3 extract.py reset <jid>    # re-extract one job
-python3 extract.py reset          # wipe everything, start fresh
+extract.py reset <jid>    # single job
+extract.py reset          # wipe everything
 ```
 
 ### Pipeline Reports
 
-Read-only inspection and export of all pipeline data.
-
 ```
-python3 report.py stats           # pipeline statistics
-python3 report.py inspect <jid>   # full job details
-python3 report.py search "Google" # search jobs
-python3 report.py export json     # export all jobs as JSON
-python3 report.py summary         # recent activity digest
-python3 report.py shell           # open SQLite shell
+report.py stats           # pipeline statistics
+report.py inspect <jid>   # full job details
+report.py search "Google" # search jobs
+report.py export json     # export all jobs
 ```
 
 ---
