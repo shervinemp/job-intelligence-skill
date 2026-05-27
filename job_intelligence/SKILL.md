@@ -61,19 +61,31 @@
 | Step | Command | What happens |
 |------|---------|-------------|
 | Detect | `python3 apply.py detect <jid>` | Navigates /apply/ URL → Easy Apply / External / Applied |
-| Click | `python3 apply.py click <jid>` | Opens Easy Apply modal |
+| Click | `python3 apply.py click <jid>` | Opens Easy Apply modal (may need fresh /apply/ navigation if stale) |
 | Read | `python3 apply.py read <jid>` | Shows current fields + buttons, routes to next step |
-| Fill | `python3 apply.py fill <jid>` | Fills profile-mapped fields (name, email, phone, linkedin) |
-| Resume | `python3 apply.py resume <jid>` | Uploads tailored PDF to Easy Apply modal |
+| Fill | `python3 apply.py fill <jid>` | Fills profile-mapped fields (name, email, phone, linkedin). Already-filled fields skipped. |
+| Resume | `python3 apply.py resume <jid>` | `set_input_files` directly — do NOT click "Upload resume" (closes modal) |
 | Screen | `python3 apply.py screen <jid> --answers '{"Q":"A"}'` | Presents screening questions; model answers with --answers |
-| Next | `python3 apply.py next <jid>` | Clicks Next/Review/Submit (disables overlay) |
-| Submit | `python3 apply.py submit <jid>` | Verifies result after submit |
-| Navigate | `python3 apply.py navigate <jid>` | External ATS: click "Apply on company website" |
+| Next | `python3 apply.py next <jid>` | Clicks Next/Review/Submit (disables overlay). Detects which action to take. |
+| Submit | `python3 apply.py submit <jid>` | Dry-run safe. Shows button state + unfilled fields. |
+| Navigate | `python3 apply.py navigate <jid>` | External ATS: decodes LinkedIn safety redirect URL automatically |
 | Detect platform | `python3 apply.py detect_platform <jid>` | External ATS: detect Greenhouse/Lever/Ashby/Workday |
-| Fill external | `python3 apply.py fill_external <jid>` | External ATS: fill profile fields + present options |
+| Fill external | `python3 apply.py fill_external <jid> --answers '{}'` | External ATS: `--answers` JSON is the only source of model decisions. No hardcoded mappings. |
 | Next external | `python3 apply.py next_external <jid>` | External ATS: multi-page support (Next/Continue) |
-| Submit external | `python3 apply.py submit_external <jid>` | External ATS: dry-run safe submit |
-| Detect ATS | `python3 apply.py detect_ats <jid>` | Direct ATS URL (no LinkedIn): detect platform, read form |
+| Submit external | `python3 apply.py submit_external <jid>` | External ATS: always dry-run, never auto-confirm |
+| Detect ATS | `python3 apply.py detect_ats <jid>` | Direct ATS URL (no LinkedIn): detects platform, reads form |
+
+### Apply flow notes
+
+**Unfollow company:** On the Easy Apply review page, uncheck "Follow X to stay up to date" checkbox to avoid timeline bloat.
+
+**Screening questions:** Use `--answers '{"question text": "value"}'` — substring matching, so short keys like `"employ"` match `"Have you ever been employed by..."`. Answers are saved to common_answers for future reuse.
+
+**Radio buttons:** Ashby renders hidden `<input type="radio">` behind custom button UI. Direct `radio.click()` sets DOM state but may not register with React. Prefer clicking the parent `<div class="_option_...">` or using Playwright's native `.check()` on the radio.
+
+**Resume upload:** Always `set_input_files()` directly on the file input. Never trigger the native file picker dialog — it causes the modal to close before the file is attached.
+
+**Multi-page forms:** Each `next` step re-reads the modal and reports the next action. Loop: fill → next → read → fill → next → ... → submit.
 
 ### Flow examples
 
@@ -141,3 +153,13 @@ Stale entries auto-pruned.
 | Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="~/.openclaw/chrome-profile"','--remote-debugging-port=9222'` |
 | DB crash | `python3 extract.py reset` |
 | Auth wall stuck | `python3 fetch.py open` + `python3 fetch.py --refresh` |
+
+## Technical notes
+
+**Gemini.js:** When running from ji-skill (not workspace), `call_gemini.py` looks for `skills/gemini-browser/gemini.js` relative to workspace root. Must run with `$env:NODE_PATH="C:\Users\sherv\.openclaw\workspace\node_modules"` or from the workspace directory. `browser.close()` on CDP connections is not awaited — use `await browser.close().catch(()=>{})` to prevent sync throws from skipping action handlers.
+
+**LinkedIn title dedup:** LinkedIn job cards often repeat the title (visible + hidden verification text). `linkedin.py` now deduplicates by detecting when the first half of the title string equals the second half.
+
+**Common_answers:** Answers to form questions are accumulated in `profile.json` under `common_answers`. When the filler encounters a question, it checks `--answers` first (exact + substring match), then falls back to `common_answers` via fuzzy word-overlap matching. Never pre-populate common_answers with guessed values (visa, sponsorship, etc.) — only save what the user explicitly provides.
+
+**Gems:** `gems.json` maps named gems to IDs: `optimizer_tech (4203d06f5d81)` for tech jobs, `optimizer_general (3697c8c02b40)` for general jobs. `categories.json` references these names. `gemini.js` resolves them at startup.
