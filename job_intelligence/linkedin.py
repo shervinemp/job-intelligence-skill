@@ -61,6 +61,10 @@ def _parse_card(card):
     if title:
         parts = [p.strip() for p in title.replace('\xa0', ' ').split('\n') if p.strip()]
         title = parts[0] if parts else title
+        # Dedup: if first half equals second half, take first half
+        half = len(title) // 2
+        if len(title) > 20 and title[:half] == title[half:]:
+            title = title[:half]
     el = card.query_selector('.artdeco-entity-lockup__subtitle')
     company = (el.inner_text() or '').strip() if el else ''
     el = card.query_selector('.artdeco-entity-lockup__caption')
