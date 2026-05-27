@@ -204,7 +204,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
     ext = state.get("external_url", "")
-    page = pm.find(fallback_url=ext)
+    page, _ = pm.find(fallback_url=ext)
     if not page:
         if ctx.pages:
             print("NO_MATCH: no page matches. Open pages:", file=sys.stderr)
@@ -360,7 +360,7 @@ def cmd_next(jid, candidate=None):
     from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
     ext = state.get("external_url", "")
-    page = pm.find(fallback_url=ext)
+    page, _ = pm.find(fallback_url=ext)
     if not page:
         if ext:
             page = ctx.new_page()
@@ -418,7 +418,7 @@ def cmd_back(jid):
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
     from apply.common.page_manager import PageManager
-    page = PageManager(ctx, jid).find(fallback_url=state.get("external_url", ""))
+    page = PageManager(ctx, jid).find(fallback_url=state.get("external_url", ""))[0]
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
     page.evaluate("""() => { const c = document.querySelector('[role="dialog"]') || document; c.querySelectorAll('button').forEach(b => { if ((b.textContent||'').trim().toLowerCase() === 'back' && !b.disabled) b.click(); }); }""")
     time.sleep(3)
@@ -433,7 +433,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
     from apply.common.page_manager import PageManager
-    page = PageManager(ctx, jid).find(fallback_url=state.get("external_url", ""))
+    page = PageManager(ctx, jid).find(fallback_url=state.get("external_url", ""))[0]
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
 
     from apply.common.page_helpers import scan_actions
