@@ -37,10 +37,11 @@ def read_page(p):
                 options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0,15) : [],
             };
         });
-        // Custom dropdown buttons inside formField containers (e.g. Workday province/phone type)
+        // Custom dropdown buttons (button[aria-haspopup="listbox"]) — used by Workday, Lever, etc.
         Array.from(dropdowns).forEach(btn => {
-            const parent = btn.closest('[data-automation-id^="formField"]');
-            if (!parent) return;  // skip nav-level dropdowns
+            // Skip if inside nav/header — these are nav-level controls (language, settings, etc.)
+            if (btn.closest('nav, header, [role="navigation"], [data-automation-id*="header"], [data-automation-id*="nav"]')) return;
+            const parent = btn.closest('[data-automation-id^="formField"], div, fieldset, section, li') || btn.parentElement;
             const label = parent.querySelector('label, legend, span');
             const lbl = label ? label.textContent.trim().replace(/\\s+/g,' ').slice(0, 80) : '';
             const current = (btn.textContent || '').trim().slice(0, 30);

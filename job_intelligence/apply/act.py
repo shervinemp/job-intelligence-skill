@@ -16,14 +16,26 @@ def _match_word(needle, haystack):
     return f" {needle} " in f" {haystack} " or haystack.startswith(f"{needle} ") or haystack.endswith(f" {needle}")
 
 def _find_answer(label, label_norm, answers, ca, profile):
-    """Find answer from --answers, common_answers, or profile. Returns None if uncertain."""
+    """Find answer from --answers, common_answers, or profile. Returns None if uncertain.
+    For common_answers, prefers the most specific (most words) match."""
     for k, v in answers.items():
         k_norm = re.sub(r'[^a-z0-9]+', ' ', k.lower()).strip()
         if k_norm == label_norm or label_norm.startswith(k_norm):
             return v
+    # common_answers: find all matches, pick the one with most words (most specific)
+    best_key, best_val = "", None
+    best_words = 0
     for ck, cv in ca.items():
-        if cv and _match_word(ck.lower().replace('_', ' '), label_norm):
-            return cv
+        if not cv: continue
+        kn = ck.lower().replace('_', ' ').strip()
+        kw_count = len(kn.split())
+        if kn == label_norm:
+            return cv  # exact match wins immediately regardless of specificity
+        if label_norm.startswith(kn) and kw_count > best_words:
+            best_key, best_val = kn, cv
+            best_words = kw_count
+    if best_val:
+        return best_val
     from apply.common.page_helpers import resolve_label
     return resolve_label(label, profile)
 
