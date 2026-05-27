@@ -11,13 +11,12 @@
 - Compression: `GUIDELINES.md` for high-density rewriting.
 
 ## Workflow & Data Management
-- **Stage-and-Delegate:** fetches/cleans → `skills/job_intelligence/stage/{id}.txt` → **LLM extraction** (`extract_jobs_llm.py` → sub-agents) → score/rank (`decision_engine.py`) → enrichment → Notion (`manager.py`).
+- **Stage-and-Delegate:** fetch/clean → DB stage → **LLM extraction** → score/rank → enrichment → Notion.
   - LLM-first: all inference via LLM. Regex fallback secondary.
-  - Never delete scripts/tools. Only `stage/`, `results/*.json` cleared at request.
-  - Clean Pass: full reset (stage + tracker + results) when accuracy > speed.
+  - Never delete scripts/tools. Only `state/` DB, `results/` cleared at request.
+  - Clean Pass: `extract.py reset` wipes everything.
 - **Sub-agents (Enrichment Only):** `{json_entry} + {file_path}` → enriched JSON → Notion + `manager.py submit`.
 - **Data Cleaning:** Strip HTML via `clean_html()` in `stage_emails.py`.
-- **Stage Cleanup:** Delete `stage/` after processing.
 
 ## Communication
 - **Groups:** Participant, not proxy. Human's stuff → don't share.
@@ -25,15 +24,19 @@
 - **Reactions:** 👍 ❤️ 😂 🤔 ✅ 👀. Max 1/message.
 - **Format:** Discord/WhatsApp: no tables (lists), wrap links `<>`. WhatsApp: no headers (bold/CAPS).
 
-## Job Pipeline (Caveman SOP)
-- 3w ≈ 400 threads gmail-cli, ~300-400 staged, ~50-100 jobs. Staged ≠ listings (GitHub, newsletters, social).
-- State: `results/jobs.json`. Call `python3 extract.py run` to start, then `fetch.py run` until 0 extracted.
-- **Flow:** `gmail-cli gmail search '<date_query>' --all -j` → `stage_emails.py` → `extract.py step` → `extract.py submit` → `fetch.py run` → `tailor.py run-all`
-- **Loop:** `> JOB {id} {title} @ {company}` → ask human → `tailor.py done/skip/retry`
-- **Status:** `python3 extract.py status` or `python3 fetch.py status`
-- **Auth walls:** `fetch.py flag jid` → human logs in via `fetch.py open` → auto-retry
-- **Recovery:** `gmail-cli auth add <email>` (re-auth) | Chrome → `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="C:\Users\sherv\.openclaw\chrome-profile"','--remote-debugging-port=9222'` | FAILED → `fetch.py retry` or skip | Script error → check `applications/{id}/gemini_response.txt` | jobs.json corrupt → `python3 tools/recover_jobs.py`
-- **Warnings:** `--all -j` required | Chrome signed into Gemini | `tailor.py done` waits 30-60s | Fails twice → FAILED
+## Job Pipeline
+- State: `state/jobs.db` (SQLite). Stages: extracted → described → tailored → applied | skipped | failed.
+- **Flow:** `stage_emails.py` → `extract.py` → `fetch.py` → `tailor.py`
+- **Alt:** `linkedin.py [--max N]` — scrape jobs, saves descriptions, skips fetch
+- **Stage:** `stage_emails.py [--days N]` — search Gmail, save, clean. `--refresh` to re-stage.
+- **Extract:** finds URLs in emails → `JOB:{jid}:{url}` → I admit/reject
+- **Fetch:** `fetch.py [--count N]` — scrape descriptions → `DESC:{jid}:{snippet}` → I admit/reject/flag
+- **Tailor:** `tailor.py [--count N]` → Gemini crafts CV → I done/skip/redo
+- **LinkedIn:** scrape cards, click each for JD, save to DB
+- **Status:** `extract.py status` / `fetch.py status` / `tailor.py status`
+- **Auth wall:** `flag <jid>` → `open [<jid>]` → `--refresh`
+- **Recovery:** auth → `gmail-cli auth add <email>` | Chrome crash → `Start-Process ... --remote-debugging-port=9222` | FAILED → `retry` | SKIPPED → `retry-skipped`
+- **Output:** `~/.openclaw/results/{jid}/` (response, script, PDFs, .url)
 
 ## Opencode (Standalone CLI)
 - PTY crashes TUI on tool calls. `--attach` mode eats stdout → useless.

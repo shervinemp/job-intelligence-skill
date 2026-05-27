@@ -5,56 +5,46 @@
 
 ## Pipeline stages
 
-| Stage | What happens | Filter / Gate |
-|-------|-------------|--------------|
-| **search + stage** | `python3 stage_emails.py [--days N]` — searches Gmail (last 14d), saves threads to DB, fetches + cleans each email | Auto: skips emails without `job`/`jobs` keyword |
-| **re-search** | `python3 stage_emails.py --refresh [--days N]` — clears cached threads, re-searches Gmail, re-stages | — |
-| **extract** | `python3 extract.py` — finds all URLs in staged emails, saves to DB | SLM: `admit`/`reject` each extracted URL. Check the URL + email context — many non-job URLs leak through (tracking links, privacy pages, company profiles, notification landing pages) |
-| **linkedin** | `python3 linkedin.py [--url <url>] [--max N]` — scrape LinkedIn jobs into pipeline | SLM: `admit`/`reject` each |
-| **fetch** | `python3 fetch.py` — visits each URL (Playwright), scrapes description | SLM: `admit`/`reject`/`flag` each description. Second gate — reject if the snippet doesn't look like a real JD (missing responsibilities/qualifications/work-description language) |
-| **tailor** | `python3 tailor.py [--count N]` — Gemini crafts CV | SLM: `done`/`skip`/`redo` |
+| Stage | What happens | Gate |
+|-------|-------------|------|
+| **stage** | `stage_emails.py [--days N]` — search Gmail (14d), save, clean | Auto: skip non-job keywords |
+| **refresh** | `--refresh [--days N]` — clear cache, re-search, re-stage | — |
+| **extract** | `extract.py` — find URLs in staged emails | SLM: admit/reject. Many non-job URLs leak through. |
+| **linkedin** | `linkedin.py [--url <url>] [--max N]` — scrape LinkedIn jobs | SLM: admit/reject |
+| **fetch** | `fetch.py` — visit URL, scrape description | SLM: admit/reject/flag. Second gate — real JD vs garbage. |
+| **tailor** | `tailor.py [--count N]` — Gemini crafts CV | SLM: done/skip/redo |
 
-## I run / What I do
+## Commands
 
-| I run | What happens | What I do |
-|-------|-------------|-----------|
-| `python3 stage_emails.py` | Search Gmail (incremental, max 14d lookback), stage new threads | — |
-| `python3 stage_emails.py --refresh` | Re-search + re-stage everything (resets lookback to 14d) | — |
-| `python3 stage_emails.py --days 30` | Override lookback to 30 days (also updates last-search marker) | — |
-| `python3 linkedin.py` | Scrape LinkedIn saved jobs into pipeline | `admit`/`reject` each |
-| `python3 linkedin.py --list` | Preview job cards without adding | — |
-| `python3 linkedin.py --url <url> --max 20` | Custom URL, limit to 20 | — |
-| `python3 extract.py` | Auto-extract URLs (skips existing in DB), shows `JOB:{jid}:{url}` with context | `admit --category <name> <jid>` / `reject` each |
-| `python3 extract.py admit --category <name> <jid>` | Keep job + set category. Re-run to update category or skip flag | Categories: tech, general |
-| `python3 extract.py help` | Show all options and available categories | — |
-| `python3 extract.py reset <jid>` | Delete specific job, re-extracts on next run | — |
-| `python3 extract.py reject <jid>` | Skip the extracted job | — |
-| `python3 extract.py review [--count N]` | Show N staged emails for manual URL picking | Pick URLs → `submit [<tid>] '<json>'` |
-| `python3 extract.py submit [<tid>] '<json>'` | Submit URLs manually. JSON must include `"category"`. | `{"url":"...","category":"tech","notes":"..."}` |
-| `python3 fetch.py` | Fetch descriptions (default 3, use `--count N`) | `admit`/`reject`/`flag` each |
-| `python3 fetch.py help` | Show all fetch subcommands and options | — |
-| `python3 fetch.py admit <jid>` | Mark job as described | — |
-| `python3 fetch.py reject <jid>` | Skip (garbage/closed) | — |
-| `python3 fetch.py flag <jid>` | Mark auth wall | — |
-| `python3 fetch.py open [<jid>]` | Open in Chrome | View, close tab, decide |
-| `python3 fetch.py retry` | Retry failed fetches | Same admit/reject |
-| `python3 fetch.py retry-skipped` | Reset all skipped jobs back to extracted | — |
-| `python3 fetch.py --refresh` | Re-fetch described URLs | Same admit/reject/flag |
-| `python3 tailor.py [--count N]` | Gemini crafts CV (default 1) | `done`/`skip`/`redo` |
-
-| `python3 tailor.py --count -1` | Process ALL described jobs | — |
-| `python3 tailor.py --relentless --count -1` | Process all, idle on rate limit, retry | — |
-| `python3 tailor.py help` | Show all tailor subcommands and options | — |
-| `python3 tailor.py done <jid>` | Mark applied, create .url shortcut | — |
-| `python3 tailor.py skip <jid>` | Skip | — |
-| `python3 tailor.py redo <jid>` | Re-tailor from described | — |
-| `python3 tailor.py redo --from tailored,failed` | Batch redo by stage | — |
-| `python3 tailor.py retry` | Retry failed | — |
-| `python3 tailor.py reset --from failed,skipped` | Reset jobs by stage to described | — |
-| `python3 tailor.py reset --all --hard` | Reset ALL jobs to extracted (careful!) | — |
-| `python3 tailor.py ready [<jid>]` | Open URL + files folder | — |
-| `python3 extract.py reset` | Wipe DB, start fresh | — |
-| `status` | Unified status + next command, includes category distribution | Follow `next:` hint |
+| Command | Effect | My action |
+|---------|--------|-----------|
+| `stage_emails.py` | Search Gmail (incremental, max 14d) | — |
+| `stage_emails.py --refresh` | Re-search + re-stage everything | — |
+| `stage_emails.py --days N` | Override lookback | — |
+| `linkedin.py` | Scrape LinkedIn saved jobs | admit/reject each |
+| `linkedin.py --list` | Preview cards without adding | — |
+| `linkedin.py --url <url> --max N` | Custom URL + limit | — |
+| `extract.py` | Auto-extract URLs from staged emails | `admit --category <name> <jid>` / reject |
+| `extract.py admit --category <name> <jid>` | Keep job + set category. Re-run to change. | Categories: tech, general |
+| `extract.py reset <jid>` | Delete job, re-extracts on next run | — |
+| `extract.py review [--count N]` | Show N staged emails for manual picking | Pick → `submit` |
+| `extract.py submit [<tid>] '<json>'` | Submit URLs manually | JSON needs `"category"` |
+| `fetch.py` | Fetch descriptions (default 3, use `--count N`) | admit/reject/flag each |
+| `fetch.py admit/reject/flag <jid>` | Mark described / skip / auth-wall | — |
+| `fetch.py open [<jid>]` | Open in Chrome | View, close tab, decide |
+| `fetch.py retry` | Retry failed fetches | Same admit/reject |
+| `fetch.py retry-skipped` | Reset skipped → extracted | — |
+| `fetch.py --refresh` | Re-fetch described URLs | Same admit/reject |
+| `tailor.py [--count N]` | Gemini crafts CV (default 1) | done/skip/redo |
+| `tailor.py --count -1` | Process ALL described | — |
+| `tailor.py --relentless --count -1` | Process all, idle on rate limit | — |
+| `tailor.py done/skip/redo <jid>` | Mark applied / skip / redo | — |
+| `tailor.py retry` | Retry failed | — |
+| `tailor.py reset --from failed,skipped` | Reset by stage to described | — |
+| `tailor.py reset --all --hard` | Reset ALL to extracted (careful!) | — |
+| `tailor.py ready [<jid>]` | Open URL + files folder | — |
+| `extract.py reset` | Wipe DB, start fresh | — |
+| `status` | Unified status + next command | Follow `next:` hint |
 
 ## Apply pipeline
 
