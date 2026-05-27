@@ -188,6 +188,9 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
 
         # Custom dropdown (e.g. Workday province selectors)
         if f["tag"] == "DROPDOWN":
+            current = f.get("value", "")
+            if current and current != "Select One" and current != "Select...":
+                continue  # already filled
             lbl = f["label"]
             lbl_norm = re.sub(r'[^a-z0-9]+', ' ', lbl.lower()).strip()
             ans = _find_answer(lbl, lbl_norm, answers, ca, profile)
