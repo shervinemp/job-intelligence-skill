@@ -66,7 +66,7 @@ def generate_tailored_docs(job_entry):
         return False, f"Category '{cat}' not in categories.json"
     gem = cat_info.get("gem")
     title_clean = job.get("title", "Unknown").split("·")[0].split("\u00b7")[0].strip()
-    desc_clean = description[:5000]
+    desc_clean = description[:15000]
     for bad, good in [
         ("\u200b", ""),
         ("\xa0", " "),

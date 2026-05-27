@@ -18,7 +18,7 @@ from lib.chrome_manager import CHROME_PROFILE as BROWSER_PROFILE, connect
 from lib import auth_walls
 from lib.platforms import fetch_description
 
-MAX_DESC_LEN = 8000
+MAX_DESC_LEN = 25000
 
 _AUTH_SIGNALS = [
     "sign in", "sign in to view", "sign in to see", "sign in to continue",
