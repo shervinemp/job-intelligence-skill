@@ -71,6 +71,11 @@ def run(jid):
     ep = ctx.new_page()
     ep.goto(external_url, wait_until="domcontentloaded", timeout=30000)
     time.sleep(5)
+    from apply.common.page_manager import PageManager
+    pm = PageManager(ctx, jid)
+    pm.cleanup_all()
+    pm.register(ep)
+    pm.close_others(ep)
     page_state = read_page(ep)
     print(f"PAGE: {json.dumps(page_state)}", file=sys.stderr)
     print("NEXT: act --fill", file=sys.stderr)

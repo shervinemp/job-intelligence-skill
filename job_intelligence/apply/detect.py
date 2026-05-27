@@ -47,6 +47,8 @@ def run(jid):
         # First check the regular job page for external apply button
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(5)
+        from apply.common.page_manager import PageManager
+        PageManager(ctx, jid).register(p)
         buttons = p.evaluate("""() => {
             const all = document.querySelectorAll('button, a');
             return Array.from(all).filter(el => el.offsetParent !== null).map(el => ({
