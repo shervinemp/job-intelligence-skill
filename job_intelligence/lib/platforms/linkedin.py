@@ -5,10 +5,15 @@ import re
 
 def pre_fetch(page):
     try:
-        btn = page.locator('[data-testid="expandable-text-button"]')
-        if btn.is_visible(timeout=3000):
-            btn.click()
-            page.wait_for_timeout(1000)
+        btns = page.locator('[data-testid="expandable-text-button"]')
+        count = btns.count()
+        for i in range(count):
+            try:
+                if btns.nth(i).is_visible(timeout=2000):
+                    btns.nth(i).click()
+                    page.wait_for_timeout(500)
+            except Exception:
+                pass
     except Exception:
         pass
 
