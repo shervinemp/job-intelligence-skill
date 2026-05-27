@@ -90,6 +90,11 @@ class PageManager:
             return domain_matches[0], [], "domain"
 
         if domain_matches:
+            # Multiple candidates — pick the one whose URL is closest to fallback_url
+            if fallback_url:
+                best_match = max(domain_matches, key=lambda p: len(os.path.commonprefix([p.url.lower(), fallback_url.lower()])))
+                self.register(best_match)
+                return best_match, [], "domain"
             return None, domain_matches, "multiple"
 
         return None, [], None
