@@ -1,6 +1,7 @@
 """Page registry — URL history stack + DOM tagging + content fingerprint.
 Finds the right page for a job, detects what happened after actions."""
 import json, os, time
+from urllib.parse import urlparse
 
 REGISTRY_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "page_registry.json")
 
@@ -108,6 +109,13 @@ class PageManager:
                 for s in url_stack:
                     if s.rstrip("/") in url or url in s.rstrip("/"):
                         self.register(p); return p
+
+        # 4. Domain-level fallback: any open page on the same domain
+        if url_stack:
+            target_domain = urlparse(url_stack[0]).netloc.lower()
+            for p in self.ctx.pages:
+                if target_domain and target_domain in p.url.lower():
+                    self.register(p); return p
 
         return None
 
