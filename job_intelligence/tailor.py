@@ -235,13 +235,6 @@ def craft_jid(jid):
         entry["category"] = "tech" if source == "LinkedIn" else "general"
         print(f"  {jid}: no category, defaulting to '{entry['category']}'", file=sys.stderr)
 
-    # Dedup doubled title
-    title = entry.get("title", "")
-    half = len(title) // 2
-    if len(title) > 20 and title[:half] == title[half:]:
-        entry["title"] = title[:half]
-        print(f"  {jid}: deduped title", file=sys.stderr)
-
     success, result = generate_tailored_docs(entry)
     if success:
         advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
