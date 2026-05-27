@@ -55,7 +55,7 @@ def generate_tailored_docs(job_entry):
 
     cat = job.get("category")
     if not cat:
-        return False, f"No category for job {job_id} — admit with --category first"
+        return False, f"No category for job {job_id} — fetch.py admit --category <name> first"
     cat_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "categories.json")
     try:
         with open(cat_path) as f:
@@ -231,7 +231,7 @@ def craft_jid(jid):
         return
 
     if not entry.get("category"):
-        print(f"ERROR: job {jid} has no category — admit with --category first", file=sys.stderr)
+        print(f"ERROR: job {jid} has no category — fetch.py admit --category <name> first", file=sys.stderr)
         return
 
     success, result = generate_tailored_docs(entry)

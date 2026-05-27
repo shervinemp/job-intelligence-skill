@@ -25,12 +25,14 @@
 | `linkedin.py --list` | Preview cards without adding | — |
 | `linkedin.py --url <url> --max N` | Custom URL + limit | — |
 | `extract.py` | Auto-extract URLs from staged emails | `admit --category <name> <jid>` / reject |
-| `extract.py admit --category <name> <jid>` | Keep job + set category. Re-run to change. | Categories: tech, general |
+| `extract.py admit --category <name> <jid>` | First admit requires --category (guess from email context). --notes optional. | Categories: tech, general |
 | `extract.py reset <jid>` | Delete job, re-extracts on next run | — |
 | `extract.py review [--count N]` | Show N staged emails for manual picking | Pick → `submit` |
 | `extract.py submit [<tid>] '<json>'` | Submit URLs manually | JSON needs `"category"` |
 | `fetch.py` | Fetch descriptions (default 3, use `--count N`) | admit/reject/flag each |
-| `fetch.py admit/reject/flag <jid>` | Mark described / skip / auth-wall | — |
+| `fetch.py admit <jid> --category <name> [--notes "..."]` | Mark described. --category overrides extract guess when JD visible. | Options: tech, general |
+| `fetch.py reject <jid>` | Skip (garbage/closed) | — |
+| `fetch.py flag <jid>` | Mark as auth wall | — |
 | `fetch.py open [<jid>]` | Open in Chrome | View, close tab, decide |
 | `fetch.py retry` | Retry failed fetches | Same admit/reject |
 | `fetch.py retry-skipped` | Reset skipped → extracted | — |
@@ -101,7 +103,7 @@ Each job has a category that guides admission. All categories use the same gem (
 | general | No specialized skills needed: retail, food service, warehouse, hospitality, cleaning, labor | Settle job |
 | (reject) | Admin, buyer, PM, analyst, non-software engineer, technician — skip, not worth your time | Reject at extract |
 
-Required on first `admit` via `--category tech <jid>`. Re-run to update.
+Required on first `extract.py admit --category <name> <jid>`. Override with `fetch.py admit --category <name> <jid>` when JD is visible.
 
 ## Decision rules
 
