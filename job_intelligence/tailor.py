@@ -231,9 +231,8 @@ def craft_jid(jid):
         return
 
     if not entry.get("category"):
-        source = entry.get("source", "")
-        entry["category"] = "tech" if source == "LinkedIn" else "general"
-        print(f"  {jid}: no category, defaulting to '{entry['category']}'", file=sys.stderr)
+        print(f"ERROR: job {jid} has no category — admit with --category first", file=sys.stderr)
+        return
 
     success, result = generate_tailored_docs(entry)
     if success:

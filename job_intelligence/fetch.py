@@ -10,7 +10,7 @@ Usage:
   fetch.py retry-skipped       Reset all skipped jobs back to extracted
   fetch.py status
 """
-import os, subprocess, sys, time, re
+import html, os, subprocess, sys, time, re
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from lib.db import load, advance, pipeline_status, get_conn
 from lib.db import desc_save, desc_exists
@@ -107,9 +107,9 @@ def _fetch_from_url(url, use_playwright=False):
         out = r.stdout
         if r.returncode == 0 and out and len(out) > 100:
             text = out.decode('utf-8', errors='replace')
-            # Extract title from HTML
+            # Extract title from HTML, decode entities
             title_match = re.search(r'<title[^>]*>(.*?)</title>', text, re.DOTALL)
-            page_title = title_match.group(1).strip()[:200] if title_match else ""
+            page_title = html.unescape(title_match.group(1).strip()[:200]) if title_match else ""
             text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
             text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
             text = re.sub(r'<[^>]+>', '\n', text)
