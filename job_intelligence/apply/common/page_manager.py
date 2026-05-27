@@ -114,8 +114,11 @@ class PageManager:
         if url_stack:
             target_domain = urlparse(url_stack[0]).netloc.lower()
             for p in self.ctx.pages:
-                if target_domain and target_domain in p.url.lower():
-                    self.register(p); return p
+                try:
+                    if target_domain and target_domain in urlparse(p.url).netloc.lower():
+                        self.register(p); return p
+                except:
+                    pass
 
         return None
 
