@@ -218,8 +218,11 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         ans = _find_answer(lbl, lbl_norm, answers, ca, profile)
 
         if ans:
-            sel = f'[id="{f["id"]}"]' if f["id"] else f'[name="{f["name"]}"]'
-            if sel and sel != "#":
+            sel = ""
+            if f["id"]: sel = f'[id="{f["id"]}"]'
+            elif f["name"]: sel = f'[name="{f["name"]}"]'
+            elif f.get("placeholder"): sel = f'[placeholder="{f["placeholder"]}"]'
+            if sel:
                 try:
                     el = page.query_selector(sel)
                     if el:
@@ -229,14 +232,28 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                             else: el.select_option(ans)
                         elif f["tag"] in ("INPUT", "TEXTAREA"):
                             el.fill(ans)
-                            # Autocomplete: if part of multiselect widget, press Enter to confirm
+                            # Autocomplete: if inside multiselect widget, confirm selection
                             try:
-                                if f.get("id") and page.locator(f'[data-automation-id="multiSelectContainer"] #{f["id"]}').count() > 0:
-                                    page.keyboard.press("Enter")
-                                    time.sleep(0.3)
-                            except:
-                                pass
-                            filled += 1
+                                aid = f.get("data-automation-id", "")
+                                is_ac = "multiSelect" in aid or bool(page.locator(f'[data-automation-id="multiSelectContainer"]').count())
+                                if is_ac:
+                                    time.sleep(0.5)
+                                    # Try clicking matching option in dropdown
+                                    clicked = page.evaluate(f"""(a) => {{
+                                        var opts = document.querySelectorAll('[role="option"]');
+                                        for (var o of opts) {{
+                                            if (o.offsetParent === null) continue;
+                                            if ((o.textContent || "").trim().toLowerCase() === a.toLowerCase()) {{
+                                                o.click(); return true;
+                                            }}
+                                        }}
+                                        return false;
+                                    }}""", ans)
+                                    if not clicked:
+                                        page.keyboard.press("Enter")
+                                        time.sleep(0.3)
+                            except: pass
+                        filled += 1
                 except: pass
         elif f.get("required"):
             unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
