@@ -25,18 +25,10 @@
 - **Format:** Discord/WhatsApp: no tables (lists), wrap links `<>`. WhatsApp: no headers (bold/CAPS).
 
 ## Job Pipeline
-- State: `state/jobs.db` (SQLite). Stages: extracted → described → tailored → applied | skipped | failed.
-- **Flow:** `stage_emails.py` → `extract.py` → `fetch.py` → `tailor.py`
-- **Alt:** `linkedin.py [--max N]` — scrape jobs, saves descriptions, skips fetch
-- **Stage:** `stage_emails.py [--days N]` — search Gmail, save, clean. `--refresh` to re-stage.
-- **Extract:** finds URLs in emails → `JOB:{jid}:{url}` → I admit/reject
-- **Fetch:** `fetch.py [--count N]` — scrape descriptions → `DESC:{jid}:{snippet}` → I admit/reject/flag
-- **Tailor:** `tailor.py [--count N]` — crafts tailored CV → I done/skip/redo
-- **LinkedIn:** scrape cards, click each for JD, save to DB
-- **Status:** `extract.py status` / `fetch.py status` / `tailor.py status`
-- **Auth wall:** `flag <jid>` → `open [<jid>]` → `--refresh`
-- **Recovery:** auth → `gmail-cli auth add <email>` | Chrome crash → `Start-Process ... --remote-debugging-port=9222` | FAILED → `retry` | SKIPPED → `retry-skipped`
-- **Output:** `~/.openclaw/results/{jid}/` (response, script, PDFs, .url)
+- **Flow:** `stage_emails.py` → `extract.py` → `fetch.py` → `tailor.py`. See `SKILL.md` for full commands.
+- **LinkedIn:** `linkedin.py [--max N]` as alt entry point.
+- **Recovery:** auth → `gmail-cli auth add` | Chrome crash → `Start-Process ... --remote-debugging-port=9222` | FAILED → `retry` | SKIPPED → `retry-skipped`
+- **Output:** `~/.openclaw/results/{jid}/`
 
 ## Opencode (Standalone CLI)
 - PTY crashes TUI on tool calls. `--attach` mode eats stdout → useless.
