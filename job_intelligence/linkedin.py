@@ -154,6 +154,8 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                     continue
 
             print(f"PAGE {page_num}: {count} total", file=sys.stderr)
+            if max_jobs is not None and count >= max_jobs:
+                break
             if page_num >= max_pages:
                 break
             next_btn = page.query_selector('button[aria-label="View next page"]')
