@@ -75,25 +75,23 @@
 | Submit external | `python3 apply.py submit_external <jid>` | External ATS: always dry-run, never auto-confirm |
 | Detect ATS | `python3 apply.py detect_ats <jid>` | Direct ATS URL (no LinkedIn): detects platform, reads form |
 
-### Apply flow notes
+### Apply notes
 
-- **Unfollow company** — review page: uncheck "Follow X" checkbox. Timeline bloat.
-- **Screening** — `--answers '{"q":"val"}'`. Substring match — `"employ"` matches `"Have you ever been employed by..."`. Saved to common_answers.
-- **Radio buttons** — Ashby hides `<input type="radio">` behind custom buttons. `radio.click()` sets DOM but may miss React. Prefer `.check()` or click parent `<div class="_option_...">`.
-- **Resume upload** — `set_input_files()` direct. Never click "Upload resume" — closes modal.
-- **Multi-page** — fill → next → read → fill → ... → submit. Each next re-reads state.
+- **Unfollow** — review page: uncheck "Follow X". Keeps your timeline clean.
+- **Screening** — `--answers '{"q":"val"}'`. Substring match works (`"employ"` → `"employed by..."`). Saved for reuse.
+- **Radios** — Ashby hides radios behind custom buttons. `radio.click()` sets DOM but may miss React. Use Playwright `.check()` or click the `<div>` wrapper.
+- **Resume** — `set_input_files()` only. Clicking "Upload resume" closes the modal.
+- **Multi-page** — fill → next → read → loop → submit.
 
 ### Pre-flight
 
-Before apply pipeline on a job:
-
 | Check | Action |
 |-------|--------|
-| Already applied? | DB stage="applied" → skip. detect.py catches LinkedIn "Applied" button. |
-| Needs tailor? | Stage not "tailored" → run `tailor.py <jid>` first. resume.py errors without PDF. |
-| Rate limited? | Tailor returns RATE_LIMIT → stop, retry later via `retry`/`--relentless`. |
-| Quebec on-site? | Per extraction rules → reject. |
-| External URL missing? | navigate.py fails → job may be closed or premium-walled. |
+| Already applied? | DB says "applied" or detect.py sees "Applied" button → skip |
+| Needs PDF? | Stage != "tailored" → run `tailor.py <jid>` first. Resume step errors without it. |
+| Rate limited? | Tailor hits RATE_LIMIT → stop, use `retry` or `--relentless` later. |
+| Quebec on-site? | Extraction rules say reject → skip. |
+| External dead? | navigate.py fails → job likely closed or premium-walled. |
 
 ### Flow examples
 
