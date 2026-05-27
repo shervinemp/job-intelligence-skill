@@ -32,6 +32,8 @@ def read_page(p):
                 tag: el.tagName, type: el.getAttribute('type') || '',
                 id: el.id, name: el.getAttribute('name') || '',
                 label: (label || '').replace(/\\s+/g,' ').trim().slice(0, 80),
+                placeholder: el.placeholder || '',
+                data_automation_id: el.getAttribute('data-automation-id') || '',
                 required: !!el.required, value: el.value || '',
                 checked: el.type === 'radio' ? el.checked : null,
                 options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0,15) : [],
