@@ -192,13 +192,37 @@ def cmd_flag(*jids):
 
 def cmd_admit(*jids, **fields):
     state = load()
+    cats_path = os.path.join(os.path.dirname(__file__), "categories.json")
+    try:
+        with open(cats_path) as f:
+            cats = json.load(f)
+    except Exception as e:
+        print(f"ERROR: can't read categories.json: {e}", file=sys.stderr)
+        return
+
+    cat = fields.get("category")
+    if cat and cat not in cats:
+        print(f"ERROR: unknown category '{cat}'. Options: {', '.join(cats)}", file=sys.stderr)
+        return
+
     count = 0
     for jid in jids:
-        if jid in state.get("jobs", {}) and desc_exists(jid):
-            entry = state["jobs"][jid]
-            updates = {k: v for k, v in fields.items() if v is not None}
-            advance(entry, "described", **updates)
-            count += 1
+        entry = state.get("jobs", {}).get(jid)
+        if not entry or not desc_exists(jid):
+            continue
+        current_cat = entry.get("category")
+        if not cat and not current_cat:
+            desc = desc_get(jid)
+            if desc:
+                limit = 500
+                snippet = re.sub(r'\s+', ' ', desc[:limit].replace('\r', '')).strip()
+                print(f"DESC:{jid}:{snippet}", file=sys.stderr)
+            print(f"ERROR: --category required (no category set). Options: {', '.join(cats)}", file=sys.stderr)
+            print(f"  Usage: fetch.py admit {jid} --category <name>", file=sys.stderr)
+            continue
+        updates = {k: v for k, v in fields.items() if v is not None}
+        advance(entry, "described", **updates)
+        count += 1
     print(f"ADMITTED:{count}", file=sys.stderr)
     if count:
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
