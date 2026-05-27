@@ -43,26 +43,48 @@ def run(jid):
 
     if "linkedin.com/jobs/view" in url:
         job_id = url.split("/jobs/view/")[1].split("/")[0]
+
+        # First check the regular job page for external apply button
+        p.goto(url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(5)
+        buttons = p.evaluate("""() => {
+            const all = document.querySelectorAll('button, a');
+            return Array.from(all).filter(el => el.offsetParent !== null).map(el => ({
+                text: (el.textContent || '').trim().slice(0, 25),
+                aria: (el.getAttribute('aria-label') || '').slice(0, 40),
+                tag: el.tagName
+            }));
+        }""")
+
+        if any(b["text"] == "Applied" for b in buttons):
+            print("TYPE: already_applied\nNEXT: none"); save_state({"jid": jid}); sys.exit(0)
+        if any("applied" in (b.get("aria") or "").lower() for b in buttons):
+            print("TYPE: already_applied\nNEXT: none"); save_state({"jid": jid}); sys.exit(0)
+        if "you have applied" in (p.evaluate("() => (document.body.innerText || '').toLowerCase()") or ""):
+            print("TYPE: already_applied\nNEXT: none"); save_state({"jid": jid}); sys.exit(0)
+        if any("on company website" in (b.get("aria") or "").lower() for b in buttons):
+            print(f"TYPE: external\nBUTTONS: {json.dumps([b for b in buttons if 'company website' in b['aria']])}\nNEXT: navigate")
+            save_state({"jid": jid, "url": url, "title": title, "company": company})
+            sys.exit(0)
+
+        # Not external — try opening Easy Apply modal
         p.goto(f"https://www.linkedin.com/jobs/view/{job_id}/apply/?openSDUIApplyFlow=true", wait_until="domcontentloaded", timeout=30000)
         time.sleep(5)
 
-        buttons = p.evaluate("""() => Array.from(document.querySelectorAll('button')).filter(b=>b.offsetParent!==null).map(b=>({text:(b.textContent||'').trim().slice(0,25),aria:(b.getAttribute('aria-label')||'').slice(0,40)}))""")
         page_state = read_page(p)
+        buttons = p.evaluate("""() => {
+            const all = document.querySelectorAll('button, a');
+            return Array.from(all).filter(el => el.offsetParent !== null).map(el => ({
+                text: (el.textContent || '').trim().slice(0, 25),
+                aria: (el.getAttribute('aria-label') || '').slice(0, 40),
+                tag: el.tagName
+            }));
+        }""")
 
         if page_state and page_state["fieldCount"] > 0:
             print(f"TYPE: easy_apply\nPAGE: {json.dumps(page_state)}\nNEXT: act --fill")
-        elif any(b["text"] == "Applied" for b in buttons):
-            print("TYPE: already_applied\nNEXT: none")
-            get_conn().execute("UPDATE jobs SET stage=? WHERE id=?", ("applied", jid)).connection.commit()
-        elif any("applied" in (b.get("aria") or b["text"]).lower() for b in buttons):
-            print("TYPE: already_applied\nNEXT: none")
-            get_conn().execute("UPDATE jobs SET stage=? WHERE id=?", ("applied", jid)).connection.commit()
-        elif "you have applied" in (p.evaluate("() => (document.body.innerText || '').toLowerCase()") or ""):
-            print("TYPE: already_applied\nNEXT: none")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
-            print("TYPE: easy_apply\nPAGE: {}\nNOTE: dialog not auto-opened\nNEXT: act --fill")
-        elif any("on company website" in (b.get("aria") or "").lower() for b in buttons):
-            print(f"TYPE: external\nBUTTONS: {json.dumps([b for b in buttons if 'company website' in b['aria']])}\nNEXT: navigate")
+            print("TYPE: easy_apply\nPAGE: {{}}\nNOTE: dialog not auto-opened\nNEXT: act --fill")
         else:
             print("TYPE: unknown\nNEXT: none")
     else:
