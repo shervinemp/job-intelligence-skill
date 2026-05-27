@@ -61,9 +61,9 @@ def _parse_card(card):
     if title:
         parts = [p.strip() for p in title.replace('\xa0', ' ').split('\n') if p.strip()]
         title = parts[0] if parts else title
-        # Dedup: first half equals second half (LinkedIn duplicates title in DOM)
+        # Dedup: second half contains first half (LinkedIn duplicates title, sometimes with "with verification")
         half = len(title) // 2
-        if len(title) > 20 and title[:half] == title[half:]:
+        if len(title) > 20 and title[half:].startswith(title[:half]):
             title = title[:half].strip()
     el = card.query_selector('.artdeco-entity-lockup__subtitle')
     company = (el.inner_text() or '').strip() if el else ''
