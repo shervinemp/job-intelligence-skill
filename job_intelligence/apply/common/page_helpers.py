@@ -91,32 +91,34 @@ def scan_actions(page, keywords, exclude=None):
     """Score all clickable elements (buttons + links) against keyword list.
     Returns sorted list of candidates with scores."""
     exclude = exclude or {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
-    result = page.evaluate(f"""((kws, excl) => {{
-        kws = kws.map(k => k.toLowerCase());
-        excl = new Set(excl.map(e => e.toLowerCase()));
+    result = page.evaluate("""((args) => {
+        const kws = args[0], excl = new Set(args[1].map(e => e.toLowerCase()));
+        const currentUrl = location.href.replace(/\\/$/, '').toLowerCase();
         const all = document.querySelectorAll('button, a');
         const candidates = [];
-        for (const el of all) {{
+        for (const el of all) {
             if (el.offsetParent === null) continue;
             const text = (el.textContent || '').trim().toLowerCase();
             if (excl.has(text)) continue;
-            const href = (el.href || '').toLowerCase();
+            const href = (el.href || '').toLowerCase().replace(/\\/$/, '');
+            // Skip self-referencing links
+            if (el.tagName === 'A' && href === currentUrl) continue;
             let score = 0;
-            for (const kw of kws) {{
+            for (const kw of kws) {
                 if (text === kw) score = Math.max(score, 4);
                 else if (text.startsWith(kw)) score = Math.max(score, 3);
                 else if (text.includes(kw)) score = Math.max(score, 2);
                 else if (href.includes(kw)) score = Math.max(score, 1);
-            }}
-            if (score > 0) {{
-                candidates.push({{
+            }
+            if (score > 0) {
+                candidates.push({
                     text: text.slice(0, 30), score: score, tag: el.tagName,
-                    href: href.slice(0, 120),
+                    href: href,
                     disabled: el.disabled || false
-                }});
-            }}
-        }}
+                });
+            }
+        }
         candidates.sort((a, b) => b.score - a.score);
         return candidates;
-    }})""", keywords, exclude)
+    })""", [keywords, list(exclude)])
     return result

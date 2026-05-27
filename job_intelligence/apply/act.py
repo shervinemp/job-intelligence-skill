@@ -11,18 +11,30 @@ from apply.common.page_helpers import load_state, save_state, read_page, find_pa
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 _EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
 
-def _click_candidate(page, c):
-    if c["tag"] == "A" and c.get("href"):
-        page.goto(c["href"], wait_until="domcontentloaded", timeout=15000)
-    else:
+def _click_candidate(page, c, state=None):
+    try:
+        loc = page.locator(f'a:has-text("{c["text"]}"), button:has-text("{c["text"]}")')
+        if loc.count() > 0:
+            loc.first.click(force=True, timeout=5000)
+        else:
+            page.evaluate(f"""(txt) => {{
+                const all = document.querySelectorAll('a, button');
+                for (const el of all) {{
+                    if (el.offsetParent === null) continue;
+                    if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return; }}
+                }}
+            }}""", c["text"])
+    except:
         page.evaluate(f"""(txt) => {{
-            const all = document.querySelectorAll('button');
+            const all = document.querySelectorAll('a, button');
             for (const el of all) {{
                 if (el.offsetParent === null) continue;
-                if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return; }}
+                if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.dispatchEvent(new MouseEvent('click', {{bubbles:true}})); return; }}
             }}
         }}""", c["text"])
-    time.sleep(4)
+    if state:
+        state["external_url"] = page.url
+    time.sleep(5)
 
 def _handle_post_click(state, ps, page):
     if not ps or ps["fieldCount"] == 0:
@@ -178,17 +190,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
         cands = scan_actions(page, kws, _EXCLUDED_BUTTONS)
         if candidate < len(cands):
             c = cands[candidate]
-            if c["tag"] == "A" and c.get("href"):
-                page.goto(c["href"], wait_until="domcontentloaded", timeout=15000)
-            else:
-                page.evaluate(f"""(txt) => {{
-                    const all = document.querySelectorAll('button, a');
-                    for (const el of all) {{
-                        if (el.offsetParent === null) continue;
-                        if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return; }}
-                    }}
-                }}""", c["text"])
-            time.sleep(5)
+            _click_candidate(page, c, state)
             ps = read_page(page)
             print(f"CANDIDATE_CLICK: #{candidate} '{c['text']}' → {ps['fieldCount']} fields", file=sys.stderr)
         else:
@@ -248,17 +250,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
         if candidates and candidates[0]["score"] >= 4:
             # Certain match — auto-follow
             c = candidates[0]
-            if c["tag"] == "A" and c.get("href"):
-                page.goto(c["href"], wait_until="domcontentloaded", timeout=15000)
-            else:
-                page.evaluate(f"""(txt) => {{
-                    const all = document.querySelectorAll('button, a');
-                    for (const el of all) {{
-                        if (el.offsetParent === null) continue;
-                        if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return; }}
-                    }}
-                }}""", c["text"])
-            time.sleep(5)
+            _click_candidate(page, c, state)
             ps = read_page(page)
             print(f"AUTO_FOLLOW: '{c['text']}' → {ps['fieldCount']} fields", file=sys.stderr)
         elif candidates:
@@ -339,7 +331,7 @@ def cmd_next(jid, candidate=None):
         cands = scan_actions(page, advance_kws, _EXCLUDED_BUTTONS)
         if candidate < len(cands):
             c = cands[candidate]
-            _click_candidate(page, c)
+            _click_candidate(page, c, state)
             ps2 = read_page(page)
             _handle_post_click(state, ps2, page)
         else:
@@ -365,7 +357,7 @@ def cmd_next(jid, candidate=None):
         print("NO_BUTTON\nNEXT: none", file=sys.stderr); return
 
     print(f"ACTION: {target['text']}", file=sys.stderr)
-    _click_candidate(page, target)
+    _click_candidate(page, target, state)
     ps2 = read_page(page)
     if not _handle_post_click(state, ps2, page):
         has_submit = any(b["text"].lower() in ("submit", "submit application", "apply", "send application") and not b["disabled"] for b in ps2.get("buttons",[]))
