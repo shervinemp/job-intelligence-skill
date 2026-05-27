@@ -60,6 +60,13 @@ def run(jid):
     plat = detect_platform(external_url)
     print(f"EXTERNAL_URL: {external_url}\nPLATFORM: {plat}", file=sys.stderr)
 
+    # Close the origin LinkedIn page and any safety-redirect pages
+    for pg in ctx.pages:
+        u = pg.url
+        if 'linkedin.com' in u and u != page.url:
+            try: pg.close()
+            except: pass
+
     # Navigate to external URL and read form
     ep = ctx.new_page()
     ep.goto(external_url, wait_until="domcontentloaded", timeout=30000)

@@ -247,9 +247,30 @@ def save_state(state):
         )
     conn.commit()
 
+def _normalize_url(url):
+    """Normalize URL for consistent job ID hashing. Strips tracking params, trailing slashes."""
+    if not url:
+        return url
+    import urllib.parse
+    try:
+        parsed = urllib.parse.urlparse(url)
+        # Remove tracking query params
+        tracked = {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+                   'fbclid', 'gclid', 'ref', 'source', 'from', 'trk', 'lipi', 'email_id',
+                   'eid', 'refid', 'tk', 'co', 'hl', 'pos', 'ao', 's', 'guid', 'src', 'gh_src'}
+        qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        clean_qs = {k: v for k, v in qs.items() if k.lower() not in tracked}
+        clean_query = urllib.parse.urlencode(clean_qs, doseq=True) if clean_qs else ""
+        clean_path = parsed.path.rstrip("/") or "/"
+        clean = urllib.parse.urlunparse((parsed.scheme, parsed.netloc.lower(), clean_path, "", clean_query, ""))
+        return clean
+    except Exception:
+        return url.strip("/")
+
+
 def add_job(job_data):
     conn = get_conn()
-    url = job_data.get("url", "")
+    url = _normalize_url(job_data.get("url", ""))
     jid = hashlib.md5(url.encode()).hexdigest()[:16] if url else None
     if not jid:
         return None
@@ -314,8 +335,18 @@ def advance_job(jid, new_stage, **updates):
         sets.append(f"{k}=?")
         vals.append(v)
     vals.append(jid)
-    conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
-    conn.commit()
+    # Retry on SQLite locked with backoff
+    import time as _time
+    for attempt in range(3):
+        try:
+            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
+            conn.commit()
+            return
+        except Exception as e:
+            if "database is locked" in str(e).lower() and attempt < 2:
+                _time.sleep(0.1 * (attempt + 1))
+                continue
+            raise
 
 
 def get_job(jid):
