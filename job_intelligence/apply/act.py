@@ -203,9 +203,9 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     b, ctx = connect()
     from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
-    page = pm.find()
+    ext = state.get("external_url", "")
+    page = pm.find(fallback_url=ext)
     if not page:
-        ext = state.get("external_url", "")
         if ctx.pages:
             print("NO_MATCH: no page matches. Open pages:", file=sys.stderr)
             for i, p in enumerate(ctx.pages):
@@ -359,9 +359,9 @@ def cmd_next(jid, candidate=None):
     b, ctx = connect()
     from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
-    page = pm.find()
+    ext = state.get("external_url", "")
+    page = pm.find(fallback_url=ext)
     if not page:
-        ext = state.get("external_url", "")
         if ext:
             page = ctx.new_page()
             page.goto(ext, wait_until="domcontentloaded", timeout=30000)
@@ -418,7 +418,7 @@ def cmd_back(jid):
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
     from apply.common.page_manager import PageManager
-    page = PageManager(ctx, jid).find()
+    page = PageManager(ctx, jid).find(fallback_url=state.get("external_url", ""))
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
     page.evaluate("""() => { const c = document.querySelector('[role="dialog"]') || document; c.querySelectorAll('button').forEach(b => { if ((b.textContent||'').trim().toLowerCase() === 'back' && !b.disabled) b.click(); }); }""")
     time.sleep(3)
@@ -433,7 +433,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
     from apply.common.page_manager import PageManager
-    page = PageManager(ctx, jid).find()
+    page = PageManager(ctx, jid).find(fallback_url=state.get("external_url", ""))
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
 
     from apply.common.page_helpers import scan_actions
