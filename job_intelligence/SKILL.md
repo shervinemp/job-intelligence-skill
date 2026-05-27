@@ -64,7 +64,7 @@
 | Click | `python3 apply.py click <jid>` | Opens Easy Apply modal (may need fresh /apply/ navigation if stale) |
 | Read | `python3 apply.py read <jid>` | Shows current fields + buttons, routes to next step |
 | Fill | `python3 apply.py fill <jid>` | Fills profile-mapped fields (name, email, phone, linkedin). Already-filled fields skipped. |
-| Resume | `python3 apply.py resume <jid>` | `set_input_files` directly — do NOT click "Upload resume" (closes modal) |
+| Resume | `python3 apply.py resume <jid>` | `set_input_files` directly — do NOT click "Upload resume" (closes modal). Errors if no PDF. |
 | Screen | `python3 apply.py screen <jid> --answers '{"Q":"A"}'` | Presents screening questions; model answers with --answers |
 | Next | `python3 apply.py next <jid>` | Clicks Next/Review/Submit (disables overlay). Detects which action to take. |
 | Submit | `python3 apply.py submit <jid>` | Dry-run safe. Shows button state + unfilled fields. |
@@ -86,6 +86,18 @@
 **Resume upload:** Always `set_input_files()` directly on the file input. Never trigger the native file picker dialog — it causes the modal to close before the file is attached.
 
 **Multi-page forms:** Each `next` step re-reads the modal and reports the next action. Loop: fill → next → read → fill → next → ... → submit.
+
+### Pre-flight checks
+
+Before running the apply pipeline on a job, verify:
+
+| Check | What to do |
+|-------|------------|
+| Already applied? | Check DB stage — if "applied", skip. Also detect.py classifies LinkedIn "Applied" button. |
+| Needs tailor? | If stage is not "tailored", run `python3 tailor.py <jid>` first to generate PDF. 04_resume.py errors without one. |
+| Rate limited? | If tailor returns RATE_LIMIT, stop and retry later via `tailor.py retry` or `--relentless`. Don't attempt apply without PDF. |
+| Quebec on-site? | Per SKILL.md extraction rules — reject. Don't apply. |
+| Has external URL? | For external ATS, navigate.py must succeed. If no external URL found, job may be closed or premium-walled.
 
 ### Flow examples
 
