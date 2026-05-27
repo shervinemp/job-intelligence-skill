@@ -134,7 +134,7 @@ Stale entries auto-pruned.
 
 ## Technical notes
 
-**Gemini.js:** When running from ji-skill (not workspace), `call_gemini.py` looks for `skills/gemini-browser/gemini.js` relative to workspace root. Must run with `$env:NODE_PATH="C:\Users\sherv\.openclaw\workspace\node_modules"` or from the workspace directory. `browser.close()` on CDP connections is not awaited — use `await browser.close().catch(()=>{})` to prevent sync throws from skipping action handlers.
+**Gemini.js:** `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain). No manual `NODE_PATH` needed. `browser.close()` on CDP connections is not awaited — `call_gemini.py` handles this internally.
 
 **LinkedIn title dedup:** LinkedIn job cards often repeat the title (visible + hidden verification text). `linkedin.py` now deduplicates by detecting when the first half of the title string equals the second half.
 
