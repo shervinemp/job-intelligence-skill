@@ -270,7 +270,7 @@ def _normalize_url(url):
 
 def add_job(job_data):
     conn = get_conn()
-    url = _normalize_url(job_data.get("url", ""))
+    url = job_data.get("url", "")
     jid = hashlib.md5(url.encode()).hexdigest()[:16] if url else None
     if not jid:
         return None
