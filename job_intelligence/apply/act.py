@@ -122,6 +122,8 @@ def cmd_fill(jid, answers_json=None):
         except: print("ERROR: --answers must be valid JSON", file=sys.stderr)
 
     state = load_state()
+    if state.get("jid") != jid:
+        print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
     page = find_page(ctx, state)
     if not page:
@@ -179,6 +181,8 @@ def cmd_fill(jid, answers_json=None):
 
 def cmd_next(jid):
     state = load_state()
+    if state.get("jid") != jid:
+        print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
     page = find_page(ctx, state)
     if not page:
@@ -239,6 +243,8 @@ def cmd_next(jid):
 
 def cmd_back(jid):
     state = load_state()
+    if state.get("jid") != jid:
+        print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
     page = find_page(ctx, state)
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
@@ -251,6 +257,8 @@ def cmd_back(jid):
 
 def cmd_submit(jid, confirm=False):
     state = load_state()
+    if state.get("jid") != jid:
+        print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     b, ctx = connect()
     page = find_page(ctx, state)
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
@@ -278,6 +286,9 @@ def cmd_submit(jid, confirm=False):
     print("NEXT: verify", file=sys.stderr)
 
 def cmd_auto(jid, answers_json=None):
+    state = load_state()
+    if state.get("jid") != jid:
+        print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     answers = {}
     if answers_json:
         try: answers = json.loads(answers_json)
