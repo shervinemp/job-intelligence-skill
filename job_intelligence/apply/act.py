@@ -55,7 +55,7 @@ def _fill_radios(page, fields, answers, ca, jid):
         unfilled.append({"label": q_label[:60], "options": opts, "tag": "radio_group"})
     return filled, unfilled
 
-def _fill_text(page, fields, answers, ca, profile, jid):
+def _fill_text(page, fields, answers, ca, profile, jid, state):
     """Fill text/select/textarea fields. Returns filled count + unfilled list."""
     filled = 0
     unfilled = []
@@ -140,7 +140,7 @@ def cmd_fill(jid, answers_json=None):
     ca = profile.get("common_answers", {})
 
     radio_filled, radio_unfilled = _fill_radios(page, ps["fields"], answers, ca, jid)
-    text_filled, text_unfilled = _fill_text(page, ps["fields"], answers, ca, profile, jid)
+    text_filled, text_unfilled = _fill_text(page, ps["fields"], answers, ca, profile, jid, state)
     filled = radio_filled + text_filled
     unfilled = radio_unfilled + text_unfilled
 
@@ -188,7 +188,7 @@ def cmd_next(jid):
             page.goto(ext, wait_until="domcontentloaded", timeout=30000)
             time.sleep(5)
         else:
-            print("ERROR: no page found and no external URL", file=sys.stderr); sys.exit(1)
+            print("ERROR: no page found and no external URL", file=sys.stderr); return
 
     ps = read_page(page)
     btns = ps.get("buttons", [])
@@ -209,8 +209,8 @@ def cmd_next(jid):
         for b in btns:
             if b["text"].lower().strip() in ("submit","review","next","continue","done") and b["disabled"]:
                 print(f"BUTTON_DISABLED: {b['text']} — fill required fields first", file=sys.stderr)
-                print("NEXT: act --fill", file=sys.stderr); sys.exit(0)
-        print("NO_BUTTON\nNEXT: none", file=sys.stderr); sys.exit(0)
+                print("NEXT: act --fill", file=sys.stderr); return
+        print("NO_BUTTON\nNEXT: none", file=sys.stderr); return
 
     print(f"ACTION: {target['text']}", file=sys.stderr)
     try:
@@ -292,10 +292,7 @@ def cmd_auto(jid, answers_json=None):
             print(f"AUTO: page {pn} — {len(unfilled)} unfilled, stop", file=sys.stderr)
             return
         print(f"AUTO: page {pn} — filled, advancing", file=sys.stderr)
-        try:
-            cmd_next(jid)
-        except SystemExit:
-            pass  # cmd_next may sys.exit on success
+        cmd_next(jid)
         state = load_state()
         if state.get("result") in ("submitted", "modal_closed"):
             print(f"AUTO: {state['result']}", file=sys.stderr)
