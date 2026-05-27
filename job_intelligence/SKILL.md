@@ -70,6 +70,20 @@
 - **Multi-page** — `act --auto` handles the loop. Manual: fill → next → fill → ... → submit.
 - **Pre-flight** — always run `detect` first. It checks stage, PDF, and page type in one call.
 - **Button priority** — Submit > Review > Next > Continue > Done (rightmost). Never Back/Cancel/Save.
+- **Common answers matching** — `--answers` exact match first, then common_answers (exact for optional, prefix for required), then profile resolver.
+- **Field types:** INPUT (text/email/tel), SELECT, TEXTAREA, DROPDOWN (custom `button[aria-haspopup]`), AUTOCOMPLETE (placeholder="Search").
+- **Autocomplete** — uses JS native value setter + input/change events for Workday multiselect widgets.
+- **3x fingerprint guard** — if same page state appears 3 fills in a row, warns model to break loop.
+
+### Platform-specific guides
+
+| Platform | File | Key quirks |
+|----------|------|------------|
+| Ashby | `apply/platforms/ashby.md` | One-page, standard HTML, "Submit Application" |
+| Greenhouse | `apply/platforms/greenhouse.md` | 29 fields pre-loaded, no Apply click needed |
+| Lever | `apply/platforms/lever.md` | `/apply` URL after apply-link, 12 fields, label-in-label structure |
+| Workday | `apply/platforms/workday.md` | 7-step SPA, DROPDOWN+autocomplete widgets, per-company login |
+| LinkedIn | `apply/platforms/linkedin.md` | Easy Apply modal vs External (safety redirect) |
 
 ## Extraction rules
 
