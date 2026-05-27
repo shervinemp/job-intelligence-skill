@@ -5,7 +5,7 @@ One command tells you if a job is ready for the apply pipeline.
 import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
-from lib.db import get_conn
+from lib.db import get_conn, desc_exists
 from apply.common.page_helpers import read_page, save_state
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
@@ -31,7 +31,10 @@ def run(jid):
         print("STATUS: failed — run tailor.py retry first\nNEXT: tailor.py retry"); sys.exit(0)
     if stage in ("extracted", "described"):
         if not _has_pdf(jid):
-            print(f"STATUS: not tailored (stage={stage}, no PDF)\nNEXT: tailor.py {jid}")
+            if desc_exists(jid):
+                print(f"STATUS: needs advance + tailor (stage={stage}, has desc, no PDF)\nNEXT: tailor.py --jid {jid}")
+            else:
+                print(f"STATUS: needs description (stage={stage}, no desc, no PDF)\nNEXT: fetch.py  then  tailor.py --jid {jid}")
             sys.exit(0)
 
     # Classify type
