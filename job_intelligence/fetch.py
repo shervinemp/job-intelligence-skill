@@ -18,8 +18,6 @@ from lib.chrome_manager import CHROME_PROFILE as BROWSER_PROFILE, connect
 from lib import auth_walls
 from lib.platforms import fetch_description
 
-MAX_DESC_LEN = 25000
-
 _AUTH_SIGNALS = [
     "sign in", "sign in to view", "sign in to see", "sign in to continue",
     "log in", "log in to view", "log in to continue",
@@ -116,7 +114,7 @@ def _fetch_from_url(url, use_playwright=False):
             text = re.sub(r'\n\s*\n', '\n\n', text)
             text = re.sub(r'\s{3,}', '  ', text).strip()
             if len(text) > 100:
-                return True, text[:MAX_DESC_LEN], page_title
+                return True, text, page_title
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return False, "Fetch failed", None
@@ -124,7 +122,6 @@ def _fetch_from_url(url, use_playwright=False):
 
 
 def save_description(jid, text):
-    text = text[:MAX_DESC_LEN]
     cutoff = int(len(text) * 0.3)
     idx = text.lower().find('copyright', cutoff)
     if idx != -1:
