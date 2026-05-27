@@ -70,9 +70,12 @@ def run(jid):
         time.sleep(5)
         page_state = read_page(p)
         if page_state and page_state["fieldCount"] > 0:
-            print(f"TYPE: ats_direct\nPAGE: {json.dumps(page_state)}\nNEXT: act --fill")
+            from apply.common.platforms import detect_platform
+            plat = detect_platform(url)
+            print(f"TYPE: ats_direct\nEXTERNAL_URL: {url}\nPLATFORM: {plat}\nPAGE: {json.dumps(page_state)}\nNEXT: act --fill")
+            save_state({"jid": jid, "url": url, "title": title, "company": company,
+                        "external_url": url, "platform": plat, "page": page_state})
         else:
             text = (p.evaluate("() => document.body.innerText") or "").lower()
             print(f"TYPE: {'auth_wall' if any(w in text for w in ['sign in','log in']) else 'unknown'}\nNEXT: none")
-
-    save_state({"jid": jid, "url": url, "title": title, "company": company, "page": page_state or {}})
+            save_state({"jid": jid})
