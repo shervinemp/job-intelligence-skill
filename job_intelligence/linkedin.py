@@ -112,15 +112,13 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
             for cd in cards_data:
                 try:
                     job_url = cd['url']
-                    jid = cd['jid']
-                    existing = get_conn().execute("SELECT id FROM jobs WHERE id=?", (jid,)).fetchone()
-                    if existing:
-                        if desc_get(jid):
-                            continue
                     parsed = cd['parsed']
-                    add_job({"url": job_url, "title": parsed["title"], "company": parsed["company"],
-                             "location": parsed["location"], "source": "LinkedIn", "source_url": job_url,
-                             "category": "tech"})
+                    actual_jid = add_job({"url": job_url, "title": parsed["title"], "company": parsed["company"],
+                                          "location": parsed["location"], "source": "LinkedIn", "source_url": job_url,
+                                          "category": "tech"})
+                    if not actual_jid:
+                        continue
+                    jid = actual_jid
                     page.locator(f'.job-card-container[data-job-id="{cd["id"]}"]').first.click()
                     page.wait_for_timeout(500)
                     for _ in range(3):
