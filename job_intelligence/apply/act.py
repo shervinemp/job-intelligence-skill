@@ -204,7 +204,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
     ext = state.get("external_url", "")
-    page, _ = pm.find(fallback_url=ext)
+    page, _, _ = pm.find(fallback_url=ext)
     if not page:
         if ctx.pages:
             print("NO_MATCH: no page matches. Open pages:", file=sys.stderr)
@@ -360,7 +360,7 @@ def cmd_next(jid, candidate=None):
     from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
     ext = state.get("external_url", "")
-    page, _ = pm.find(fallback_url=ext)
+    page, _, _ = pm.find(fallback_url=ext)
     if not page:
         if ext:
             page = ctx.new_page()
