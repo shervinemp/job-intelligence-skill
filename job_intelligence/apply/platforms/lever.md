@@ -1,15 +1,15 @@
 # Lever
 
-**Detection:** `lever.co` in URL → platform "lever"
+**URL:** `lever.co` → platform "lever"
 
-**Form structure:** Job listing page (0 fields) + "apply for this job" link → `/apply` URL with 12 fields. Single-page form with "Submit application" button.
+**Flow:** navigate → fill (auto apply-link) → submit
 
-**Known quirks:**
-- Job listing shows 0 fields, `pageType: maybe_form`. apply-link-following auto-detects and follows.
-- Always an `<a>` tag with text "apply for this job" → href ends with `/apply`.
-- Some LinkedIn external URLs already include `/apply` in the href — apply-link handles both.
-- Labels use `<label><div class="application-label">...</div><div class="application-field"><input></div></label>` structure — detected via `el.closest('label')`.
-- Fields: resume, name, email, phone, location, company, LinkedIn, Twitter, GitHub, portfolio, etc.
-- No Select/Radio elements.
+**Form:** Job page (0 fields) → "apply for this job" link → `/apply` URL → 12 fields. Single page. "Submit application" btn.
 
-**Pipeline flow:** `navigate → act --fill (auto apply-link) → act --submit`
+**Gotchas:**
+- 0 fields + `pageType=maybe_form` = apply-link-following auto-triggers
+- Always `<a>` tag with text "apply for this job" → href ends with `/apply`
+- Some LinkedIn URLs already include `/apply` in href — same handler works
+- Labels: `<label><div>Text</div><div><input></div></label>` — `el.closest('label')` catches
+- Fields: resume, name, email, phone, location, company, LinkedIn, Twitter, GitHub, etc.
+- No Select/Radio elements

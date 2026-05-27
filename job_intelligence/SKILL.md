@@ -63,17 +63,17 @@
 
 ### Apply notes
 
-- **Screening** — `--answers '{"q":"val"}'`. Normalized exact match. Provide full label text to be safe. Reference `decisions.md` for sponsorship, relocation, experience estimates.
-- **Radios** — `radio.click()` via Playwright `.check()`. Verify `el.checked` changed.
-- **Resume** — `set_input_files()` on required file inputs only. Skips optional drop zones.
-- **Unfollow** — `act --fill` auto-unchecks "Follow X" on any page.
-- **Multi-page** — `act --auto` handles the loop. Manual: fill → next → fill → ... → submit.
-- **Pre-flight** — always run `detect` first. It checks stage, PDF, and page type in one call.
-- **Button priority** — Submit > Review > Next > Continue > Done (rightmost). Never Back/Cancel/Save.
-- **Common answers matching** — `--answers` exact match first, then common_answers (exact for optional fields; prefix for required fields — prevents generic keys like "phone" filling optional fields like "Phone Extension"), then profile resolver.
-- **Field types:** INPUT (text/email/tel), SELECT, TEXTAREA, DROPDOWN (custom `button[aria-haspopup]`), AUTOCOMPLETE (placeholder="Search").
-- **Autocomplete** — uses JS native value setter + input/change events for Workday multiselect widgets.
-- **3x fingerprint guard** — if same page state appears 3 fills in a row, warns model to break loop.
+- **Screening** — `--answers '{"q":"val"}'`. Normalized exact match. Provide full label. See `decisions.md` for sponsorship/relocation/experience.
+- **Radios** — `radio.click()` via Playwright `.check()`.
+- **Resume** — `set_input_files()` on `input[type="file"][required]`. Skips optional.
+- **Unfollow** — auto-unchecks "Follow X" on every page.
+- **Multi-page** — `act --auto` loops. Manual: fill → next → fill → ... → submit.
+- **Pre-flight** — `detect` first. Checks stage, PDF, page type.
+- **Button priority** — Submit > Review > Next > Continue > Done. Never Back/Cancel/Save.
+- **Common answers** — `--answers` exact → common_answers (exact for optional, prefix for required) → profile.
+- **Field types** — INPUT, SELECT, TEXTAREA, DROPDOWN (`button[aria-haspopup]`), AUTOCOMPLETE (ph="Search").
+- **Autocomplete** — JS native value setter + input/change events (Workday multiselect).
+- **3x guard** — same page state 3 fills in a row → warns model to break loop.
 
 ### Platform-specific guides
 
@@ -96,64 +96,40 @@
 | US on-site only | No |
 | Unclear location | Fetch description, then decide |
 
-## Notes (human context)
+## Notes
 
-Attach human context to any job via `submit` — referral mentions, priorities, etc.
-
-```
-python3 extract.py submit '{"url":"https://...","notes":"John can refer at Google"}'
-```
-
-`tailor.py` appends `Context: {notes}` at the end of the Gemini prompt — not a directive, just supplementary info.  
-Re-run with `"notes":""` to clear. The field survives all stage transitions.
-
-## Categories
-
-Each job has a category that guides admission. All categories use the same gem (`categories.json` → `gems.json`).
-
-| Category | Description | When to use |
-|----------|-------------|-------------|
-| tech | Building/maintaining tech: software, data, ML, IT, backend, frontend, DevOps, cloud, infra, security | Primary target |
-| general | No specialized skills needed: retail, food service, warehouse, hospitality, cleaning, labor | Settle job |
-| (reject) | Admin, buyer, PM, analyst, non-software engineer, technician — skip, not worth your time | Reject at extract |
-
-Required on first `extract.py admit --category <name> <jid>`. Override with `fetch.py admit --category <name> <jid>` when JD is visible.
-
-## Decision rules
-
-See `decisions.md` — compact reference for screening question answers, relocation, sponsorship, and experience estimation. Core principle: **don't self-reject**.
+Attach context via `extract.py submit '{"url":"...","notes":"..."}'`.  
+`tailor.py` appends `Context: {notes}` to Gemini prompt.  
+Re-run with `"notes":""` to clear.
 
 ## Auth walls
 
-Detected automatically during fetch — sign-in keywords flag the job.  
-`python3 fetch.py flag <jid>` — manual flag.  
-`python3 fetch.py open [<jid>]` — open in Chrome (persistent session), returns immediately.  
+Detected during fetch (sign-in keywords).  
+`fetch.py flag <jid>` — manual flag.  
+`fetch.py open [<jid>]` — open in Chrome (persistent session).  
 Stale entries auto-pruned.
 
 ## Output directory
 
 `~/.openclaw/results/{jid}/`:
-- `gemini_response.txt` — full Gemini output
-- `script.py` — extracted Python script for PDF
-- `{jid}.url` — shortcut to job posting
-- `*.pdf` — generated CV/cover letter
+- `gemini_response.txt` — Gemini output
+- `script.py` — PDF build script
+- `{jid}.url` — job shortcut
+- `*.pdf` — CV/cover letter
 
 ## Recovery
 
 | Signal | Fix |
 |--------|------|
-| `invalid_grant` | `python3 skills/gmail-cli/gmail_cli.py auth add email` |
-| `TIMEOUT` / `RATE_LIMIT` | `python3 tailor.py retry` |
-| Chrome crash | `Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" '--user-data-dir="~/.openclaw/chrome-profile"','--remote-debugging-port=9222'` |
-| DB crash | `python3 extract.py reset` |
-| Auth wall stuck | `python3 fetch.py open` + `python3 fetch.py --refresh` |
+| `invalid_grant` | `gmail-cli auth add email` |
+| TIMEOUT / RATE_LIMIT | `tailor.py retry` |
+| Chrome crash | `Start-Process chrome '--user-data-dir="~/.openclaw/chrome-profile"','--remote-debugging-port=9222'` |
+| DB crash | `extract.py reset` |
+| Auth wall stuck | `fetch.py open` + `fetch.py --refresh` |
 
 ## Technical notes
 
-**Gemini.js:** `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain). No manual `NODE_PATH` needed. `browser.close()` on CDP connections is not awaited — `call_gemini.py` handles this internally.
-
-**LinkedIn title dedup:** LinkedIn job cards often repeat the title (visible + hidden verification text). `linkedin.py` now deduplicates by detecting when the first half of the title string equals the second half.
-
-**Common_answers:** Answers to form questions are accumulated in `profile.json` under `common_answers`. When the filler encounters a question, it checks `--answers` first (exact + substring match), then falls back to `common_answers` via fuzzy word-overlap matching. Never pre-populate common_answers with guessed values (visa, sponsorship, etc.) — only save what the user explicitly provides.
-
-**Gems:** `gems.json` maps named gems to IDs: `optimizer_tech (4203d06f5d81)` for tech jobs, `optimizer_general (3697c8c02b40)` for general jobs. `categories.json` references these names. `gemini.js` resolves them at startup.
+- **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain). `browser.close()` not awaited — handled internally.
+- **LinkedIn title dedup**: Cards repeat title (visible + verification text). `linkedin.py` deduplicates: finds where second half starts matching first half.
+- **Common_answers**: `--answers` exact → common_answers (exact for optional, prefix for required) → profile resolver. Never pre-populate guessed values — only save what user explicitly provides.
+- **Gems**: `gems.json` maps names to IDs. `categories.json` → `gems.json` → `gemini.js` resolution chain.
