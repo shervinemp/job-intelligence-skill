@@ -11,6 +11,35 @@ from apply.common.page_helpers import load_state, save_state, read_page, find_pa
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 _EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
 
+def _click_candidate(page, c):
+    if c["tag"] == "A" and c.get("href"):
+        page.goto(c["href"], wait_until="domcontentloaded", timeout=15000)
+    else:
+        page.evaluate(f"""(txt) => {{
+            const all = document.querySelectorAll('button');
+            for (const el of all) {{
+                if (el.offsetParent === null) continue;
+                if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return; }}
+            }}
+        }}""", c["text"])
+    time.sleep(4)
+
+def _handle_post_click(state, ps, page):
+    if not ps or ps["fieldCount"] == 0:
+        text = (page.evaluate("() => document.body.innerText") or "").lower()
+        for w in ["thank you", "submitted", "your application", "has been sent"]:
+            if w in text:
+                print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
+                state["result"] = "submitted"
+                save_state(state)
+                return True
+        print("STATUS: modal_closed\nNEXT: verify", file=sys.stderr)
+        state["result"] = "modal_closed"
+        save_state(state)
+        return True
+    print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
+    return False
+
 def _fill_radios(page, fields, answers, ca, jid):
     """Fill radio groups. Returns filled count + unfilled list."""
     filled = 0
@@ -115,7 +144,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
     return filled, unfilled
 
-def cmd_fill(jid, answers_json=None):
+def cmd_fill(jid, answers_json=None, candidate=None):
     answers = {}
     if answers_json:
         try: answers = json.loads(answers_json)
@@ -141,6 +170,29 @@ def cmd_fill(jid, answers_json=None):
     if current_fingerprint == last_fingerprint and state.get("filled", 0) > 0:
         print("WARN: page looks unchanged from last fill — verify the form advanced", file=sys.stderr)
     state["page_fingerprint"] = current_fingerprint
+
+    # If candidate was specified, find and click it
+    if candidate is not None and ps["fieldCount"] == 0:
+        from apply.common.page_helpers import scan_actions
+        kws = ["apply", "apply for this job", "apply manually", "submit", "apply now"]
+        cands = scan_actions(page, kws, _EXCLUDED_BUTTONS)
+        if candidate < len(cands):
+            c = cands[candidate]
+            if c["tag"] == "A" and c.get("href"):
+                page.goto(c["href"], wait_until="domcontentloaded", timeout=15000)
+            else:
+                page.evaluate(f"""(txt) => {{
+                    const all = document.querySelectorAll('button, a');
+                    for (const el of all) {{
+                        if (el.offsetParent === null) continue;
+                        if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return; }}
+                    }}
+                }}""", c["text"])
+            time.sleep(5)
+            ps = read_page(page)
+            print(f"CANDIDATE_CLICK: #{candidate} '{c['text']}' → {ps['fieldCount']} fields", file=sys.stderr)
+        else:
+            print(f"ERROR: candidate {candidate} out of range (0-{len(cands)-1})", file=sys.stderr); return
 
     # Check for login wall — try guest apply first, then abort
     text = page.evaluate("() => document.body.innerText") or ""
@@ -186,49 +238,37 @@ def cmd_fill(jid, answers_json=None):
             print("NEXT: retry after login", file=sys.stderr)
             return
 
-    # If no fields detected but page has form hints, try to find and click apply link
+    # If no fields detected, use model-assisted action finding
     if ps["fieldCount"] == 0:
-        if ps.get("pageType") == "maybe_form" or ps.get("pageType") == "unknown":
-            # Search for apply link/button and follow it
-            apply_link = page.evaluate("""() => {
-                const all = document.querySelectorAll('a, button');
-                for (const el of all) {
-                    if (el.offsetParent === null) continue;
-                    const t = (el.textContent || '').trim().toLowerCase();
-                    const h = (el.href || '').toLowerCase();
-                    if (t.includes('apply') || h.includes('/apply')) {
-                        if (el.tagName === 'A') return {tag: 'A', href: el.href, text: t.slice(0,30)};
-                        return {tag: el.tagName, text: t.slice(0,30)};
-                    }
-                }
-                return null;
-            }""")
-            if apply_link:
-                if apply_link["tag"] == "A":
-                    page.goto(apply_link["href"], wait_until="domcontentloaded", timeout=15000)
-                else:
-                    page.evaluate("""() => {
-                        const btns = document.querySelectorAll('button');
-                        for (const b of btns) {
-                            if (b.offsetParent === null) continue;
-                            if ((b.textContent || '').trim().toLowerCase().includes('apply')) {
-                                b.click(); return;
-                            }
-                        }
-                    }""")
-                time.sleep(5)
-                ps = read_page(page)
-                print(f"APPLY_LINK: followed '{apply_link['text']}' → {ps['fieldCount']} fields", file=sys.stderr)
-            elif ps.get("pageType") == "maybe_form":
-                print("WARN: no form fields found (likely custom UI or shadow DOM)", file=sys.stderr)
-                print("PAGE: form-like content detected but no standard inputs nor apply link", file=sys.stderr)
-                state["page"] = ps
-                state["filled"] = 0
-                save_state(state)
-                return
+        from apply.common.page_helpers import scan_actions
+        apply_kws = ["apply", "apply for this job", "apply manually", "submit", "apply now"]
+        candidates = scan_actions(page, apply_kws, _EXCLUDED_BUTTONS)
+        print(f"CANDIDATES: {json.dumps(candidates[:8])}", file=sys.stderr)
+
+        if candidates and candidates[0]["score"] >= 4:
+            # Certain match — auto-follow
+            c = candidates[0]
+            if c["tag"] == "A" and c.get("href"):
+                page.goto(c["href"], wait_until="domcontentloaded", timeout=15000)
             else:
-                print("WARN: no form fields found — page may not be an application form", file=sys.stderr)
-                return
+                page.evaluate(f"""(txt) => {{
+                    const all = document.querySelectorAll('button, a');
+                    for (const el of all) {{
+                        if (el.offsetParent === null) continue;
+                        if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return; }}
+                    }}
+                }}""", c["text"])
+            time.sleep(5)
+            ps = read_page(page)
+            print(f"AUTO_FOLLOW: '{c['text']}' → {ps['fieldCount']} fields", file=sys.stderr)
+        elif candidates:
+            print("CHOOSE: act --fill <jid> --candidate N", file=sys.stderr)
+            print("NEXT: model_choice", file=sys.stderr)
+            state["page"] = ps; state["filled"] = 0; save_state(state); return
+        else:
+            print("WARN: no actionable buttons found — page may not be an application form", file=sys.stderr)
+            print("NEXT: skip", file=sys.stderr)
+            state["page"] = ps; state["filled"] = 0; save_state(state); return
 
     profile = {}
     if os.path.exists(profile_path):
@@ -274,7 +314,7 @@ def cmd_fill(jid, answers_json=None):
     else:
         print("NEXT: act --next", file=sys.stderr)
 
-def cmd_next(jid):
+def cmd_next(jid, candidate=None):
     state = load_state()
     if state.get("jid") != jid:
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
@@ -290,59 +330,46 @@ def cmd_next(jid):
             print("ERROR: no page found and no external URL", file=sys.stderr); return
 
     ps = read_page(page)
-    btns = ps.get("buttons", [])
 
-    # Find forward button: rightmost non-excluded inside dialog
-    candidates = [b for b in btns if not b["disabled"] and b["text"].lower().strip() not in _EXCLUDED_BUTTONS]
-    target = None
-    for kw in ["review", "next", "continue", "done"]:  # No "submit" — use --submit for that
-        for b in candidates:
-            if b["text"].lower().strip() == kw:
-                target = b; break
-        if target: break
-    if not target and candidates:
-        target = candidates[-1]  # rightmost
+    from apply.common.page_helpers import scan_actions
+    advance_kws = ["next", "continue", "review", "done", "submit", "submit application"]
 
-        if not target:
-            for b in btns:
-                bt = b["text"].lower().strip()
-                if bt in ("submit", "submit application") and b["disabled"]:
-                    print(f"BUTTON_DISABLED: {b['text']} — fill required fields first", file=sys.stderr)
-                    print("NEXT: act --fill", file=sys.stderr); return
-                if bt in ("next", "review", "continue", "done") and b["disabled"]:
-                    print(f"BUTTON_DISABLED: {b['text']} — fill required fields first", file=sys.stderr)
-                    print("NEXT: act --fill", file=sys.stderr); return
-            # Check if a dry-run submit was done (submit button exists but no forward button found)
-            submit_exists = any(b["text"].lower().strip() in ("submit", "submit application") for b in btns)
-            if submit_exists:
-                print("NO_BUTTON — use act --submit (or --submit --confirm) for the submit button", file=sys.stderr)
-            else:
-                print("NO_BUTTON\nNEXT: none", file=sys.stderr); return
-
-    print(f"ACTION: {target['text']}", file=sys.stderr)
-    try:
-        btn = page.locator(f'button:has-text("{target["text"]}")')
-        if btn.count(): btn.first.click(timeout=5000)
-    except: pass
-    time.sleep(4)
-
-    ps2 = read_page(page)
-    if not ps2 or ps2["fieldCount"] == 0:
-        text = (page.evaluate("() => document.body.innerText") or "").lower()
-        for w in ["thank you", "submitted", "your application", "has been sent"]:
-            if w in text:
-                print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
-                state["result"] = "submitted"
-                save_state(state)
-                return
-        print("STATUS: modal_closed\nNEXT: verify", file=sys.stderr)
-        state["result"] = "modal_closed"
-        save_state(state)
+    # If candidate was specified, click it directly
+    if candidate is not None:
+        cands = scan_actions(page, advance_kws, _EXCLUDED_BUTTONS)
+        if candidate < len(cands):
+            c = cands[candidate]
+            _click_candidate(page, c)
+            ps2 = read_page(page)
+            _handle_post_click(state, ps2, page)
+        else:
+            print(f"ERROR: candidate {candidate} out of range (0-{len(cands)-1})", file=sys.stderr)
         return
 
-    print(f"PAGE: {json.dumps(ps2)}", file=sys.stderr)
-    has_submit = any(b["text"].lower() in ("submit", "submit application", "apply", "send application") and not b["disabled"] for b in ps2.get("buttons",[]))
-    print(f"NEXT: {'act --submit' if has_submit else 'act --fill'}", file=sys.stderr)
+    candidates = [c for c in scan_actions(page, advance_kws, _EXCLUDED_BUTTONS) if not c.get("disabled")]
+    print(f"CANDIDATES: {json.dumps(candidates[:8])}", file=sys.stderr)
+
+    target = None
+    if candidates and candidates[0]["score"] >= 4:
+        target = candidates[0]
+    elif candidates:
+        print("CHOOSE: act --next <jid> --candidate N", file=sys.stderr)
+        print("NEXT: model_choice", file=sys.stderr)
+        save_state(state); return
+    else:
+        # Check if there are disabled advance buttons
+        for c in scan_actions(page, advance_kws):
+            if c.get("disabled"):
+                print(f"BUTTON_DISABLED: {c['text']} — fill required fields first", file=sys.stderr)
+                print("NEXT: act --fill", file=sys.stderr); return
+        print("NO_BUTTON\nNEXT: none", file=sys.stderr); return
+
+    print(f"ACTION: {target['text']}", file=sys.stderr)
+    _click_candidate(page, target)
+    ps2 = read_page(page)
+    if not _handle_post_click(state, ps2, page):
+        has_submit = any(b["text"].lower() in ("submit", "submit application", "apply", "send application") and not b["disabled"] for b in ps2.get("buttons",[]))
+        print(f"NEXT: {'act --submit' if has_submit else 'act --fill'}", file=sys.stderr)
 
 def cmd_back(jid):
     state = load_state()
@@ -358,7 +385,7 @@ def cmd_back(jid):
     save_state(state)
     print(f"ACTION: Back\nPAGE: {json.dumps(ps)}\nNEXT: act --fill", file=sys.stderr)
 
-def cmd_submit(jid, confirm=False):
+def cmd_submit(jid, confirm=False, candidate=None):
     state = load_state()
     if state.get("jid") != jid:
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
@@ -366,24 +393,24 @@ def cmd_submit(jid, confirm=False):
     page = find_page(ctx, state)
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
 
-    ps = read_page(page)
-    submit_kw_order = ("submit application", "submit", "send application", "apply", "send")
-    btns = ps.get("buttons", [])
-    target = None
-    for kw in submit_kw_order:
-        for b in btns:
-            if b["text"].lower().strip() == kw and not b["disabled"]:
-                target = b; break
-        if target: break
-    if not target:
-        for kw in submit_kw_order:
-            for b in btns:
-                if kw in b["text"].lower().strip() and not b["disabled"]:
-                    target = b; break
-            if target: break
-    if not target:
+    from apply.common.page_helpers import scan_actions
+    submit_kws = ["submit application", "submit", "send application", "apply", "send"]
+    cands = [c for c in scan_actions(page, submit_kws, _EXCLUDED_BUTTONS) if not c.get("disabled")]
+
+    if candidate is not None:
+        if candidate < len(cands):
+            target = cands[candidate]
+        else:
+            print(f"ERROR: candidate {candidate} out of range (0-{len(cands)-1})", file=sys.stderr); return
+    elif cands and cands[0]["score"] >= 4:
+        target = cands[0]
+    elif cands:
+        print(f"CANDIDATES: {json.dumps(cands[:8])}", file=sys.stderr)
+        print("CHOOSE: act --submit <jid> --candidate N", file=sys.stderr)
+        print("NEXT: model_choice", file=sys.stderr); return
+    else:
         print("NO_SUBMIT_BUTTON\nNEXT: none", file=sys.stderr); return
-    print(f"SUBMIT: {target['text']}\nDISABLED: {target['disabled']}", file=sys.stderr)
+    print(f"SUBMIT: {target['text']}\nDISABLED: {target.get('disabled', False)}", file=sys.stderr)
     if not confirm:
         print("DRY_RUN: pass --confirm to submit\nNEXT: act --submit --confirm", file=sys.stderr); return
 
@@ -426,9 +453,9 @@ def cmd_auto(jid, answers_json=None):
     print(f"AUTO: max pages reached without submit", file=sys.stderr)
 
 def run(args):
-    if args.fill: cmd_fill(args.jid, args.answers)
-    elif args.next: cmd_next(args.jid)
+    if args.fill: cmd_fill(args.jid, args.answers, args.candidate)
+    elif args.next: cmd_next(args.jid, args.candidate)
     elif args.back: cmd_back(args.jid)
-    elif args.submit: cmd_submit(args.jid, args.confirm)
+    elif args.submit: cmd_submit(args.jid, args.confirm, args.candidate)
     elif args.auto: cmd_auto(args.jid, args.answers)
     else: print("ERROR: specify --fill, --next, --back, --submit, or --auto", file=sys.stderr)

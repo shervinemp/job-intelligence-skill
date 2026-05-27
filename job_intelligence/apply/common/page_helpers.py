@@ -38,10 +38,12 @@ def read_page(p):
         });
         const text = (document.body.innerText || '').toLowerCase();
         const hasFormWords = text.includes('submit') || text.includes('apply') || text.includes('application');
-        const hasSignIn = text.includes('sign in') || text.includes('log in') || (text.includes('email') && text.includes('password'));
+        const hasPassword = document.querySelector('input[type="password"]') !== null;
+        const isShort = (document.body.innerText || '').length < 500;
         let pageType = 'unknown';
         if (fields.length > 0) pageType = 'form';
-        else if (hasSignIn) pageType = 'login_wall';
+        else if (hasPassword && (text.includes('sign in') || text.includes('log in'))) pageType = 'login_wall';
+        else if (isShort && text.includes('sign in') && !text.includes('apply')) pageType = 'login_wall';
         else if (hasFormWords) pageType = 'maybe_form';
         return {
             fieldCount: fields.length,
@@ -84,3 +86,37 @@ def resolve_label(label, profile):
     if norm in ("email", "email address"):
         return profile.get("email")
     return None
+
+def scan_actions(page, keywords, exclude=None):
+    """Score all clickable elements (buttons + links) against keyword list.
+    Returns sorted list of candidates with scores."""
+    exclude = exclude or {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
+    result = page.evaluate(f"""((kws, excl) => {{
+        kws = kws.map(k => k.toLowerCase());
+        excl = new Set(excl.map(e => e.toLowerCase()));
+        const all = document.querySelectorAll('button, a');
+        const candidates = [];
+        for (const el of all) {{
+            if (el.offsetParent === null) continue;
+            const text = (el.textContent || '').trim().toLowerCase();
+            if (excl.has(text)) continue;
+            const href = (el.href || '').toLowerCase();
+            let score = 0;
+            for (const kw of kws) {{
+                if (text === kw) score = Math.max(score, 4);
+                else if (text.startsWith(kw)) score = Math.max(score, 3);
+                else if (text.includes(kw)) score = Math.max(score, 2);
+                else if (href.includes(kw)) score = Math.max(score, 1);
+            }}
+            if (score > 0) {{
+                candidates.push({{
+                    text: text.slice(0, 30), score: score, tag: el.tagName,
+                    href: href.slice(0, 120),
+                    disabled: el.disabled || false
+                }});
+            }}
+        }}
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates;
+    }})""", keywords, exclude)
+    return result
