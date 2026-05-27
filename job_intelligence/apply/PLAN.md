@@ -1,198 +1,212 @@
-# Filler rewrite — complete specification
+# Apply pipeline — consolidation plan
 
 ## Architecture
 
-Three-phase loop per form page:
-1. **SCAN** — find all questions on the page
-2. **PRESENT** — show grouped questions to model, get answers
-3. **APPLY** — apply each answer via best mechanism, verify, cascade
+3 scripts: **detect** → **act** → **verify**
 
-Phase 2 (PRESENT) can be skipped if `--answers` provides everything.
+No page-order scripts (no 01_click, 04_resume, 04_screening, 05_click_next). Everything is handled by `act --fill`, `act --next`, `act --submit`.
 
 ---
 
-## Phase 1: SCAN
+## `detect.py`
 
-### What to find
+**Purpose:** Classify the job type and set up the session.
 
-All interactable controls visible on the page. Search document root AND `[role="dialog"]` separately, merge results.
-
-**Targets in priority order** (not a ranking per-question, just what to collect):
-- `<button>` with visible text (offsetParent !== null)
-- `<label>` with `for` attribute pointing to a form element
-- `<input>` not hidden, not submit
-- `<select>`
-- `<textarea>`
-- `[role="radio"]`, `[role="checkbox"]`, `[role="textbox"]`, `[contenteditable]`
-
-### What to exclude
-
-Navigation buttons. A button is navigation if its visible text matches:
+**Usage:**
 ```
-submit, next, back, review, save, cancel, upload file, upload, browse, edit, delete,
-add, remove, home, me, for business, skip to main, close, more, follow, saved, 
-i'm interested, notifications, messaging, jobs, my network
+python3 detect.py <jid>
 ```
-Plus any zero-size, invisible, or disabled buttons.
 
-### How to group into questions
+**Logic:**
+1. Check DB stage — if "applied", print `STATUS: already_applied`, exit
+2. If LinkedIn URL, navigate to `/apply/` URL
+3. If external URL, navigate directly
+4. Check page state:
+   - Dialog visible with fields → `TYPE: easy_apply`
+   - "Applied" button visible → `TYPE: already_applied`
+   - "Apply on company website" → `TYPE: external`
+   - Dialog with no fields → `TYPE: unknown`
+5. Print job info + detected type
+6. Save state to `~/.openclaw/apply_state.json`
 
-For each control, extract its question text:
-
-1. **If tag is `<input/select/textarea>`**: check for `<label for="id">`. If found, use label text as question.
-2. **If no label-for**: walk up parent chain. At each level, look for text elements (label, legend, strong, p, span, heading) that are NOT the control itself. Stop at the first ancestor that contains >=1 text element with length >5 chars. Use that text as question.
-3. **If tag is `<button>`**: same parent walk. The button's own text is the answer option, not the question. The question is the nearest text element above the button.
-4. **If tag is `<label>` with `for`**: the label text IS the question. The target input is the answer slot.
-
-All controls sharing the same question text (within 80% similarity) are grouped into one question unit.
-
-**The output of SCAN** is a list of question objects:
-```python
-{
-  "text": "Do you require visa sponsorship?",
-  "controls": [
-    {"type": "button", "text": "Yes", "tag": "BUTTON", ...},
-    {"type": "button", "text": "No", "tag": "BUTTON", ...},
-    {"type": "radio", "text": "Yes, I require...", "value": "on", "checked": false, "id": "x", ...},
-    {"type": "radio", "text": "No, I do not...", "value": "on", "checked": false, "id": "y", ...},
-  ],
-  "best_mechanism": "button",  # rarest among detected: button > label-click > input
-  "status": "unanswered",  # or "answered" if any control is checked/has value
-  "answer": None,
+**Stdout:**
+```
+JOB: Senior Engineer @ Acme
+TYPE: easy_apply
+STAGE: page1
+PAGE: {
+  "fieldCount": 3,
+  "fields": [...],
+  "buttons": [{"text": "Next", "disabled": false}],
+  "hasFileInput": true,
+  "hasUnfilledRequired": false
 }
+NEXT: act --fill
 ```
 
 ---
 
-## Phase 2: PRESENT
+## `act.py`
 
-### To the model
+**Purpose:** Perform ONE action. Always reads fresh state, always prints result.
 
-```python
-Questions that need answers (3):
+**Subcommands:**
 
-Q1: "Do you require visa sponsorship to work in the United States?"
-  Options: Yes / No
-  Best control: button (platform intended)
+### `act --fill <jid>`
 
-Q2: "Are you able to work in-person at least 3 days a week?"
-  Options: Yes, in the San Francisco office / Yes, in the Toronto office / No
-  Best control: radio (standard)
+Fills ALL fields on current page from `--answers` + common_answers + profile. Uploads resume if file input present. Prints what was filled and what remains.
 
-Q3: "Have you ever been employed by EvenUp or an EvenUp affiliate?"
-  Options: Yes / No
-  Best control: button (platform intended)
+**Usage:**
+```
+python3 act.py --fill <jid> [--answers '{"q":"val"}']
 ```
 
-### From the model
+**Logic:**
+1. Read page state (all inputs, selects, radios, buttons, file inputs)
+2. Fill from `--answers` (substring match) + common_answers (fuzzy match) + profile (name, email, phone, linkedin)
+3. Upload resume to ALL file inputs via `set_input_files`
+4. Skip already-checked radios, already-filled fields
+5. Print filled count + unfilled required fields
 
-```python
---answers '{
-  "Do you require visa sponsorship to work in the United States?": "Yes",
-  "Are you able to work in-person at least 3 days a week?": "Yes, in the Toronto office",
-  "Have you ever been employed by EvenUp or an EvenUp affiliate?": "No"
-}'
+**Stdout (page fully filled):**
+```
+FILLED: 3  UNFILLED: 0
+FIELDS: [
+  {"label": "Full Name", "value": "Shervin Naseri"},
+  {"label": "Email", "value": "shervin.naseri@gmail.com"},
+  {"label": "Resume", "file": "uploaded"}
+]
+BUTTONS: [{"text": "Next", "disabled": false}]
+NEXT: act --next
 ```
 
-The model answers EVERY question in one shot. No back-and-forth. Unanswered questions stay pending.
-
----
-
-## Phase 3: APPLY
-
-For each question with an answer:
-
-1. **Read pre-state** of all controls in the group
-2. **Select best mechanism** from the ranked controls:
-   - If button exists: click the button whose text matches the answer (first word match for short buttons, exact match for long buttons)
-   - If no button but label exists: click the label (triggers associated input)
-   - If no label: set value directly on the input, dispatch `input` + `change` events
-3. **Verify post-state** — check any control in the group changed state (radio checked, input value changed, button class includes selected/active)
-4. **If unchanged**, cascade to next mechanism (label click → input manipulation)
-5. **If all mechanisms fail**, log to pending_questions.json with full context
-
-### Verification table
-
-| Control | Pre-state | Post-state |
-|---------|-----------|------------|
-| radio | `el.checked` | `el.checked` |
-| checkbox | `el.checked` | `el.checked` |
-| text/email/tel | `el.value` | `el.value` |
-| select | `el.value` | `el.value` |
-| button | `el.classList.contains("selected")` or `el.getAttribute("aria-pressed")` | same |
-
----
-
-## Saving answers
-
-After a question is successfully answered, save to `common_answers` with key = first 3 significant words of question text, namespaced by section heading if available.
-
-```python
-# No section heading
-"require visa sponsorship" -> common_answers["require_visa_sponsorship"] = "Yes"
-# With section heading "Work Eligibility"
-"Work_Eligibility:require_visa_sponsorship" -> "Yes"
+**Stdout (unfilled remain):**
+```
+FILLED: 0  UNFILLED: 2
+UNFILLED: [
+  {"label": "How many years of Python?", "tag": "INPUT:text"},
+  {"label": "Willing to relocate?", "tag": "SELECT", "options": ["Yes","No"]}
+]
+NEXT: act --fill --answers '{"How many years of Python?": "5", "Willing to relocate?": "Yes"}'
 ```
 
----
+### `act --next <jid>`
 
-## Multi-page
+Clicks the primary button (Next / Review / Submit). Waits for new state. Prints result.
 
-After all questions on current page are answered:
+**Usage:**
+```
+python3 act.py --next <jid>
+```
 
-1. Find the "Next" or "Submit" button (global search, not scoped to question section)
-2. Click it
-3. Wait 3s for page transition
-4. Re-scan
-5. If new questions found, repeat from SCAN
-6. If no new questions, done (successfully submitted)
+**Logic:**
+1. Read dialog buttons
+2. Find the best button to click: Submit > Review > Next
+3. Click it (Playwright native click, disable overlay)
+4. Wait 3s
+5. Read new dialog state
 
-If "Next" click doesn't produce new questions within 5s, check for error messages on page. If errors found, abort and report.
-
----
-
-## Pending questions
-
-When a question can't be answered:
-
-```python
-# pending_questions.json
-{
-  "jid": "0f7e4c97...",
-  "url": "https://jobs.ashbyhq.com/evenup/...",
-  "company": "EvenUp",
-  "title": "Senior Backend Engineer",
-  "questions": [
-    {
-      "text": "Are you willing to relocate to San Francisco?",
-      "options": ["Yes", "No"],
-      "reason": "model did not provide answer"
-    }
-  ]
+**Stdout (next page loaded):**
+```
+ACTION: Next -> clicked
+PAGE: {
+  "fieldCount": 5,
+  "fields": [...],
+  "buttons": [{"text": "Review", "disabled": false}]
 }
+NEXT: act --fill
 ```
 
-Batch collected. Presented to user at end of session. Once answered, jobs can be re-attempted.
+**Stdout (submit or modal closed):**
+```
+ACTION: Submit -> clicked
+STATUS: submitted
+NEXT: verify <jid>
+```
+
+### `act --submit <jid>`
+
+Like --next but specifically clicks Submit. Dry-run safe (prints what it would do, requires `--confirm` to actually click). Only used on the review page.
+
+**Usage:**
+```
+python3 act.py --submit <jid> [--confirm]
+```
 
 ---
 
-## Files to change
+## `verify.py`
 
-| File | Change |
+**Purpose:** Check if submission was successful. Reads page state and DB. No state mutation.
+
+**Usage:**
+```
+python3 verify.py <jid>
+```
+
+**Logic:**
+1. Check if modal is closed → submitted
+2. Check if LinkedIn shows "Applied" button → submitted
+3. Check if page shows "thank you" / "submitted" → submitted
+4. Check DB stage already "applied" → submitted
+5. Otherwise → unknown
+
+**Stdout:**
+```
+STATUS: submitted
+```
+
+or
+
+```
+STATUS: unknown
+PAGE: dialog still open, 3 fields unfilled
+NEXT: act --fill --answers '{"q":"val"}'
+```
+
+---
+
+## Flow loop (model follows)
+
+```
+detect <jid>
+  ├── TYPE: easy_apply → act --fill → act --next → act --fill → ... → act --submit → verify
+  ├── TYPE: external   → act --navigate → act --fill → act --next → ... → act --submit → verify
+  ├── TYPE: already_applied → done
+  └── TYPE: unknown → report, skip
+```
+
+At each `act --fill`, if unfilled remain, model provides `--answers` and re-runs `act --fill`. Loop continues until Submit clicked or error.
+
+---
+
+## Files to create
+
+| File | Purpose |
+|------|---------|
+| `apply.py` | Root orchestrator: detect | act | verify subcommands |
+| `apply/detect.py` | Job type classification |
+| `apply/act.py` | All actions: --fill, --next, --submit |
+| `apply/verify.py` | Post-submit verification |
+
+## Files to remove
+
+| File | Reason |
 |------|--------|
-| `apply/common/01_fill_fields.py` | Complete rewrite: SCAN → PRESENT → APPLY |
-| `apply/common/__init__.py` | Add grouping utility, remove old find_apply_page if replaced |
-| `apply/common/platforms.py` | No change |
-| `apply/linkedin/easy_apply/03_fill_fields.py` | Thin shell (delegates to common), no change needed |
-| `apply/linkedin/external/03_submit.py` | Update to use new question model for verification |
-| New: `apply/common/pending.py` | Pending questions management |
+| `apply/linkedin/detect.py` | Merged into apply/detect.py |
+| `apply/linkedin/easy_apply/*` | All 6 scripts — covered by act --fill/--next/--submit |
+| `apply/linkedin/external/01_navigate.py` | Covered by detect.py |
+| `apply/linkedin/external/03_submit.py` | Covered by act --submit |
+| `apply/common/01_fill_fields.py` | Covered by act --fill |
+| `apply/common/02_click_next.py` | Covered by act --next |
+| `apply/detect_ats.py` | Merged into apply/detect.py |
+| `apply/common/__init__.py` | find_apply_page no longer needed (each step navigates fresh) |
 
----
+## Notes
 
-## Testing plan
-
-1. **EvenUp (Ashby external)** — re-run full flow, verify buttons clicked not radios
-2. **LinkedIn Easy Apply** — run one job, verify modal fields detected, filled, next/submit
-3. **LinkedIn External (Greenhouse/Lever/Workday)** — run one of each if available in DB
-4. **Multi-page** — find a 2-page form, verify fill → next → fill loop
-5. **Multi-question** — batch model provides all answers at once, verify each applied correctly
+- Each script reads fresh state — no shared page objects, no stale markers
+- `--answers` is the ONLY source of model decisions — no resolve(), no fuzzy_match() auto-guessing
+- File inputs handled automatically by act --fill (set_input_files on ALL found)
+- Radios: direct `radio.click()`, verify `el.checked` changed
+- Selects: Playwright `.select_option()`
+- Unfollow company checkbox: auto-unchecked by act --fill if found on any page
