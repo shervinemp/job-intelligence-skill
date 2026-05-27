@@ -270,11 +270,20 @@ def _normalize_url(url):
 
 def add_job(job_data):
     conn = get_conn()
-    url = job_data.get("url", "")
+    raw_url = job_data.get("url", "")
+    url = _normalize_url(raw_url)
     jid = hashlib.md5(url.encode()).hexdigest()[:16] if url else None
     if not jid:
         return None
-    if conn.execute("SELECT 1 FROM jobs WHERE id=?", (jid,)).fetchone():
+    existing = conn.execute("SELECT 1 FROM jobs WHERE id=?", (jid,)).fetchone()
+    if not existing:
+        # Check by normalized URL (catches old JIDs from un-normalized URLs)
+        norm_url = _normalize_url(raw_url)
+        for row in conn.execute("SELECT id, url FROM jobs").fetchall():
+            if _normalize_url(row["url"] or "") == norm_url and row["id"] != jid:
+                existing = row
+                break
+    if existing:
         if "notes" in job_data:
             conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?", (job_data["notes"], datetime.now().isoformat(), jid))
             conn.commit()
