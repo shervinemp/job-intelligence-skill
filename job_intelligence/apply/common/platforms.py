@@ -52,8 +52,6 @@ LOGIN_WALL = {
         "sign in to apply",
         "create account",
         "sign in with email",
-        "email address",
-        "password",
     ],
     "greenhouse": [
         "sign in to apply",
