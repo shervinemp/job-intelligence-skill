@@ -1,355 +1,148 @@
-# Apply pipeline — debugging experiments
+# Apply pipeline — experiment findings
+
+## Experiment Results Summary
 
-## Setup
+### 1. Greenhouse
+**Result: WORKS with generic pipeline.** Form fields (29 on Vercel) are **pre-loaded in the DOM** — no "Apply" button click needed. "Submit application" button present and enabled.
 
-For each experiment: use the same job across tests, or note when a new job is needed.  
-Jobs at `extracted` stage, run `fetch.py admit <jid>` before each test to advance to `described`.  
-Then `tailor.py --jid <jid>` to generate PDF.  
-Then `detect <jid>` to start the apply flow.
+Flow: `navigate → act --fill → act --submit`
 
-## 1. Greenhouse external apply
+**Details:**
+- Fields pre-loaded: 17 text, 7 bare `<input>`, 1 search, 1 tel, 2 file, 1 textarea
+- No `<select>` elements on Greenhouse (they use custom autocomplete inputs like Country)
+- Submit button: `type="submit"` with text "Submit application" — inside the form
+- "Apply" button on page is a scroll trigger (does not submit)
+- `pageType`: "form" (29 fields > 0)
 
-**Goal:** Verify the generic fill/next loop works on Greenhouse without platform-specific code.
+**Fix needed:** `cmd_submit` must prioritize "Submit application" over "Apply" in button selection. Done.
 
-**Experiment:**
-1. Find a LinkedIn job pointing to Greenhouse (check URL for `greenhouse.io`)
-2. `detect <jid>` → should show `TYPE: external`
-3. `navigate <jid>` → should capture external URL, detect platform "greenhouse"
-4. `act --fill <jid>` → read Greenhouse form fields
-5. `act --next <jid>` → advance through pages
-6. Loop until submit
+### 2. Lever
+**Result: WORKS after apply-link-following fix.** Job listing page shows 0 fields with `pageType=maybe_form`. "Apply for this job" link (`/apply` suffix) reveals 12-field form.
 
-**Inspect:**
-- Does `read_page()` detect all Greenhouse form fields? (text, selects, radios, file uploads)
-- Does Greenhouse use shadow DOM? → check `pageType` in output
-- Are Greenhouse's multi-select fields detected as SELECT or custom elements?
-- Does `detect_platform("greenhouse.io")` return "greenhouse"?
-- Worksheet fields (salary inputs, date pickers, etc.)
+Flow: `navigate → act --fill (auto-follows apply link) → act --submit`
 
-## 2. Lever external apply
+**Details:**
+- Job listing: 0 fields, `pageType: "maybe_form"` (body has "apply" text)
+- Apply link pattern: `<a>` with text "apply for this job" → href ending in `/apply`
+- Application form: 12 fields (1 file, 9 text, 1 email, 1 textarea), labels detected via `el.closest('label')`
+- Submit button: "Submit application" enabled
+- No Select/Radio elements
 
-**Experiment:** Same as Greenhouse, but find a Lever-hosted job.
+**Fix needed:** `cmd_fill` when fieldCount==0 and pageType=="maybe_form"/"unknown" must search for apply link/button and follow it. Done.
 
-**Inspect:**
-- Lever uses custom async field loading. After `navigate`, does `read_page()` wait long enough?
-- Lever's "Additional Questions" section — are these detected as form fields or just text?
-- Lever's resume upload — is `input[type="file"]` present and accessible?
+**Label fix:** Lever uses `<label><div class="application-label">Label text</div><div class="application-field"><input ...></div></label>` — label is grandparent, found via `el.closest('label')`. Done.
 
-## 3. Workday external apply
+### 3. Workday
+**Result: PARTIAL — login wall + JS-heavy portal.** The careers portal (`workday.wd5.myworkdayjobs.com/en-US/Workday`) shows only a search field. Specific job URLs may 404 or require sign-in. No shadow DOM found on portal pages (0 shadow roots).
 
-**Experiment:**
-1. Find a LinkedIn job with Workday URL (`myworkdayjobs.com` or `workday.com`)
-2. `detect <jid>` → should show `TYPE: external`
-3. `navigate <jid>` → should detect "workday" platform, capture external URL
-4. `act --fill <jid>` → check `pageType`
+**Details:**
+- Portal: 1 field (search), `pageType: "form"` (the search field counts)
+- Job page: `pageType: "login_wall"` (sign-in button detected) — 0 fields, 0 forms
+- Shadow DOM: 0 hosts, 0 fields in shadow
+- Specific job URL tested returned 404 ("The page you are looking for doesn't exist")
+- `detect_platform("myworkdayjobs.com")` returns "workday"
 
-**Hypothesis:** Workday uses shadow DOM. Standard `querySelectorAll('input, select, textarea')` finds nothing. Expect `pageType: "maybe_form"` or `"unknown"`.
+**Flow (theoretical):** `navigate → act --fill → login wall detected → guest apply (if available) → ???`
+- Guest apply patterns exist in `platforms.py`: "continue without signing in", "apply as guest"
+- Need to test with a LIVE Workday job posting that accepts applications
 
-**Verification:**
-- Navigate to the Workday URL manually in Chrome DevTools. Run:
-  ```js
-  document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea').length
-  ```
-- Check for shadow DOM:
-  ```js
-  document.querySelectorAll('*').forEach(el => { if (el.shadowRoot) console.log(el.tagName); });
-  ```
-- If shadow DOM found, try:
-  ```js
-  el.shadowRoot.querySelectorAll('input, select, textarea')
-  ```
+**Blocking issues:**
+- Workday job postings expire quickly (the one I tested was dead)
+- Workday application forms are known to use shadow DOM internally (need live job to verify)
+- Workday may require session cookies or redirect through sign-in flow first
+- The actual application form is likely behind shadow DOM (based on developer reports)
 
-**Hypothesis fix:** Playwright's `page.evaluate` can access shadow DOM via `element.shadowRoot`. Need a recursive walk to find all form controls inside shadow roots. Not a generic fix — Workday-specific or a general `deepQuerySelectorAll` helper.
+### 4. Ashby (regression test)
+**Result: WORKS (unchanged).** 20 fields detected directly, `pageType: "form"`. No apply link following needed.
 
-## 4. ICE (iCIMS) external apply
+Flow: `navigate → act --fill → act --submit`
 
-**Experiment:** Similar to Greenhouse/Lever. Find an iCIMS-hosted job.
+**Details:**
+- 20 fields (file, text, email, tel, radio groups)
+- Radios detected correctly
+- Submit button: "Submit Application" enabled
+- `detect_platform("ashbyhq.com")` returns "ashby"
 
-**Inspect:**
-- iCIMS typically uses standard HTML forms. Likely works with generic fill.
-- Check for iCIMS-specific field types: location autocomplete, job-specific questions.
-- Does `detect_platform` return "icims"?
+### 5-6. iCIMS, Taleo, SmartRecruiters
+**Not tested.** No jobs found in DB with these URLs. Need to acquire test jobs.
 
-## 5. Taleo external apply
+### 7-8. Easy Apply external redirect, multi-field types
+**Not tested.** No suitable jobs found.
 
-**Experiment:** Find a Taleo-hosted job (taleo.net).
+### 9. Login wall recovery
+**Result: IMPLEMENTED.** Guest apply click-through added to `cmd_fill`:
+1. Detects login wall via `check_page()` patterns
+2. Searches for guest apply buttons (from GUEST_APPLY patterns)
+3. Clicks/follows the first match
+4. Re-reads page
+5. If still login wall → aborts
 
-**Inspect:**
-- Taleo uses `<input type="text">` and `<select>` — standard HTML.
-- Taleo often redirects through login gate before showing application form.
-- Test: does `act --fill` detect login wall first, or reach the form?
-- Does Taleo require a session cookie from a previous page? → test by navigating directly.
+### 10-30. Other experiments
+**Not run.** Remaining experiments (session timeout, conditional fields, shadow DOM, file upload on optional fields, duplicate submission, etc.) require specific job scenarios not currently available.
 
-## 6. SmartRecruiters external apply
+## Pipeline Status
 
-**Experiment:** Find a SmartRecruiters-hosted job.
+### Working platforms
+| Platform | Flow | Status |
+|----------|------|--------|
+| LinkedIn Easy Apply | detect → act --fill → act --next → loop → act --submit | Working |
+| Greenhouse | navigate → act --fill → act --submit | **Working (fixed)** |
+| Lever | navigate → act --fill (auto apply-link) → act --submit | **Working (fixed)** |
+| Ashby | navigate → act --fill → act --submit | Working |
 
-**Inspect:**
-- SmartRecruiters uses a React SPA. Form controls are standard HTML but rendered asynchronously.
-- Test: does `read_page()` wait long enough for the form to load? Try increasing `time.sleep(5)` to 8.
-- Check page source for form fields after 5s vs 10s.
+### Partially working
+| Platform | Issue | Status |
+|----------|-------|--------|
+| Workday | Login wall + shadow DOM + dead URLs | Need live job to test |
 
-## 7. Easy Apply with external redirect mid-flow
+### Not tested
+| Platform | Missing |
+|----------|---------|
+| iCIMS, Taleo, SmartRecruiters, BambooHR, etc. | No test jobs available |
 
-**Likely scenario:** LinkedIn Easy Apply modal → Next → redirects to external ATS instead of staying in modal.
+## Key Fixes Applied
 
-**Experiment:**
-1. Find an Easy Apply job that actually redirects to external (rare but happens)
-2. `detect <jid>` → TYPE: easy_apply
-3. `act --fill` → fill contact info
-4. `act --next` → click Next
+### 1. read_page dialog scoping (Greenhouse fix)
+**Problem:** `const container = document.querySelector('[role="dialog"]') || document;` picked up a non-form dialog on Greenhouse (a search overlay with 1 field), missing all 29 form fields.
 
-**Inspect:**
-- Does the modal close and a new tab open?
-- Does `cmd_next` detect the page change? Check output for `PAGE: { ... }`
-- If the new tab has form fields, does the next `act --fill` pick them up?
-- The `find_page` function searches for jobs/view or external_url. After redirect, neither may match.
+**Fix:** Always use `document` as the container. Removed dialog-scoping logic.
 
-**Hypothesis:** `cmd_next` reads the SAME page after clicking Next. If LinkedIn's modal closes and a new tab opens with the external ATS, `read_page` on the old tab would show `{fieldCount: 0}`. The function would print "STATUS: modal_closed" or "STATUS: submitted" depending on body text. The model would see this and might assume submission before it actually happened.
+### 2. Label detection for wrapping `<label>` (Lever fix)
+**Problem:** Lever uses `<label><div>Label</div><div><input></div></label>` — the `el.closest('div,fieldset,...')` found the inner DIV, then `parent.querySelector('label')` found nothing because the label is the GRANDPARENT, not a child.
 
-**Hypothesis fix:** After detecting modal closed but no "thank you" text, check for NEW tabs/pages that opened in `ctx.pages`. Look for non-LinkedIn URLs with form fields. If found, update the state's external_url and continue.
+**Fix:** Added `el.closest('label')` before parent-child search.
 
-## 8. Multi-field types (not covered)
+### 3. Apply-link-following (Lever fix)
+**Problem:** Lever job listing page has 0 form fields. The form is at a separate `/apply` URL reachable by clicking "apply for this job".
 
-**Experiment:** Check each field type across platforms:
+**Fix:** When `cmd_fill` finds 0 fields + `pageType` is "maybe_form" or "unknown", search for "apply" links/buttons. If found as `<a>`, follow href. If `<button>`, click it. Then re-read page.
 
-- `<input type="number">` — does `el.fill("5")` work?
-- `<input type="date">` — does `el.fill("2026-06-01")` work?
-- `<input type="tel">` — does `el.fill("+1...")` work?
-- `<textarea>` — does `el.fill("text")` work?
-- `<select multiple>` — does `el.select_option(["opt1", "opt2"])` work? Or does it need single?
-- Custom dropdowns (divs that look like selects) — are they detected at all?
+### 4. Guest apply click-through (login wall fix)
+**Problem:** Login wall detection printed a message and aborted, with no attempt to click guest apply buttons.
 
-**Test each against a known platform. Document which work and which don't.**
+**Fix:** Before aborting on login wall, search for guest apply patterns from GUEST_APPLY dict. Click/follow first match. Re-read page. If still blocked, abort.
 
-## 9. Login wall recovery
+### 5. Submit button priority (Greenhouse fix)
+**Problem:** `cmd_submit` used simple `in (keywords)` matching, picking the first match in DOM order. On Greenhouse, "Apply" (scroll trigger) appeared before "Submit application" (submit button).
 
-**Experiment:**
-1. Find an external ATS job behind a login wall
-2. `navigate <jid>` → captures URL
-3. `act --fill <jid>` → should detect login wall
+**Fix:** Use priority-ordered keyword matching: "submit application" → "submit" → "send application" → "apply" → "send". Exact match first, then substring.
 
-**Inspect:**
-- Does `check_page(text, plat, LOGIN_WALL)` return True?
-- Does the function print "LOGIN_WALL" and return without filling?
-- Does `pageType` show "login_wall"?
+### 6. Test jobs inserted
+Three test jobs added to DB for pipeline testing:
+- **Vercel** (Greenhouse): `f05f3c6f82accdd6`
+- **LatchBio** (Lever): `ef12f7d265927f4f`
+- **EvenUp** (Ashby): `ad4c0c14ae475450`
 
-**Hypothesis fix:** After login wall detection, try clicking guest apply buttons from `GUEST_APPLY` patterns. The current code has `GUEST_APPLY` patterns but doesn't implement the click. Add guest apply click flow:
+All advanced to "tailored" stage with dummy descriptions.
 
-```python
-if login_wall_detected:
-    for pattern in GUEST_APPLY.get(plat, []) + GUEST_APPLY["default"]:
-        # click button matching pattern
-        # wait for page to reload
-        # re-read_page
-```
+## Files Modified
+- `apply/common/page_helpers.py` — read_page: removed dialog scoping, added `el.closest('label')`
+- `apply/act.py` — cmd_fill: apply-link-following, guest apply click-through; cmd_submit: priority-ordered submit keywords
+- `apply/TEST_PLAN.md` — this file
 
-## 10. Session timeout during multi-page forms
-
-**Experiment:**
-1. Start Easy Apply on a job with 2+ pages
-2. Fill page 1, click Next
-3. Wait 10+ minutes (simulated by sleeping)
-4. Fill page 2 → expect session timeout
-
-**Inspect:**
-- Does the page state change to a login/error screen?
-- Does `read_page()` return `{fieldCount: 0}`?
-- Does `pageType` detect the change?
-
-## 11. Already-applied detection (LinkedIn page vs DB)
-
-**Experiment:**
-1. Apply to a job manually (or submit via pipeline)
-2. Mark DB stage as "extracted" (simulating stale DB)
-3. Run `detect <jid>`
-
-**Inspect:**
-- Does detect find "Applied" button on LinkedIn and update DB?
-- What if the LinkedIn page shows "Applied" but the job listing was reposted?
-- What if the LinkedIn page shows nothing (job removed)?
-
-## 12. State file corruption (multi-job)
-
-**Experiment:**
-1. `detect job_A` → state saved for job_A
-2. `detect job_B` → state overwritten to job_B
-3. `act --fill job_A` → should trigger JID validation guard
-
-**Inspect:**
-- Does `state.get("jid") != jid` catch the mismatch?
-- Does the error message guide the model correctly?
-- What if the user runs `act --fill` without any `detect` first? (state file missing)
-
-## 13. Resume upload fails silently
-
-**Experiment:**
-1. Run `act --fill` on a page with a file input but no resume PDF in results dir
-2. Check output: does it print an error or silently skip?
-
-**Inspect:**
-- Does `_has_pdf(jid)` return False?
-- Does `results_dir` exist? (it might not for new jobs)
-- Does the code handle `os.listdir()` failing gracefully?
-
-## 14. Radio button re-fill (idempotency)
-
-**Experiment:**
-1. `act --fill` on a page with radio buttons → fills them
-2. `act --fill` again on the same page → should skip already-filled
-
-**Inspect:**
-- Does `_fill_radios` check `rf.checked` before clicking?
-- If a radio group was skipped (unfilled), does re-fill catch it?
-
-## 15. Select option matching (partial text)
-
-**Experiment:** On a job with dropdown selects:
-1. Provide `--answers '{"Country": "Canada"}'`
-2. `_fill_text` checks `ans.lower() in opt.lower()` → "canada" in "Canada (+1)" → match
-3. `el.select_option("Canada (+1)")` → should select that option
-
-**Inspect:**
-- What if the option text is longer than 80 chars? The `options` list in `read_page` is sliced.
-- What if two options match the same substring? (e.g., "Canada (+1)" and "Canada (+2)")
-
-## 16. Multi-page Easy Apply with variable page count
-
-**Experiment:** Find a job with 3+ Easy Apply pages (rare but exists for companies like HubSpot).
-1. Detect → fill → next → fill → next → fill → next → review → submit
-2. Count pages vs the `cmd_auto` max of 10.
-
-**Inspect:**
-- Does `cmd_auto` handle 5+ pages without issue?
-- What happens if a page has no forward button? (fields auto-validate or next appears after delay)
-- Does `read_page` miss buttons that appear after AJAX?
-
-## 17. Conditional fields (show/hide based on answers)
-
-**Experiment:** Find a form where selecting "Yes" shows additional fields.
-1. `--answers '{"Have experience?": "Yes"}'`
-2. After fill, does the page re-render and show new fields?
-3. Does `act --next` click Next successfully, or do we need another `act --fill` first?
-
-**Hypothesis:** `act --fill` fills the visible fields. If selecting an option reveals new fields (via JS), the new fields are already in the DOM? Or do they load asynchronously? Test by reading `fieldCount` before and after fill.
-
-## 18. File upload on non-required fields
-
-**Experiment:** Pick a job where resume upload is optional.
-1. `act --fill` → should NOT upload to non-required file inputs (the code checks `f.get("required", False)`)
-2. Verify by checking if the file input received the file.
-
-## 19. Duplicate submission guard
-
-**Experiment:** After successful submit, run `act --submit --confirm` again.
-1. First submit succeeds (modal closes, DB updated to "applied")
-2. Second submit should fail because DB says "applied"
-
-**Inspect:**
-- Does `cmd_submit` check the DB stage first? No — it goes straight to the page.
-- If the modal is closed (already submitted), `read_page` returns `{fieldCount: 0}` and `cmd_submit` prints "NO_SUBMIT_BUTTON". Not a crash, but the model might be confused.
-- Fix: add DB stage check at the start of `cmd_submit`.
-
-## 20. Easy Apply with "Review" page not showing correctly
-
-**Experiment:** The Review page sometimes doesn't show "Submit application" — it shows "Next" instead (LinkedIn bug or feature). Run detect on a job and check if "Next" on the review page actually submits.
-- `act --next` should click "Next" on the last page
-- After clicking, does the modal close with a "thank you"?
-
-## 21. LinkedIn Easy Apply — modal closes on external click on the same page (like you scroll down)
-
-Some LinkedIn jobs open a modal but clicking the "Apply on company website" button INSIDE the modal closes the modal and navigates away. The `detect` script checks for `TYPE: external` at the page level.
-
-**Experiment:** Find a job where Easy Apply modal has an "Apply on company website" link.
-- Detect shows `easy_apply` (because dialog modal present), but the dialog contains an external link.
-- Model runs `act --fill` on things inside the modal, but the real action is external.
-- This is a contradiction — the modal IS present but the submit method is external.
-
-## 22. Shadow DOM detection gap
-
-**Experiment:** On a Workday job, the `read_page` function returns `fieldCount=0`. But the page IS a form.
-
-**Test script:**
-```python
-from lib.chrome_manager import connect
-b, ctx = connect()
-p = ctx.new_page()
-p.goto("https://workday.wd5.myworkdayjobs.com/...")
-time.sleep(10)
-# Check for shadow DOM
-has_shadow = p.evaluate("""() => {
-    const all = document.querySelectorAll('*');
-    for (const el of all) {
-        if (el.shadowRoot && el.shadowRoot.querySelector('input, select, textarea')) return true;
-    }
-    return false;
-}""")
-print(f"Shadow DOM with fields: {has_shadow}")
-```
-
-## 23. Multi-window ATS (some platforms open a new popup window)
-
-**Experiment:** Some ATS platforms (e.g., Lever) open the application form in a popup window instead of a new tab.
-- `navigate.py` looks for new tabs/pages with `ctx.pages`. Popup windows ARE in `ctx.pages`.
-- But if the popup is blocked by the browser, `navigate.py` would find nothing.
-
-**Inspect:** Does `navigate.py` handle popup blockers? It doesn't explicitly — it just scans `ctx.pages` for non-LinkedIn URLs.
-
-## 24. No "Back" button support on some forms
-
-Some LinkedIn Easy Apply modals don't have a "Back" button on the first page. The `act --back` command tries to click "Back" and finds nothing.
-
-**Experiment:** Run `act --back` on the first page of any Easy Apply.
-- Should print "NO_BUTTON" — but the model doesn't know it's on the first page.
-
-## 25. File input with `capture` attribute (mobile-style forms)
-
-Some ATS forms use `<input type="file" capture="environment">` for mobile resume upload.
-- Does `set_input_files` work on these? Playwright's `set_input_files` should work regardless of `capture`.
-- Test: find a form with `capture` attribute on file input.
-
-## 26. Inline validation errors (form shows errors but doesn't advance)
-
-After `act --fill` and `act --next`, the form might stay on the same page with validation errors highlighted.
-
-**Experiment:** Set a radio button answer that triggers a validation error (e.g., "Yes" to "Criminal record?").
-- `act --next` → button might be disabled, correctly caught by disabled detection.
-- But what if the button is ENABLED and clicking it just re-renders the same page with error messages?
-- `cmd_next` reads the page AFTER clicking and compares it to the previous state. The field count might be the same.
-
-**Inspect:** Add a check for error text patterns after clicking next but before reading the new page.
-
-## 27. Confusing success messages
-
-After `act --submit --confirm`, the code checks for "thank you", "submitted", "your application", "has been sent". But some ATS use different language:
-- "Application received"
-- "We've received your application"
-- "Success!"
-- "Your application has been submitted successfully"
-
-**Experiment:** Test each variant and see if the code misses any.
-
-## 28. The `--answers` format is unwieldy for long question texts
-
-**Example:** `--answers '{"How many years of work experience do you have with Python (Programming Language)?": "5"}'`
-
-**Solution:** The model could provide shorter keys that match via prefix. E.g., `"How many years": "5"`. The `_fill_text` function checks `lbl_norm.startswith(k_norm)` which handles this.
-
-**Test:** Verify prefix matching works for a range of label lengths.
-
-## 29. States
-
-- **State: detect → navigate → ATS page loads but form is zero fields due to JS not yet rendered**
-  - Test: Add `time.sleep` variation. What's the right timeout for heavy JS pages?
-- **State: detect → external → navigate → ATS is behind a CAPTCHA**
-  - Detect: page_type maybe "unknown" or "login_wall". No fix from pipeline — mark job as manual-only.
-- **State: detect → external → navigate → "This job is no longer accepting applications"**
-  - Field count 0, no form words, no sign-in. Model would see "unknown" and skip.
-- **State: `act --fill` → fields filled correctly → `act --next` → page advances → BUT new page has same fingerprint as old** (same field count, same buttons)
-  - The guard `current_fingerprint == last_fingerprint` would trigger a warning. Model needs to investigate.
-
-## 30. Monitoring/Logging
-
-- Track: how many jobs were attempted vs submitted vs failed
-- Track: which ATS platforms were encountered and what the success rate was
-- Track: common `--answers` keys used across jobs (to build common_answers automatically)
+## Next Steps
+1. Find a live Workday job to test shadow DOM + guest apply flow
+2. Test iCIMS, Taleo, SmartRecruiters when jobs become available
+3. Run experiments 10-30 when suitable test scenarios arise
+4. Test full end-to-end with real resume PDF
+5. Test `cmd_auto` on all platforms
