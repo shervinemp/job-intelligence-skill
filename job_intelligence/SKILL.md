@@ -50,46 +50,24 @@
 
 | Step | Command | What happens |
 |------|---------|-------------|
-| Detect | `python3 apply.py detect <jid>` | Navigates /apply/ URL → Easy Apply / External / Applied |
-| Click | `python3 apply.py click <jid>` | Opens Easy Apply modal (may need fresh /apply/ navigation if stale) |
-| Read | `python3 apply.py read <jid>` | Shows current fields + buttons, routes to next step |
-| Fill | `python3 apply.py fill <jid>` | Fills profile-mapped fields (name, email, phone, linkedin). Already-filled fields skipped. |
-| Resume | `python3 apply.py resume <jid>` | `set_input_files` directly — do NOT click "Upload resume" (closes modal). Errors if no PDF. |
-| Screen | `python3 apply.py screen <jid> --answers '{"Q":"A"}'` | Presents screening questions; model answers with --answers |
-| Next | `python3 apply.py next <jid>` | Clicks Next/Review/Submit (disables overlay). Detects which action to take. |
-| Submit | `python3 apply.py submit <jid>` | Dry-run safe. Shows button state + unfilled fields. |
-| Navigate | `python3 apply.py navigate <jid>` | External ATS: decodes LinkedIn safety redirect URL automatically |
-| Detect platform | `python3 apply.py detect_platform <jid>` | External ATS: detect Greenhouse/Lever/Ashby/Workday |
-| Fill external | `python3 apply.py fill_external <jid> --answers '{}'` | External ATS: `--answers` JSON is the only source of model decisions. No hardcoded mappings. |
-| Next external | `python3 apply.py next_external <jid>` | External ATS: multi-page support (Next/Continue) |
-| Submit external | `python3 apply.py submit_external <jid>` | External ATS: always dry-run, never auto-confirm |
-| Detect ATS | `python3 apply.py detect_ats <jid>` | Direct ATS URL (no LinkedIn): detects platform, reads form |
+| Detect | `python3 apply.py detect <jid>` | Pre-flight: checks DB stage, PDF, classify type (Easy Apply / External / Applied / ATS). Prints PAGE state + NEXT. |
+| Navigate | `python3 apply.py navigate <jid>` | LinkedIn → External ATS: clicks external button, decodes redirect, detects platform, reads form. |
+| Act (fill) | `python3 apply.py act --fill <jid> [--answers '{}']` | Fill ALL fields: text, selects, radios, file inputs. Uses --answers (exact normalized match) → common_answers → profile. Unfollow company checkbox. |
+| Act (next) | `python3 apply.py act --next <jid>` | Click forward button (Submit > Review > Next, rightmost fallback). Never Back/Cancel/Save. Detects disabled before click. |
+| Act (back) | `python3 apply.py act --back <jid>` | Click Back button. |
+| Act (submit) | `python3 apply.py act --submit <jid> [--confirm]` | Click Submit on review page. Dry-run without --confirm. Checks result. |
+| Act (auto) | `python3 apply.py act --auto <jid>` | Full loop: fill → next → fill → ... → submit. Stops on unfilled fields, waits for --answers. |
+| Verify | `python3 apply.py verify <jid>` | Check submission: DB stage, LinkedIn "you have applied" text. Updates DB if confirmed. |
 
 ### Apply notes
 
-- **Unfollow** — review page: uncheck "Follow X". Keeps your timeline clean.
-- **Screening** — `--answers '{"q":"val"}'`. Substring match works (`"employ"` → `"employed by..."`). Saved for reuse.
-- **Radios** — Ashby hides radios behind custom buttons. `radio.click()` sets DOM but may miss React. Use Playwright `.check()` or click the `<div>` wrapper.
-- **Resume** — `set_input_files()` only. Clicking "Upload resume" closes the modal.
-- **Multi-page** — fill → next → read → loop → submit.
-
-### Pre-flight
-
-| Check | Action |
-|-------|--------|
-| Already applied? | DB says "applied" or detect.py sees "Applied" button → skip |
-| Needs PDF? | Stage != "tailored" → run `tailor.py <jid>` first. Resume step errors without it. |
-| Rate limited? | Tailor hits RATE_LIMIT → stop, use `retry` or `--relentless` later. |
-| Quebec on-site? | Extraction rules say reject → skip. |
-| External dead? | navigate.py fails → job likely closed or premium-walled. |
-
-### Flow examples
-
-**LinkedIn Easy Apply:** detect → click → read → fill → resume → screen → next → [loop] → submit
-
-**LinkedIn External → Ashby:** detect → navigate → detect_platform → fill_external → submit_external
-
-**Direct ATS URL:** detect_ats → fill_external → next_external → [loop] → submit_external
+- **Screening** — `--answers '{"q":"val"}'`. Normalized exact match. Provide full label text to be safe.
+- **Radios** — `radio.click()` via Playwright `.check()`. Verify `el.checked` changed.
+- **Resume** — `set_input_files()` on required file inputs only. Skips optional drop zones.
+- **Unfollow** — `act --fill` auto-unchecks "Follow X" on any page.
+- **Multi-page** — `act --auto` handles the loop. Manual: fill → next → fill → ... → submit.
+- **Pre-flight** — always run `detect` first. It checks stage, PDF, and page type in one call.
+- **Button priority** — Submit > Review > Next > Continue > Done (rightmost). Never Back/Cancel/Save.
 
 ## Extraction rules
 
