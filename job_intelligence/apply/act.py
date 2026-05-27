@@ -132,10 +132,12 @@ def cmd_fill(jid, answers_json=None):
             radios = [rf for rf in ps["fields"] if rf.get("name") == f["name"]]
             opts = [rf["label"] for rf in radios]
             q_label = opts[0].split(" - ")[0] if " - " in opts[0] else opts[0]
-            # Check --answers
+            # Check --answers (exact normalized match only)
             ans = None
+            q_norm = re.sub(r'[^a-z0-9]+', ' ', q_label.lower()).strip()
             for k, v in answers.items():
-                if k in q_label or q_label in k:
+                k_norm = re.sub(r'[^a-z0-9]+', ' ', k.lower()).strip()
+                if k_norm == q_norm or q_norm.startswith(k_norm):
                     ans = v
                     break
             if not ans:
@@ -197,18 +199,20 @@ def cmd_fill(jid, answers_json=None):
                         print(f"  RESUME FAILED: {e}", file=sys.stderr)
             continue
 
-        # Check --answers
+        # Check --answers (exact normalized match)
         ans = None
         lbl = f["label"]
+        lbl_norm = re.sub(r'[^a-z0-9]+', ' ', lbl.lower()).strip()
         for k, v in answers.items():
-            if k in lbl or lbl in k:
+            k_norm = re.sub(r'[^a-z0-9]+', ' ', k.lower()).strip()
+            if k_norm == lbl_norm or lbl_norm.startswith(k_norm):
                 ans = v
                 break
         if not ans:
-            # Check common_answers by containment
+            # Check common_answers: exact word containment
             q_lower = lbl.lower()
             for ck, cv in ca.items():
-                if cv and ck.lower() in q_lower:
+                if cv and re.sub(r'[^a-z0-9]+', '', ck.lower()) in re.sub(r'[^a-z0-9]+', '', q_lower):
                     ans = cv
                     break
         if not ans:
@@ -283,12 +287,23 @@ def cmd_next(jid):
     ps = _read_page(page)
     btns = ps.get("buttons", [])
 
-    # Find forward button
+    # Find forward button: rightmost non-excluded button inside the dialog
     target = None
+    all_forward = []
     for b in btns:
-        t = b["text"].lower()
-        if t in _FORWARD_BUTTONS and not b["disabled"] and t not in _EXCLUDED_BUTTONS:
-            target = b; break
+        t = b["text"].lower().strip()
+        if b["disabled"]: continue
+        if t in _EXCLUDED_BUTTONS: continue
+        all_forward.append(b)
+    if all_forward:
+        # Prefer known forward keywords; fallback to rightmost
+        for kw in ["submit", "review", "next", "continue", "done"]:
+            for b in all_forward:
+                if kw == b["text"].lower().strip():
+                    target = b; break
+            if target: break
+        if not target:
+            target = all_forward[-1]  # rightmost = most likely forward
     if not target:
         # Check if button is disabled
         for b in btns:
