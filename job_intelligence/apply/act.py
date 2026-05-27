@@ -11,6 +11,22 @@ from apply.common.page_helpers import load_state, save_state, read_page, find_pa
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 _EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
 
+def _match_word(needle, haystack):
+    """Word-boundary match: 'phone' matches 'phone number' but NOT 'phone extension'."""
+    return f" {needle} " in f" {haystack} " or haystack.startswith(f"{needle} ") or haystack.endswith(f" {needle}")
+
+def _find_answer(label, label_norm, answers, ca, profile):
+    """Find answer from --answers, common_answers, or profile. Returns None if uncertain."""
+    for k, v in answers.items():
+        k_norm = re.sub(r'[^a-z0-9]+', ' ', k.lower()).strip()
+        if k_norm == label_norm or label_norm.startswith(k_norm):
+            return v
+    for ck, cv in ca.items():
+        if cv and _match_word(ck.lower().replace('_', ' '), label_norm):
+            return cv
+    from apply.common.page_helpers import resolve_label
+    return resolve_label(label, profile)
+
 def _click_candidate(page, c, state=None):
     if c["tag"] == "A" and c.get("href"):
         page.goto(c["href"], wait_until="domcontentloaded", timeout=15000)
@@ -143,7 +159,6 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             if file_uploaded or not f.get("required", False): continue
             results_dir = os.path.expanduser(f"~/.openclaw/results/{jid}")
             if os.path.isdir(results_dir):
-                # Find resume: prefer one matching job title or company
                 candidates = []
                 for fn in os.listdir(results_dir):
                     if "Resume" in fn and fn.endswith(".pdf"):
@@ -159,20 +174,33 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                     except: pass
             continue
 
+        # Custom dropdown (e.g. Workday province selectors)
+        if f["tag"] == "DROPDOWN":
+            lbl = f["label"]
+            lbl_norm = re.sub(r'[^a-z0-9]+', ' ', lbl.lower()).strip()
+            ans = _find_answer(lbl, lbl_norm, answers, ca, profile)
+            if ans and f.get("id"):
+                try:
+                    btn = page.locator(f'[id="{f["id"]}"]')
+                    if btn.count() > 0:
+                        btn.first.click(force=True, timeout=5000)
+                        time.sleep(1)
+                        opt = page.locator(f'[role="option"]:has-text("{ans}")')
+                        if opt.count() > 0:
+                            opt.first.click(force=True, timeout=3000)
+                            time.sleep(0.5)
+                            filled += 1
+                        else:
+                            page.keyboard.press("Escape")
+                except: pass
+            elif f.get("required"):
+                unfilled.append({"label": lbl[:60], "options": [], "tag": "DROPDOWN"})
+            continue
+
         lbl = f["label"]
         lbl_norm = re.sub(r'[^a-z0-9]+', ' ', lbl.lower()).strip()
 
-        ans = None
-        for k, v in answers.items():
-            k_norm = re.sub(r'[^a-z0-9]+', ' ', k.lower()).strip()
-            if k_norm == lbl_norm or lbl_norm.startswith(k_norm):
-                ans = v; break
-        if not ans:
-            for ck, cv in ca.items():
-                if cv and ck.lower().replace('_', ' ') in lbl_norm:
-                    ans = cv; break
-        if not ans:
-            ans = resolve_label(lbl, profile)
+        ans = _find_answer(lbl, lbl_norm, answers, ca, profile)
 
         if ans:
             sel = f'[id="{f["id"]}"]' if f["id"] else f'[name="{f["name"]}"]'
