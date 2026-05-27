@@ -208,6 +208,53 @@ def cmd_craft(count=1):
         print(f"\nDone. Crafted: {processed}, Failed: {failed_count}", file=sys.stderr)
 
 
+def craft_jid(jid):
+    """Tailor a specific job by JID. Advances from extracted/described if needed."""
+    state = load()
+    if jid not in state["jobs"]:
+        print(f"ERROR: job {jid} not found", file=sys.stderr)
+        return
+    entry = state["jobs"][jid]
+    stage = entry.get("stage")
+    from lib.db import desc_exists
+
+    if stage in ("extracted",):
+        if desc_exists(jid):
+            advance(entry, "described")
+            print(f"  {jid}: extracted -> described", file=sys.stderr)
+        else:
+            print(f"ERROR: job {jid} has no description \u2014 run fetch.py first", file=sys.stderr)
+            return
+
+    if entry.get("stage") not in ("described",):
+        print(f"ERROR: job {jid} is in stage '{entry.get('stage')}', can't tailor", file=sys.stderr)
+        return
+
+    if not entry.get("category"):
+        source = entry.get("source", "")
+        entry["category"] = "tech" if source == "LinkedIn" else "general"
+        print(f"  {jid}: no category, defaulting to '{entry['category']}'", file=sys.stderr)
+
+    # Dedup doubled title
+    title = entry.get("title", "")
+    half = len(title) // 2
+    if len(title) > 20 and title[:half] == title[half:]:
+        entry["title"] = title[:half]
+        print(f"  {jid}: deduped title", file=sys.stderr)
+
+    success, result = generate_tailored_docs(entry)
+    if success:
+        advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
+        print(f"  COMPLETE {jid}", file=sys.stderr)
+    else:
+        err_str = str(result)[:120]
+        if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
+            print(f"  TRANSIENT {jid} \u2014 {err_str}", file=sys.stderr)
+        else:
+            advance(entry, "failed", error=str(result)[:200])
+            print(f"  FAILED {jid} {err_str}", file=sys.stderr)
+
+
 def cmd_status():
     s = pipeline_status()
     if not s["jobs"]:
@@ -484,6 +531,7 @@ def main():
     parser = argparse.ArgumentParser(prog="tailor.py", description="Tailor CVs via Gemini Web")
     parser.add_argument("--count", type=int, default=1, help="Jobs to process (default 1, -1 = all)")
     parser.add_argument("--relentless", action="store_true", help="Retry on rate limit with idle loop")
+    parser.add_argument("--jid", help="Tailor a specific job by JID")
     
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("done", help="Mark job as applied").add_argument("jids", nargs="+")
@@ -545,6 +593,8 @@ def main():
         list_gems()
     elif args.command == "help":
         cmd_help()
+    elif args.jid:
+        craft_jid(args.jid)
     elif args.command is None:
         count = args.count
         if args.relentless:
