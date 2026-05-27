@@ -59,73 +59,86 @@ class PageManager:
         _save(self.reg)
 
     def find(self, fallback_url=""):
-        """Find page by: tag → URL stack + fingerprint → untagged tabs."""
-        # 1. Direct tag match
-        for p in self.ctx.pages:
-            if _get_tag(p) == self.jid:
-                self.register(p)
-                return p
-
+        """Find best page by scoring: focus > tag > URL match > domain."""
         entry = self.reg.get(self.jid, {"urls": [], "fp": ""})
         url_stack = entry.get("urls", [])
         old_fp = entry.get("fp", "")
+        fallback_domain = urlparse(fallback_url).netloc.lower() if fallback_url else ""
 
-        # 2. URL stack match, scored (case-insensitive)
         best_score, best_page = -1, None
         for p in self.ctx.pages:
-            url = p.url.rstrip("/").lower()
-            score = -1
+            url = p.url.lower()
+            if "about:blank" in url or "chrome-error" in url:
+                continue
+
+            tag = _get_tag(p)
+            has_focus = False
+            try:
+                has_focus = p.evaluate("() => document.hasFocus()")
+            except:
+                pass
+
+            score = 0
+            # Tag match
+            if tag == self.jid:
+                score = 3
+            # URL stack match (case-insensitive)
             for stored in reversed(url_stack):
                 s = stored.rstrip("/").lower()
-                if url == s:
-                    score = 3; break
-                elif url.startswith(s + "/"):
-                    score = 2; break
-                elif s.startswith(url + "/"):
-                    score = 1; break
+                if url.rstrip("/") == s:
+                    score = max(score, 2)
+                elif url.rstrip("/").startswith(s + "/"):
+                    score = max(score, 2)
+                elif s.startswith(url.rstrip("/") + "/"):
+                    score = max(score, 1)
+            # Domain match
+            try:
+                if fallback_domain and urlparse(url).netloc.lower() == fallback_domain:
+                    score = max(score, 1)
+            except:
+                pass
+            # Focus bonus
+            if has_focus:
+                score += 2
+
             if score > best_score:
                 best_score, best_page = score, p
 
         if best_page:
-            # Disambiguate: same URL, different tabs → fingerprint
-            ties = [p for p in self.ctx.pages
-                    if p.url.rstrip("/") == best_page.url.rstrip("/")]
-            if len(ties) > 1 and old_fp:
-                for p in ties:
-                    if _fingerprint(p) == old_fp:
-                        best_page = p; break
+            # Disambiguate ties: same score, multiple pages → prefer tag match
+            if best_score < 3:
+                ties = [p for p in self.ctx.pages if p != best_page and self._score(p, url_stack, fallback_domain) == best_score]
+                if ties and old_fp:
+                    for p in ties:
+                        if _fingerprint(p) == old_fp:
+                            best_page = p; break
             _tag(best_page, self.jid)
             self.register(best_page)
             return best_page
 
-        # 3. Untagged tab (safety redirect, user navigation)
-        for p in self.ctx.pages:
-            if not _get_tag(p):
-                url = p.url.lower()
-                if "about:blank" in url or "chrome-error" in url:
-                    continue
-                if self.jid[:12] in url:
-                    self.register(p); return p
-                for s in url_stack:
-                    if s.rstrip("/") in url or url in s.rstrip("/"):
-                        self.register(p); return p
-
-        # 4. Domain-level fallback: any open page on the same domain
-        domain = ""
-        if url_stack:
-            domain = urlparse(url_stack[0]).netloc.lower()
-        elif fallback_url:
-            domain = urlparse(fallback_url).netloc.lower()
-        if domain:
-            target_domain = urlparse(url_stack[0]).netloc.lower()
-            for p in self.ctx.pages:
-                try:
-                    if target_domain and target_domain in urlparse(p.url).netloc.lower():
-                        self.register(p); return p
-                except:
-                    pass
-
         return None
+
+    def _score(self, page, url_stack, fallback_domain):
+        """Calculate match score for a single page."""
+        url = page.url.lower()
+        tag = _get_tag(page)
+        score = 0
+        if tag == self.jid:
+            score = 3
+        for stored in reversed(url_stack):
+            s = stored.rstrip("/").lower()
+            if url.rstrip("/") == s:
+                score = max(score, 2); break
+            elif url.rstrip("/").startswith(s + "/"):
+                score = max(score, 2); break
+            elif s.startswith(url.rstrip("/") + "/"):
+                score = max(score, 1); break
+        try:
+            if fallback_domain and urlparse(url).netloc.lower() == fallback_domain:
+                score = max(score, 1)
+        except:
+            pass
+        return score
 
     def snapshot(self, page):
         """Return a dict describing the current page state for change detection."""
