@@ -14,6 +14,18 @@ _EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "uplo
 def _click_candidate(page, c, state=None):
     if c["tag"] == "A" and c.get("href"):
         page.goto(c["href"], wait_until="domcontentloaded", timeout=15000)
+        time.sleep(2)
+        # If goto resulted in 0 fields and no forms, try click instead (SPA)
+        from apply.common.page_helpers import read_page
+        _ps = read_page(page)
+        if _ps["fieldCount"] == 0 and not page.evaluate("() => document.querySelectorAll('form').length"):
+            try:
+                loc = page.locator(f'a:has-text("{c["text"]}")')
+                if loc.count() > 0:
+                    loc.first.click(force=True, timeout=5000)
+                    time.sleep(3)
+            except:
+                pass
     else:
         try:
             loc = page.locator(f'button:has-text("{c["text"]}")')
