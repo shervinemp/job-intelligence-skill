@@ -77,27 +77,23 @@
 
 ### Apply flow notes
 
-**Unfollow company:** On the Easy Apply review page, uncheck "Follow X to stay up to date" checkbox to avoid timeline bloat.
+- **Unfollow company** — review page: uncheck "Follow X" checkbox. Timeline bloat.
+- **Screening** — `--answers '{"q":"val"}'`. Substring match — `"employ"` matches `"Have you ever been employed by..."`. Saved to common_answers.
+- **Radio buttons** — Ashby hides `<input type="radio">` behind custom buttons. `radio.click()` sets DOM but may miss React. Prefer `.check()` or click parent `<div class="_option_...">`.
+- **Resume upload** — `set_input_files()` direct. Never click "Upload resume" — closes modal.
+- **Multi-page** — fill → next → read → fill → ... → submit. Each next re-reads state.
 
-**Screening questions:** Use `--answers '{"question text": "value"}'` — substring matching, so short keys like `"employ"` match `"Have you ever been employed by..."`. Answers are saved to common_answers for future reuse.
+### Pre-flight
 
-**Radio buttons:** Ashby renders hidden `<input type="radio">` behind custom button UI. Direct `radio.click()` sets DOM state but may not register with React. Prefer clicking the parent `<div class="_option_...">` or using Playwright's native `.check()` on the radio.
+Before apply pipeline on a job:
 
-**Resume upload:** Always `set_input_files()` directly on the file input. Never trigger the native file picker dialog — it causes the modal to close before the file is attached.
-
-**Multi-page forms:** Each `next` step re-reads the modal and reports the next action. Loop: fill → next → read → fill → next → ... → submit.
-
-### Pre-flight checks
-
-Before running the apply pipeline on a job, verify:
-
-| Check | What to do |
-|-------|------------|
-| Already applied? | Check DB stage — if "applied", skip. Also detect.py classifies LinkedIn "Applied" button. |
-| Needs tailor? | If stage is not "tailored", run `python3 tailor.py <jid>` first to generate PDF. 04_resume.py errors without one. |
-| Rate limited? | If tailor returns RATE_LIMIT, stop and retry later via `tailor.py retry` or `--relentless`. Don't attempt apply without PDF. |
-| Quebec on-site? | Per SKILL.md extraction rules — reject. Don't apply. |
-| Has external URL? | For external ATS, navigate.py must succeed. If no external URL found, job may be closed or premium-walled.
+| Check | Action |
+|-------|--------|
+| Already applied? | DB stage="applied" → skip. detect.py catches LinkedIn "Applied" button. |
+| Needs tailor? | Stage not "tailored" → run `tailor.py <jid>` first. resume.py errors without PDF. |
+| Rate limited? | Tailor returns RATE_LIMIT → stop, retry later via `retry`/`--relentless`. |
+| Quebec on-site? | Per extraction rules → reject. |
+| External URL missing? | navigate.py fails → job may be closed or premium-walled. |
 
 ### Flow examples
 
