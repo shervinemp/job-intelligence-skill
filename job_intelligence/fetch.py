@@ -216,7 +216,7 @@ def cmd_admit(*jids, **fields):
             if desc:
                 limit = 500
                 snippet = re.sub(r'\s+', ' ', desc[:limit].replace('\r', '')).strip()
-                print(f"DESC:{jid}:{snippet}", file=sys.stderr)
+                print(f"DESC:{jid}:{snippet}")
             print(f"ERROR: --category required (no category set). Options: {', '.join(cats)}", file=sys.stderr)
             print(f"  Usage: fetch.py admit {jid} --category <name>", file=sys.stderr)
             continue
@@ -271,7 +271,7 @@ def cmd_retry_skipped():
 def cmd_help():
     print("Usage:", file=sys.stderr)
     print("  [--count N] [--curl] [--force] [--refresh] [--verbose]   Fetch descriptions (default 3)", file=sys.stderr)
-    print("  admit <jid> [jid...]                                      Mark job as described", file=sys.stderr)
+    print("  admit <jid> [jid...] [--category <name>] [--title ...] [--company ...] [--location ...] [--salary ...] [--url ...] [--notes ...]   Mark described", file=sys.stderr)
     print("  reject <jid> [jid...]                                     Skip (garbage/closed)", file=sys.stderr)
     print("  flag <jid> [jid...]                                       Mark as auth wall", file=sys.stderr)
     print("  open [<jid>]                                              Open in Chrome", file=sys.stderr)
@@ -369,6 +369,7 @@ def main():
     admit_p.add_argument("--location", help="Job location")
     admit_p.add_argument("--salary", help="Salary range")
     admit_p.add_argument("--category", help="Job category (tech/general)")
+    admit_p.add_argument("--notes", help="Job notes/context")
     admit_p.add_argument("--url", help="External apply URL")
     sub.add_parser("reject", help="Skip (garbage/closed)").add_argument("jids", nargs="+")
     sub.add_parser("flag", help="Mark as auth wall").add_argument("jids", nargs="*")
@@ -381,7 +382,7 @@ def main():
     args = parser.parse_args()
     
     if args.command == "admit":
-        cmd_admit(*args.jids, title=args.title, company=args.company, location=args.location, salary=args.salary, category=args.category, url=args.url)
+        cmd_admit(*args.jids, title=args.title, company=args.company, location=args.location, salary=args.salary, category=args.category, notes=args.notes, url=args.url)
     elif args.command == "reject":
         cmd_reject(*args.jids)
     elif args.command == "flag":

@@ -87,17 +87,30 @@ def cmd_auto():
     print(f"EXTRACTED:{total}", file=sys.stderr)
 
 
-def cmd_admit(*jids):
+def cmd_admit(*jids, category=None, notes=None):
+    cats = _load_categories()
     conn = get_conn()
     for item in jids:
         if len(item) != 16 or not all(c in '0123456789abcdef' for c in item):
             print(f"Invalid JID: '{item}'. JIDs are 16 hex characters.", file=sys.stderr)
-            print("Usage: extract.py admit <jid> [jid...]", file=sys.stderr)
+            print("Usage: extract.py admit --category <name> <jid> [jid...]", file=sys.stderr)
             sys.exit(1)
     for jid in jids:
-        row = conn.execute("SELECT stage FROM jobs WHERE id=?", (jid,)).fetchone()
+        row = conn.execute("SELECT stage, category FROM jobs WHERE id=?", (jid,)).fetchone()
         if not row:
             continue
+        current_cat = row["category"]
+        if current_cat is None and not category:
+            print(f"ERROR: --category required for first admit. Options: {', '.join(cats)}", file=sys.stderr)
+            print("  See 'extract.py help' for usage", file=sys.stderr)
+            sys.exit(1)
+        if category:
+            if category not in cats:
+                print(f"Unknown category '{category}'. Options: {', '.join(cats)}", file=sys.stderr)
+                sys.exit(1)
+            conn.execute("UPDATE jobs SET category=? WHERE id=?", (category, jid))
+        if notes is not None:
+            conn.execute("UPDATE jobs SET notes=? WHERE id=?", (notes, jid))
     conn.commit()
     print(f"ADMITTED:{len(jids)}", file=sys.stderr)
 
@@ -246,7 +259,8 @@ def cmd_status():
 def cmd_help():
     cats = _load_categories()
     print("Usage:", file=sys.stderr)
-    print("  admit <jid> [jid...]                       Acknowledge extracted job", file=sys.stderr)
+    print("  admit --category <name> <jid> [jid...]     Acknowledge + set category. First admit requires --category.", file=sys.stderr)
+    print("                                              --notes optional for context.", file=sys.stderr)
     print("  reject <jid> [jid...]                      Skip", file=sys.stderr)
     print("  submit [<tid>] '<json>'                    JSON must include 'category'", file=sys.stderr)
     print("  review [--count N]                         Show emails for manual picking", file=sys.stderr)
@@ -261,7 +275,7 @@ def cmd_help():
         desc = info.get("desc", "")
         print(f"  {name} → {gem}" + (f" ({desc})" if desc else ""), file=sys.stderr)
     print("", file=sys.stderr)
-    print("Note: category is set at fetch.py admit --category <name> when JD is visible.", file=sys.stderr)
+    print("Note: --category required on first admit. Use fetch.py admit --category to override after seeing JD.", file=sys.stderr)
 
 
 def main():
@@ -278,6 +292,8 @@ def main():
     sub.add_parser("status", help="Pipeline state")
     admit_p = sub.add_parser("admit", help="Admit an extracted job")
     admit_p.add_argument("jids", nargs="+")
+    admit_p.add_argument("--category", help="Job category (required on first admit)")
+    admit_p.add_argument("--notes", help="Job notes/context")
     reject_p = sub.add_parser("reject", help="Reject an extracted job")
     reject_p.add_argument("jids", nargs="+")
     sub.add_parser("review", help="Review extracted jobs for admit/reject")
@@ -297,7 +313,7 @@ def main():
     elif args.command == "status":
         cmd_status()
     elif args.command == "admit":
-        cmd_admit(*args.jids)
+        cmd_admit(*args.jids, category=args.category, notes=args.notes)
     elif args.command == "reject":
         cmd_reject(*args.jids)
     elif args.command == "review":
