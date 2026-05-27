@@ -1,14 +1,13 @@
 # Greenhouse
 
-**Detection:** `greenhouse.io` in URL → platform "greenhouse"
+**URL:** `greenhouse.io` → platform "greenhouse"
 
-**Form structure:** 28-29 fields pre-loaded in DOM. No "Apply" button click needed — form is always visible. Submit button is "Submit application" (type="submit").
+**Flow:** navigate → fill → submit
 
-**Known quirks:**
-- Form is pre-loaded but fields are hidden until page renders. read_page detects them immediately.
-- "Country" field is an `<input type="text">` autocomplete, not a `<select>`. Type the country name.
-- No `<select>` elements on Greenhouse — all dropdowns are custom autocomplete inputs.
-- "Apply" button at top of page is a scroll trigger — do NOT click it. Use "Submit application" at bottom.
-- **Button priority:** "Submit application" > "Apply" (cmd_submit prioritizes correctly).
+**Form:** 28-29 fields pre-loaded in DOM. Always visible — no "Apply" click needed. Submit = "Submit application" (type="submit").
 
-**Pipeline flow:** `navigate → act --fill → act --submit`
+**Gotchas:**
+- "Country" is `<input type="text">` autocomplete, not `<select>`. Type name.
+- No `<select>` elements at all. All dropdowns = custom autocomplete.
+- "Apply" button at top = scroll trigger. Don't click. Use "Submit application" at bottom.
+- **cmd_submit priority:** "Submit application" > "Apply" (fixed. "Apply" scroll trigger filtered out.)

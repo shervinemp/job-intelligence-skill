@@ -1,13 +1,13 @@
 # Ashby
 
-**Detection:** `ashbyhq.com` in URL → platform "ashby"
+**URL:** `ashbyhq.com` → platform "ashby"
 
-**Form structure:** Standard HTML inputs with `<label for="id">`. 20-25 fields typical. One-page application with "Submit Application" button.
+**Flow:** navigate → fill → submit
 
-**Known quirks:**
-- Radio groups use `name` attribute for grouping (standard)
-- File uploads use `input[type="file"][required]` — auto-filled from resume PDF
-- "Start typing..." field is a search input, not a form field — skip it
+**Form:** 20-25 std HTML fields. One page. "Submit Application" btn.
+
+**Gotchas:**
+- Radios grouped by `name` attr — standard
+- Resume: `input[type="file"][required]` — auto-filled
+- "Start typing..." field = search, not form — skip
 - Recaptcha textarea at bottom — ignore
-
-**Pipeline flow:** `navigate → act --fill → act --submit`
