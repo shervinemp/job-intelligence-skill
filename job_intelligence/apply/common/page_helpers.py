@@ -37,9 +37,10 @@ def read_page(p):
                 options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0,15) : [],
             };
         });
-        // Custom dropdown buttons (e.g. Workday province/phone type selectors)
+        // Custom dropdown buttons inside formField containers (e.g. Workday province/phone type)
         Array.from(dropdowns).forEach(btn => {
-            const parent = btn.closest('[data-automation-id^="formField"]') || btn.parentElement;
+            const parent = btn.closest('[data-automation-id^="formField"]');
+            if (!parent) return;  // skip nav-level dropdowns
             const label = parent.querySelector('label, legend, span');
             const lbl = label ? label.textContent.trim().replace(/\\s+/g,' ').slice(0, 80) : '';
             const current = (btn.textContent || '').trim().slice(0, 30);
