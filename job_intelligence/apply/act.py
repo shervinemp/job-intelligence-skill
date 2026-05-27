@@ -48,8 +48,18 @@ def _click_candidate(page, c, state=None):
                     }}
                 }}""", c["text"])
     if state:
+        from apply.common.page_manager import PageManager
+        pm = PageManager(page.context, state.get("jid", ""))
+        snap = pm.snapshot(page)
         state["external_url"] = page.url
-    time.sleep(5)
+        time.sleep(5)
+        pm.register(page)
+        snap2 = pm.snapshot(page)
+        diff = pm.diff(snap, snap2)
+        if diff.get("changes"):
+            print(f"CHANGE: {';'.join(diff['changes'])}", file=sys.stderr)
+    else:
+        time.sleep(5)
 def _handle_post_click(state, ps, page):
     if not ps or ps["fieldCount"] == 0:
         text = (page.evaluate("() => document.body.innerText") or "").lower()
@@ -194,10 +204,21 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     page = find_page(ctx, state)
     if not page:
         ext = state.get("external_url", "")
-        if ext:
+        if ctx.pages:
+            # List available pages so user can pick
+            print("NO_MATCH: no page matches external_url. Open pages:", file=sys.stderr)
+            for i, p in enumerate(ctx.pages):
+                print(f"  [{i}] {p.url[:100]}", file=sys.stderr)
+            if ext:
+                print(f"WANTED: {ext[:100]}", file=sys.stderr)
+            print("TIP: navigate to the job URL in an existing page, or close irrelevant tabs", file=sys.stderr)
+            print("NEXT: retry", file=sys.stderr); return
+        elif ext:
             page = ctx.new_page()
             page.goto(ext, wait_until="domcontentloaded", timeout=30000)
             time.sleep(5)
+            from apply.common.page_helpers import tag_page
+            tag_page(page, state.get("jid", ""))
         else:
             print("ERROR: no page found and no external URL", file=sys.stderr); sys.exit(1)
     ps = read_page(page)
@@ -343,6 +364,8 @@ def cmd_next(jid, candidate=None):
             page = ctx.new_page()
             page.goto(ext, wait_until="domcontentloaded", timeout=30000)
             time.sleep(5)
+            from apply.common.page_helpers import tag_page
+            tag_page(page, state.get("jid", ""))
         else:
             print("ERROR: no page found and no external URL", file=sys.stderr); return
 
