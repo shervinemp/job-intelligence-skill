@@ -6,10 +6,35 @@ import json, os, sys, re, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn
-from apply.common.page_helpers import load_state, save_state, read_page, find_page, resolve_label
+from apply.common.page_helpers import load_state, save_state, read_page, find_page, resolve_label, handle_captcha, check_captcha
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 _EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
+
+
+class CircuitBreaker:
+    """Halt pipeline on 3+ consecutive identical failures."""
+    _state = {"pattern": "", "count": 0}
+
+    @classmethod
+    def record(cls, error_type):
+        if error_type == cls._state["pattern"]:
+            cls._state["count"] += 1
+        else:
+            cls._state["pattern"] = error_type
+            cls._state["count"] = 1
+        if cls._state["count"] >= 3:
+            print(f"\n*** CIRCUIT BREAKER: {cls._state['count']} consecutive '{error_type}' failures ***", file=sys.stderr)
+            print(f"  Pipeline halted. Inspect the ATS form or job, then reset state.", file=sys.stderr)
+            return True
+        return False
+
+    @classmethod
+    def reset(cls):
+        cls._state = {"pattern": "", "count": 0}
+
+
+CircuitBreaker.reset()
 
 def _match_word(needle, haystack):
     """Word-boundary match: 'phone' matches 'phone number' but NOT 'phone extension'."""
@@ -19,7 +44,7 @@ def _find_answer(label, label_norm, answers, ca, profile, required=False):
     """Find answer from --answers, common_answers, or profile.
     For common_answers: optional fields only use exact matches; required fields can use prefix matches."""
     for k, v in answers.items():
-        k_norm = re.sub(r'[^a-z0-9]+', ' ', k.lower()).strip()
+        k_norm = re.sub(r'[^a-z0-9+#]+', ' ', k.lower()).strip()
         if k_norm == label_norm or label_norm.startswith(k_norm):
             return v
     # common_answers: optional fields only use exact matches
@@ -106,6 +131,8 @@ def _handle_post_click(state, ps, page):
     error_btns = [b for b in (ps.get("buttons") or []) if "error" in b.get("text","").lower()]
     if error_btns:
         print(f"ERRORS: {json.dumps([b['text'] for b in error_btns])}", file=sys.stderr)
+        if CircuitBreaker.record("validation_error"):
+            return True
         from apply.common.page_helpers import scan_actions
         cands = scan_actions(page, ["save and continue", "next", "continue", "review", "submit"])
         print(f"CANDIDATES: {json.dumps(cands[:5])}", file=sys.stderr)
@@ -127,11 +154,11 @@ def _fill_radios(page, fields, answers, ca, jid):
         radios = [rf for rf in fields if rf.get("name") == f["name"]]
         opts = [rf["label"] for rf in radios]
         q_label = opts[0].split(" - ")[0] if " - " in opts[0] else opts[0]
-        q_norm = re.sub(r'[^a-z0-9]+', ' ', q_label.lower()).strip()
-
+        q_norm = re.sub(r'[^a-z0-9+#]+', ' ', q_label.lower()).strip()
+ 
         ans = None
         for k, v in answers.items():
-            k_norm = re.sub(r'[^a-z0-9]+', ' ', k.lower()).strip()
+            k_norm = re.sub(r'[^a-z0-9+#]+', ' ', k.lower()).strip()
             if k_norm == q_norm or q_norm.startswith(k_norm):
                 ans = v; break
         if not ans:
@@ -181,9 +208,16 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                         candidates.append((score, fn))
                 candidates.sort(key=lambda x: -x[0])
                 if candidates:
+                    pdf_path = os.path.join(results_dir, candidates[0][1])
+                    try:
+                        if os.path.getsize(pdf_path) < 512:
+                            print(f"WARN: {candidates[0][1]} is {os.path.getsize(pdf_path)} bytes — skipping empty PDF", file=sys.stderr)
+                            continue
+                    except OSError:
+                        continue
                     try:
                         fi = page.query_selector('input[type="file"][required]') or page.query_selector('input[type="file"]')
-                        if fi: fi.set_input_files(os.path.join(results_dir, candidates[0][1])); file_uploaded = True; filled += 1
+                        if fi: fi.set_input_files(pdf_path); file_uploaded = True; filled += 1
                     except: pass
             continue
 
@@ -193,7 +227,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             if current and current != "Select One" and current != "Select...":
                 continue  # already filled
             lbl = f["label"]
-            lbl_norm = re.sub(r'[^a-z0-9]+', ' ', lbl.lower()).strip()
+            lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
             ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
             if ans and f.get("id"):
                 try:
@@ -214,7 +248,12 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             continue
 
         lbl = f["label"]
-        lbl_norm = re.sub(r'[^a-z0-9]+', ' ', lbl.lower()).strip()
+        lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
+
+        # Skip pre-filled fields with valid data
+        current_val = f.get("value", "")
+        if current_val and len(current_val.strip()) > 1 and not f.get("required", False):
+            continue
 
         ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
 
@@ -289,6 +328,8 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             pm.register(page)
         else:
             print("ERROR: no page found and no external URL", file=sys.stderr); sys.exit(1)
+    if handle_captcha(page, state):
+        print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
     ps = read_page(page)
     # Guard: if this page was already filled, warn but proceed
     last_fingerprint = state.get("page_fingerprint", "")
@@ -351,6 +392,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
                 break
         if not guest_clicked:
             print("LOGIN_WALL: sign in required — login in your Chrome browser, then retry this command", file=sys.stderr)
+            CircuitBreaker.record("login_wall")
             print("NEXT: retry after login", file=sys.stderr)
             return
 
@@ -373,6 +415,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             state["page"] = ps; state["filled"] = 0; save_state(state); return
         else:
             print("WARN: no actionable buttons found — page may not be an application form", file=sys.stderr)
+            CircuitBreaker.record("no_buttons")
             print("NEXT: skip", file=sys.stderr)
             state["page"] = ps; state["filled"] = 0; save_state(state); return
 
@@ -394,7 +437,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             const lbl = c.querySelector('label[for="' + cb.id + '"]');
             if (lbl) {
                 const t = (lbl.textContent||'').toLowerCase();
-                if (t.includes('follow') && t.includes('up to date')) {
+                if (/\bfollow\b/.test(t) && /\b(updates?|company|page)\b/.test(t)) {
                     cb.checked = false; cb.dispatchEvent(new Event('change', {bubbles:true}));
                 }
             }
@@ -439,6 +482,8 @@ def cmd_next(jid, candidate=None):
             print("ERROR: no page found and no external URL", file=sys.stderr); return
 
     ps = read_page(page)
+    if handle_captcha(page, state):
+        print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
 
     from apply.common.page_helpers import scan_actions
     advance_kws = ["next", "continue", "review", "done", "submit", "submit application"]
@@ -505,6 +550,8 @@ def cmd_submit(jid, confirm=False, candidate=None):
     if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
 
     from apply.common.page_helpers import scan_actions
+    if handle_captcha(page, state):
+        print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
     submit_kws = ["submit application", "submit", "send application", "apply", "send"]
     cands = [c for c in scan_actions(page, submit_kws, _EXCLUDED_BUTTONS) if not c.get("disabled")]
 
@@ -532,11 +579,9 @@ def cmd_submit(jid, confirm=False, candidate=None):
     time.sleep(5)
 
     if not page.evaluate("() => document.querySelector('[role=\"dialog\"]')"):
-        print("STATUS: submitted", file=sys.stderr)
-        get_conn().execute("UPDATE jobs SET stage=? WHERE id=?", ("applied", jid)).connection.commit()
+        print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
     else:
-        print("STATUS: unknown (modal still open)", file=sys.stderr)
-    print("NEXT: verify", file=sys.stderr)
+        print("STATUS: unknown (modal still open)\nNEXT: verify", file=sys.stderr)
 
 def cmd_auto(jid, answers_json=None):
     state = load_state()

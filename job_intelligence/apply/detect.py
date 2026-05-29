@@ -44,6 +44,26 @@ def run(jid):
     if "linkedin.com/jobs/view" in url:
         job_id = url.split("/jobs/view/")[1].split("/")[0]
 
+        # Intercept LinkedIn GraphQL response for Easy Apply field detection
+        apply_fields = []
+        def _handle_response(response):
+            nonlocal apply_fields
+            if "jobPostingApplyFlowByJobId" in response.url and response.ok:
+                try:
+                    body = response.json()
+                    fields = body.get("data", {}).get("jobPostingApplyFlowByJobId", {}).get("questions", [])
+                    for q in fields:
+                        if isinstance(q, dict):
+                            label = q.get("title", {}).get("text", q.get("body", {}).get("text", ""))
+                            apply_fields.append({
+                                "label": label[:80],
+                                "type": q.get("type", "unknown"),
+                                "required": q.get("required", False),
+                            })
+                except Exception:
+                    pass
+        p.on("response", _handle_response)
+
         # First check the regular job page for external apply button
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(5)
@@ -85,6 +105,8 @@ def run(jid):
 
         if page_state and page_state["fieldCount"] > 0:
             print(f"TYPE: easy_apply\nPAGE: {json.dumps(page_state)}\nNEXT: act --fill")
+        elif apply_fields:
+            print(f"TYPE: easy_apply\nPAGE: {json.dumps({'fieldCount': len(apply_fields), 'fields': apply_fields})}\nNEXT: act --fill")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
             print("TYPE: easy_apply\nPAGE: {{}}\nNOTE: dialog not auto-opened\nNEXT: act --fill")
         else:

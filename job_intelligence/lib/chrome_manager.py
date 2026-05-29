@@ -7,11 +7,16 @@ On import, writes ~/.openclaw/chrome-config.json so Node.js tools (gemini.js)
 can read the same paths.
 """
 
+import atexit
 import json
 import os
+import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
+from pathlib import Path
 
 CHROME_PATH = os.environ.get(
     "CHROME_PATH",
@@ -22,14 +27,24 @@ CHROME_PROFILE = os.path.join(
 )
 CDP_PORT = int(os.environ.get("CDP_PORT", "9222"))
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
-_PW = None  # cached playwright instance
+
+_STEALTH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-infobars",
+    "--no-default-browser-check",
+    "--disable-component-update",
+    "--disable-background-timer-throttling",
+]
+_PW = None
+_PW_PID = None
 
 
 def _pw():
-    global _PW
+    global _PW, _PW_PID
     if _PW is None:
         from playwright.sync_api import sync_playwright
         _PW = sync_playwright().start()
+        _PW_PID = os.getpid()
     return _PW
 
 
@@ -43,19 +58,45 @@ def close():
         _PW = None
 
 
+def _cleanup(signum=None, frame=None):
+    close()
+    sys.exit(0 if signum is None else 1)
+
+
+atexit.register(_cleanup)
+if threading.current_thread() is threading.main_thread():
+    signal.signal(signal.SIGINT, _cleanup)
+    signal.signal(signal.SIGTERM, _cleanup)
+
+
 def is_running():
-    """Check if Chrome is running with remote debugging on CDP_PORT."""
+    """Lightweight CDP liveness check via socket — avoids full Playwright connect."""
     try:
-        pw = _pw()
-        b = pw.chromium.connect_over_cdp(CDP_URL)
-        b.close()
+        s = socket.create_connection(("127.0.0.1", CDP_PORT), timeout=2)
+        s.close()
         return True
-    except Exception:
+    except (OSError, socket.timeout):
         return False
+
+
+def _find_free_port():
+    port = CDP_PORT
+    for _ in range(10):
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=1)
+            s.close()
+            port += 1
+        except (OSError, socket.timeout):
+            return port
+    return CDP_PORT
 
 
 def start():
     """Start Chrome with remote debugging on CDP_PORT."""
+    port = _find_free_port()
+    global CDP_PORT, CDP_URL
+    CDP_PORT = port
+    CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
     if is_running():
         return True
     os.makedirs(CHROME_PROFILE, exist_ok=True)
@@ -64,7 +105,7 @@ def start():
          f"--user-data-dir={CHROME_PROFILE}",
          f"--remote-debugging-port={CDP_PORT}",
          "--no-first-run", "--disable-session-crashed-bubble",
-         "--disable-restore-session-state"],
+         "--disable-restore-session-state"] + _STEALTH_ARGS,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     for _ in range(30):

@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,11 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 _SKILL_DIR = os.path.dirname(_LIB_DIR)
 _WORKSPACE_ROOT = os.path.abspath(os.path.join(_SKILL_DIR, "..", ".."))
 GEMINI_JS = os.path.join(_WORKSPACE_ROOT, "skills", "gemini-browser", "gemini.js")
+
+_NODE_BIN = shutil.which("node")
+if not _NODE_BIN:
+    print("ERROR: Node.js not found in PATH. Install Node.js 20+ and try again.", file=sys.stderr)
+    sys.exit(1)
 
 # Auto-detect node_modules: check workspace root first, then up-tree
 _NODE_MODULES = os.path.join(_WORKSPACE_ROOT, "node_modules")
@@ -26,47 +32,64 @@ def call_gemini_node(*args, timeout_seconds=600, gem=None, **kwargs):
     Args:
         gem: gem alias or raw ID (resolved via gems.json, None = use .env default)
     Returns (success, output_or_error)."""
-    output_file = os.path.join(
-        tempfile.gettempdir(), f"gemini_response_{int(time.time())}.txt"
-    )
+    with tempfile.NamedTemporaryFile(
+        mode="w", prefix="gemini_resp_", suffix=".txt", delete=False,
+        encoding="utf-8"
+    ) as tf:
+        output_file = tf.name
+
     kwargs["output"] = output_file
 
     if len(args) == 1 and isinstance(args[0], (list, tuple)):
         arg_list = list(args[0])
     else:
         arg_list = list(args)
-    cmd = ["node", GEMINI_JS] + arg_list
+    cmd = [_NODE_BIN, GEMINI_JS] + arg_list
     if gem:
         cmd += ["--gem", gem]
     cmd += [s for k, v in kwargs.items() for s in (f"--{k}", v)]
     gemini_dir = os.path.dirname(GEMINI_JS)
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout_seconds, cwd=gemini_dir
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=gemini_dir
         )
-        if result.returncode != 0:
-            if output_file and os.path.exists(output_file):
+        stdout, stderr = proc.communicate(timeout=timeout_seconds)
+        stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
+        stderr_str = stderr.decode("utf-8", errors="replace") if stderr else ""
+
+        if proc.returncode != 0:
+            if os.path.exists(output_file):
                 with open(output_file, "r", encoding="utf-8") as f:
                     content = f.read().strip()
                 if len(content) > 50:
                     return True, content
-            stderr = result.stderr.strip()
             try:
-                err = json.loads(stderr)
+                err = json.loads(stderr_str)
                 if err.get("error") == "RATE_LIMIT":
                     reset = err.get("resetsAt", "unknown")
                     return False, f"RATE_LIMIT:{reset}"
             except (json.JSONDecodeError, AttributeError):
                 pass
-            return False, stderr or f"Exit code {result.returncode}"
-        return True, result.stdout
+            return False, stderr_str.strip() or f"Exit code {proc.returncode}"
+        return True, stdout_str.strip()
     except subprocess.TimeoutExpired:
-        if output_file and os.path.exists(output_file):
+        proc.kill()
+        proc.wait()
+        if os.path.exists(output_file):
             with open(output_file, "r", encoding="utf-8") as f:
                 content = f.read().strip()
             if len(content) > 50:
                 return True, content
         return False, "TIMEOUT"
+    except Exception as e:
+        return False, str(e)[:200]
+    finally:
+        try:
+            if os.path.exists(output_file):
+                os.remove(output_file)
+        except Exception:
+            pass
 
 
 def list_gems():
