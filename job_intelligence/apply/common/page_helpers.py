@@ -1,8 +1,67 @@
 """apply/common/page_helpers.py — Shared page reading, state persistence, page finding."""
-import json, os, re, time
+import json, os, random, re, time
+import webbrowser
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
+
+_PAGE_JID_MAP = {}  # page object id -> jid mapping (no DOM mutation)
+
+_CAPTCHA_SIGNALS = [
+    "recaptcha", "hcaptcha", "cf-turnstile", "turnstile",
+    "cloudflare", "challenge-platform", "g-recaptcha",
+    "data-sitekey", "data-callback",
+]
+
+
+def check_captcha(page):
+    """Check if the current page has a CAPTCHA challenge. Returns True if detected."""
+    try:
+        text = (page.evaluate("() => document.body.innerText") or "").lower()
+        captcha_keywords = ["verify you are human", "security check", "captcha",
+                            "i'm not a robot", "complete the security check"]
+        for kw in captcha_keywords:
+            if kw in text:
+                return True
+        html = page.evaluate("() => document.documentElement.innerHTML")
+        for signal in _CAPTCHA_SIGNALS:
+            if signal in html.lower():
+                return True
+        result = page.evaluate("""() => {
+            const iframes = document.querySelectorAll('iframe');
+            for (const f of iframes) {
+                const src = (f.src || '').toLowerCase();
+                if (src.includes('recaptcha') || src.includes('hcaptcha') ||
+                    src.includes('turnstile') || src.includes('challenge')) return true;
+            }
+            return false;
+        }""")
+        if result:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def handle_captcha(page, state):
+    """If CAPTCHA detected, notify user and pause."""
+    if not check_captcha(page):
+        return False
+    url = page.url[:120]
+    print(f"\n*** CAPTCHA DETECTED ***", file=sys.stderr)
+    print(f"  URL: {url}", file=sys.stderr)
+    print(f"  Solve it in your Chrome browser, then press Enter to continue", file=sys.stderr)
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+    input()
+    print(f"  Resuming...", file=sys.stderr)
+    return True
 
 def load_state():
     with open(STATE_PATH) as f:
@@ -17,17 +76,26 @@ def read_page(p):
     """Read page content including fields, buttons, page type hints.
     Queries document-level (works for both modals and external ATS)."""
     result = p.evaluate("""() => {
-        const inputs = document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
-        const dropdowns = document.querySelectorAll('button[aria-haspopup="listbox"]');
-        const btns = document.querySelectorAll('button');
+        const dialog = document.querySelector('[role="dialog"]');
+        const root = dialog && dialog.contains(document.activeElement) ? dialog : document;
+        const inputs = root.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
+        const dropdowns = root.querySelectorAll('button[aria-haspopup="listbox"]');
+        const btns = root.querySelectorAll('button');
         const fields = Array.from(inputs).map(el => {
-            const lbl = document.querySelector('label[for="' + el.id + '"]');
-            const parentLabel = el.closest('label');
-            const parent = el.closest('div,fieldset,section,li,form');
-            const plbl = parent ? parent.querySelector('label, legend, strong, span') : null;
-            let label = (lbl ? lbl.textContent.trim() : '') || el.placeholder || el.getAttribute('aria-label') || '';
-            if (!label && parentLabel) label = parentLabel.textContent.trim();
-            if (!label && plbl) label = plbl.textContent.trim();
+            let label = '';
+            if (el.getAttribute('aria-labelledby')) {
+                const ref = document.getElementById(el.getAttribute('aria-labelledby'));
+                if (ref) label = ref.textContent.trim();
+            }
+            if (!label && el.getAttribute('aria-label')) label = el.getAttribute('aria-label');
+            if (!label) {
+                const lbl = root.querySelector('label[for="' + el.id + '"]');
+                if (lbl) label = lbl.textContent.trim();
+            }
+            if (!label) {
+                const parentLabel = el.closest('label');
+                if (parentLabel) label = parentLabel.textContent.trim();
+            }
             return {
                 tag: el.tagName, type: el.getAttribute('type') || '',
                 id: el.id, name: el.getAttribute('name') || '',
@@ -68,8 +136,8 @@ def read_page(p):
             fieldCount: fields.length,
             fields: fields.slice(0, 35),
             pageType: pageType,
-            hasFileInput: document.querySelectorAll('input[type="file"]').length > 0,
-            hasRequiredFile: document.querySelectorAll('input[type="file"][required]').length > 0,
+            hasFileInput: root.querySelectorAll('input[type="file"]').length > 0,
+            hasRequiredFile: root.querySelectorAll('input[type="file"][required]').length > 0,
             buttons: Array.from(btns).filter(b => b.offsetParent !== null).map(b => ({
                 text: (b.textContent || '').trim().slice(0, 30),
                 disabled: b.disabled
@@ -79,18 +147,14 @@ def read_page(p):
     return result
 
 def find_page(ctx, state):
-    """Find the best matching page by JID tag, then URL score."""
+    """Find the best matching page by JID mapping, then URL score."""
     jid = state.get("jid", "")
     ext = state.get("external_url", "").rstrip("/")
 
-    # First pass: find by JID tag on body
+    # First pass: find by JID mapping (no DOM mutation)
     for p in ctx.pages:
-        try:
-            tag = p.evaluate("() => document.body.getAttribute('data-job-id') || ''")
-            if tag == jid:
-                return p
-        except:
-            pass
+        if _PAGE_JID_MAP.get(id(p)) == jid:
+            return p
 
     # Second pass: score by URL match quality
     if ext:
@@ -126,11 +190,8 @@ def find_page(ctx, state):
     return None
 
 def tag_page(page, jid):
-    """Tag a page with a job ID for reliable find_page lookups."""
-    try:
-        page.evaluate(f"(jid) => document.body.setAttribute('data-job-id', jid)", jid)
-    except:
-        pass
+    """Tag a page with a job ID for reliable find_page lookups. No DOM mutation."""
+    _PAGE_JID_MAP[id(page)] = jid
 
 def read_and_save(p, state):
     """Read page state, save to state file, return page dict."""
@@ -141,13 +202,33 @@ def read_and_save(p, state):
 
 def resolve_label(label, profile):
     """Resolve a label to a profile value. Name + email only. Returns None if uncertain."""
-    norm = re.sub(r'[^a-z0-9]+', ' ', label.lower()).strip()
+    norm = re.sub(r'[^a-z0-9+#]+', ' ', label.lower()).strip()
     if norm in ("full name"):
         fn, ln = profile.get("first_name", ""), profile.get("last_name", "")
         return f"{fn} {ln}" if fn and ln else fn or ln or None
     if norm in ("email", "email address"):
         return profile.get("email")
     return None
+
+def retry_with_backoff(fn, max_retries=2, base_delay=2, is_rate_limit=None):
+    """Retry fn on rate-limit/transient failure with exponential backoff + jitter."""
+    for attempt in range(max_retries + 1):
+        try:
+            result = fn()
+            if is_rate_limit and is_rate_limit(result):
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt) + random.random()
+                    print(f"  Rate limited, retrying in {delay:.1f}s...", file=sys.stderr)
+                    time.sleep(delay)
+                    continue
+            return result
+        except Exception as e:
+            if attempt < max_retries:
+                delay = base_delay * (2 ** attempt) + random.random()
+                time.sleep(delay)
+                continue
+            raise
+
 
 def scan_actions(page, keywords, exclude=None):
     """Score all clickable elements (buttons + links) against keyword list.

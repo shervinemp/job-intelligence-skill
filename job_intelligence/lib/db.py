@@ -90,7 +90,7 @@ def _create_v3_tables():
         CREATE TABLE IF NOT EXISTS job_documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             doc_type TEXT NOT NULL CHECK(doc_type IN ('description','application')),
-            job_id TEXT NOT NULL REFERENCES jobs(id),
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
             filename TEXT NOT NULL DEFAULT '',
             content TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -110,8 +110,8 @@ def _create_v3_tables():
         );
         CREATE TABLE IF NOT EXISTS contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id TEXT REFERENCES jobs(id),
-            company_id TEXT REFERENCES companies(id),
+            job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+            company_id TEXT REFERENCES companies(id) ON DELETE CASCADE,
             name TEXT NOT NULL DEFAULT '',
             role TEXT DEFAULT '',
             email TEXT DEFAULT '',
@@ -129,7 +129,7 @@ def _create_v3_tables():
         );
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id TEXT NOT NULL REFERENCES jobs(id),
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
             event_type TEXT NOT NULL,
             title TEXT NOT NULL DEFAULT '',
             description TEXT DEFAULT '',
@@ -247,15 +247,15 @@ def save_state(state):
         )
     conn.commit()
 def _normalize_url(url):
-    """Normalize URL for consistent hashing. Strips tracking params, trailing slashes."""
+    """Normalize URL for consistent hashing. Strips ad-tracking params only, preserves routing params."""
     if not url:
         return url
     import urllib.parse
     try:
         parsed = urllib.parse.urlparse(url)
         tracked = {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-                   'fbclid', 'gclid', 'ref', 'source', 'from', 'trk', 'lipi', 'email_id',
-                   'eid', 'refid', 'tk', 'co', 'hl', 'pos', 'ao', 's', 'guid', 'src', 'gh_src'}
+                   'fbclid', 'gclid', 'ref', 'source', 'trk', 'lipi', 'email_id',
+                   'eid', 'refid', 'pos', 'ao', 's', 'guid', 'src', 'gh_src'}
         qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
         clean_qs = {k: v for k, v in qs.items() if k.lower() not in tracked}
         clean_query = urllib.parse.urlencode(clean_qs, doseq=True) if clean_qs else ""
@@ -321,6 +321,26 @@ def add_job(job_data):
         except Exception:
             pass
     return jid
+
+
+def record_failure(jid, reason, detail=""):
+    """Record a structured failure reason for a job."""
+    conn = get_conn()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "UPDATE jobs SET stage='failed', error=?, updated_at=? WHERE id=?",
+        (f"{reason}: {detail}".strip()[:500], now, jid)
+    )
+    conn.commit()
+    event_add(jid, "failure", f"Failed: {reason}", description=detail)
+
+
+def failure_stats():
+    """Aggregate failure reasons across failed jobs."""
+    rows = get_conn().execute(
+        "SELECT error, COUNT(*) as cnt FROM jobs WHERE stage='failed' AND error IS NOT NULL AND error != '' GROUP BY error ORDER BY cnt DESC LIMIT 20"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def advance_job(jid, new_stage, **updates):

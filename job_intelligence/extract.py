@@ -19,7 +19,7 @@ _SKIP_DOMAINS = {
     "accounts.google.com", "github.com", "google.com",
     "facebook.com", "twitter.com", "x.com", "instagram.com",
     "youtube.com", "unsubscribe", "user-subscription",
-    "cts.indeed.com", "ca.indeed.com/pagead", "engage.indeed.com",
+    "ca.indeed.com/notifications", "ca.indeed.com/?", "messages.indeed.com", "engage.indeed.com",
     "jobright.ai", "searchalert.action.azurecomm.net",
     "workinottawa.investottawa.ca/privacy-policy",
 }

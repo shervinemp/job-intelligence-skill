@@ -89,13 +89,25 @@ def _pw_fetch(url, timeout=30):
             print(f"WARN: page.close failed ({e})", file=sys.stderr)
 
 
-def _fetch_from_url(url, use_playwright=False):
-    if use_playwright:
-        ok, text, page_title = _pw_fetch(url)
+def _retry_fetch(url, use_playwright):
+    import random, time
+    for attempt in range(2):
+        if use_playwright:
+            ok, text, page_title = _pw_fetch(url)
+        else:
+            ok, text, page_title = _curl_fetch(url)
         if ok:
             return True, text, page_title
-        if text == "auth_wall":
-            return False, "auth_wall", None
+        if text in ("auth_wall", "Playwright not installed"):
+            return False, text, None
+        if attempt < 1:
+            delay = 2 + random.random()
+            print(f"  Fetch failed ({text[:40]}), retry in {delay:.1f}s...", file=sys.stderr)
+            time.sleep(delay)
+    return False, text, page_title
+
+
+def _curl_fetch(url):
     try:
         r = subprocess.run(
             ["curl", "-s", "-L", "--max-time", "30",
@@ -105,7 +117,6 @@ def _fetch_from_url(url, use_playwright=False):
         out = r.stdout
         if r.returncode == 0 and out and len(out) > 100:
             text = out.decode('utf-8', errors='replace')
-            # Extract title from HTML, decode entities
             title_match = re.search(r'<title[^>]*>(.*?)</title>', text, re.DOTALL)
             page_title = html.unescape(title_match.group(1).strip()[:200]) if title_match else ""
             text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
@@ -118,7 +129,19 @@ def _fetch_from_url(url, use_playwright=False):
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return False, "Fetch failed", None
-    return False, "Fetch failed"
+
+
+def _fetch_from_url(url, use_playwright=False):
+    if use_playwright:
+        ok, text, page_title = _retry_fetch(url, use_playwright=True)
+        if ok:
+            return True, text, page_title
+        if text == "auth_wall":
+            return False, "auth_wall", None
+    ok, text, page_title = _retry_fetch(url, use_playwright=False)
+    if ok:
+        return True, text, page_title
+    return False, text or "Fetch failed", None
 
 
 def save_description(jid, text):
@@ -134,10 +157,7 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
     stage = "described" if refresh else "extracted"
     pending = [(jid, e) for jid, e in state["jobs"].items()
                if e.get("stage") == stage and (force or not desc_exists(jid))]
-    # Skip known-broken trackers
-    pending = [(jid, e) for jid, e in pending
-               if "cts.indeed.com" not in e.get("url", "")
-               and "ca.indeed.com/pagead" not in e.get("url", "")]
+
     if count:
         pending = pending[:count]
     if not pending:
@@ -342,16 +362,6 @@ def cmd_open(*jids):
         print("Opened. Close tab when done.", file=sys.stderr)
     else:
         print("Could not open Chrome.", file=sys.stderr)
-
-
-def _parse_count():
-    if "--count" in sys.argv:
-        i = sys.argv.index("--count")
-        if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
-            print("Warning: --count requires a number, defaulting to 3", file=sys.stderr)
-            return 3
-        return int(sys.argv[i + 1])
-    return 3
 
 
 def main():
