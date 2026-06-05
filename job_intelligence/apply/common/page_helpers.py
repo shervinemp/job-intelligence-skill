@@ -74,76 +74,19 @@ def save_state(state):
 
 def read_page(p):
     """Read page content including fields, buttons, page type hints.
-    Queries document-level (works for both modals and external ATS)."""
-    result = p.evaluate("""() => {
-        const dialog = document.querySelector('[role="dialog"]');
-        const root = dialog && dialog.contains(document.activeElement) ? dialog : document;
-        const inputs = root.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
-        const dropdowns = root.querySelectorAll('button[aria-haspopup="listbox"]');
-        const btns = root.querySelectorAll('button');
-        const fields = Array.from(inputs).map(el => {
-            let label = '';
-            if (el.getAttribute('aria-labelledby')) {
-                const ref = document.getElementById(el.getAttribute('aria-labelledby'));
-                if (ref) label = ref.textContent.trim();
-            }
-            if (!label && el.getAttribute('aria-label')) label = el.getAttribute('aria-label');
-            if (!label) {
-                const lbl = root.querySelector('label[for="' + el.id + '"]');
-                if (lbl) label = lbl.textContent.trim();
-            }
-            if (!label) {
-                const parentLabel = el.closest('label');
-                if (parentLabel) label = parentLabel.textContent.trim();
-            }
-            return {
-                tag: el.tagName, type: el.getAttribute('type') || '',
-                id: el.id, name: el.getAttribute('name') || '',
-                label: (label || '').replace(/\\s+/g,' ').trim().slice(0, 80),
-                placeholder: el.placeholder || '',
-                data_automation_id: el.getAttribute('data-automation-id') || '',
-                required: !!el.required, value: el.value || '',
-                checked: el.type === 'radio' ? el.checked : null,
-                options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0,15) : [],
-            };
-        });
-        // Custom dropdown buttons (button[aria-haspopup="listbox"]) — used by Workday, Lever, etc.
-        Array.from(dropdowns).forEach(btn => {
-            // Only process buttons inside formField containers (not nav-level controls)
-            const parent = btn.closest('[data-automation-id^="formField"]');
-            if (!parent) return;
-            const label = parent.querySelector('label, legend, span');
-            const lbl = label ? label.textContent.trim().replace(/\\s+/g,' ').slice(0, 80) : '';
-            const current = (btn.textContent || '').trim().slice(0, 30);
-            fields.push({
-                tag: 'DROPDOWN', type: 'custom',
-                id: btn.id, name: btn.getAttribute('name') || '',
-                label: lbl, required: (lbl || '').includes('*'),
-                value: current, checked: null,
-                options: [],
-            });
-        });
-        const text = (document.body.innerText || '').toLowerCase();
-        const hasFormWords = text.includes('submit') || text.includes('apply') || text.includes('application');
-        const hasPassword = document.querySelector('input[type="password"]') !== null;
-        const isShort = (document.body.innerText || '').length < 500;
-        let pageType = 'unknown';
-        if (fields.length > 0) pageType = 'form';
-        else if (hasPassword && (text.includes('sign in') || text.includes('log in'))) pageType = 'login_wall';
-        else if (isShort && text.includes('sign in') && !text.includes('apply')) pageType = 'login_wall';
-        else if (hasFormWords) pageType = 'maybe_form';
-        return {
-            fieldCount: fields.length,
-            fields: fields.slice(0, 35),
-            pageType: pageType,
-            hasFileInput: root.querySelectorAll('input[type="file"]').length > 0,
-            hasRequiredFile: root.querySelectorAll('input[type="file"][required]').length > 0,
-            buttons: Array.from(btns).filter(b => b.offsetParent !== null).map(b => ({
-                text: (b.textContent || '').trim().slice(0, 30),
-                disabled: b.disabled
-            })),
-        };
-    }""")
+    Delegates to the canonical field_reader for consistency."""
+    from apply.common.field_reader import read_fields as _rf
+    result = _rf(p, scope="document")
+    # Auto-detect dialog scope: if activeElement is inside a dialog, re-read with dialog scope
+    try:
+        in_dialog = p.evaluate("""() => {
+            const d = document.querySelector('[role="dialog"]');
+            return d && d.contains(document.activeElement) ? true : false;
+        }""")
+        if in_dialog:
+            result = _rf(p, scope="dialog")
+    except Exception:
+        pass
     return result
 
 def find_page(ctx, state):

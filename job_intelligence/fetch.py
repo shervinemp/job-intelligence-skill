@@ -55,10 +55,11 @@ def _pw_fetch(url, timeout=30):
             text = fetch_description(url, page)
             if text and len(text.strip()) > 80:
                 page_title = (page.title() or "").strip()
-                return True, text.strip(), page_title
+                raw_html = page.evaluate("() => document.documentElement.outerHTML")
+                return True, text.strip(), page_title, raw_html
             if _detect_auth_wall(text):
-                return False, "auth_wall", None
-            return False, f"Short text ({len(text or '')} chars)", None
+                return False, "auth_wall", None, None
+            return False, f"Short text ({len(text or '')} chars)", None, None
         else:
             with sync_playwright() as spw:
                 ctx = spw.chromium.launch_persistent_context(BROWSER_PROFILE, headless=True, no_viewport=True)
@@ -74,12 +75,13 @@ def _pw_fetch(url, timeout=30):
                 text = fetch_description(url, page)
                 if text and len(text.strip()) > 80:
                     page_title = (page.title() or "").strip()
-                    return True, text.strip(), page_title
+                    raw_html = page.evaluate("() => document.documentElement.outerHTML")
+                    return True, text.strip(), page_title, raw_html
                 if _detect_auth_wall(text):
-                    return False, "auth_wall", None
-                return False, f"Short text ({len(text or '')} chars)", None
+                    return False, "auth_wall", None, None
+                return False, f"Short text ({len(text or '')} chars)", None, None
     except Exception as e:
-        return False, str(e)[:120], None
+        return False, str(e)[:120], None, None
     finally:
         try:
             if page:
@@ -94,17 +96,35 @@ def _retry_fetch(url, use_playwright):
     for attempt in range(2):
         if use_playwright:
             ok, text, page_title = _pw_fetch(url)
+            raw_html = None
         else:
-            ok, text, page_title = _curl_fetch(url)
+            ok, text, page_title, raw_html = _curl_fetch(url)
         if ok:
-            return True, text, page_title
+            return True, text, page_title, raw_html
         if text in ("auth_wall", "Playwright not installed"):
-            return False, text, None
+            return False, text, None, None
         if attempt < 1:
             delay = 2 + random.random()
             print(f"  Fetch failed ({text[:40]}), retry in {delay:.1f}s...", file=sys.stderr)
             time.sleep(delay)
-    return False, text, page_title
+    return False, text, page_title, None
+
+
+def _enrich_from_ld(raw_html, entry):
+    """Extract JSON-LD JobPosting data and backfill empty fields in entry."""
+    from lib.extract_structured import extract_job_postings
+    jobs = extract_job_postings(raw_html)
+    if not jobs:
+        return
+    job = jobs[0]
+    if not entry.get("title") and job.get("title"):
+        entry["title"] = job["title"]
+    if not entry.get("company") and job.get("company"):
+        entry["company"] = job["company"]
+    if not entry.get("location") and job.get("location"):
+        entry["location"] = job["location"]
+    if not entry.get("salary") and job.get("salary"):
+        entry["salary"] = job["salary"]
 
 
 def _curl_fetch(url):
@@ -116,32 +136,32 @@ def _curl_fetch(url):
         )
         out = r.stdout
         if r.returncode == 0 and out and len(out) > 100:
-            text = out.decode('utf-8', errors='replace')
-            title_match = re.search(r'<title[^>]*>(.*?)</title>', text, re.DOTALL)
+            raw_html = out.decode('utf-8', errors='replace')
+            title_match = re.search(r'<title[^>]*>(.*?)</title>', raw_html, re.DOTALL)
             page_title = html.unescape(title_match.group(1).strip()[:200]) if title_match else ""
-            text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
+            text = re.sub(r'<script[^>]*>.*?</script>', '', raw_html, flags=re.DOTALL)
             text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
             text = re.sub(r'<[^>]+>', '\n', text)
             text = re.sub(r'\n\s*\n', '\n\n', text)
             text = re.sub(r'\s{3,}', '  ', text).strip()
             if len(text) > 100:
-                return True, text, page_title
+                return True, text, page_title, raw_html
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
-    return False, "Fetch failed", None
+    return False, "Fetch failed", None, None
 
 
 def _fetch_from_url(url, use_playwright=False):
     if use_playwright:
-        ok, text, page_title = _retry_fetch(url, use_playwright=True)
+        ok, text, page_title, raw_html = _retry_fetch(url, use_playwright=True)
         if ok:
-            return True, text, page_title
+            return True, text, page_title, raw_html
         if text == "auth_wall":
-            return False, "auth_wall", None
-    ok, text, page_title = _retry_fetch(url, use_playwright=False)
+            return False, "auth_wall", None, None
+    ok, text, page_title, raw_html = _retry_fetch(url, use_playwright=False)
     if ok:
-        return True, text, page_title
-    return False, text or "Fetch failed", None
+        return True, text, page_title, raw_html
+    return False, text or "Fetch failed", None, None
 
 
 def save_description(jid, text):
@@ -169,15 +189,38 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
         title = entry.get("title", "")
         company = entry.get("company", "")
         url = entry.get("url", "")
-        ok, result, page_title = _fetch_from_url(url, use_playwright=use_playwright)
+        ok, result, page_title, raw_html = _fetch_from_url(url, use_playwright=use_playwright)
         if ok:
             save_description(jid, result)
-            # Save page title if available (and current title is empty)
-            if page_title and not entry.get("title"):
-                from lib.db import get_conn
-                get_conn().execute("UPDATE jobs SET title=? WHERE id=?", (page_title[:200], jid))
-                get_conn().commit()
-                entry["title"] = page_title[:200]
+            conn = get_conn()
+            need_title = not entry.get("title")
+            need_company = not entry.get("company")
+            need_location = not entry.get("location")
+            need_salary = not entry.get("salary")
+            # Enrich from JSON-LD structured data (only backfill empty fields)
+            if raw_html:
+                _enrich_from_ld(raw_html, entry)
+            # Build updates for any newly-filled fields
+            sets, vals = [], []
+            if page_title and need_title:
+                sets.append("title=?")
+                vals.append(page_title[:200])
+            elif entry.get("title") and need_title:
+                sets.append("title=?")
+                vals.append(entry["title"])
+            if entry.get("company") and need_company:
+                sets.append("company=?")
+                vals.append(entry["company"])
+            if entry.get("location") and need_location:
+                sets.append("location=?")
+                vals.append(entry["location"])
+            if entry.get("salary") and need_salary:
+                sets.append("salary=?")
+                vals.append(entry["salary"])
+            if sets:
+                vals.append(jid)
+                conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
+                conn.commit()
             limit = 2000 if verbose else 500
             snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
             print(f"IS THIS A JOB POSTING? (admit/reject)", file=sys.stderr)

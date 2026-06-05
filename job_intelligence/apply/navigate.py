@@ -24,15 +24,34 @@ def run(jid):
 
     external_url = p.evaluate("""() => {
         const anchors = document.querySelectorAll('a[href]');
+        const hasApplyIntent = (s) => {
+            const t = (s || '').toLowerCase();
+            return t.includes('on company website') || t.includes('company site')
+                || /apply\\s*(on|at|through|via|externally)/.test(t);
+        };
+        // 1. Anchor wrapping a button with external-apply intent
         for (const a of anchors) {
             const btn = a.querySelector('button');
             if (!btn) continue;
-            const aria = (btn.getAttribute('aria-label') || '');
-            if (aria.includes('on company website') && btn.offsetParent !== null) return a.href;
+            const aria = btn.getAttribute('aria-label') || '';
+            const text = (btn.textContent || '').trim();
+            if ((hasApplyIntent(aria) || hasApplyIntent(text)) && btn.offsetParent !== null)
+                return a.href;
         }
+        // 2. Anchor with external-apply aria-label
         for (const a of anchors) {
-            if ((a.getAttribute('aria-label')||'').includes('on company website')) return a.href;
-            if ((a.href||'').includes('linkedin.com/safety/go/')) return a.href;
+            const aria = a.getAttribute('aria-label') || '';
+            const text = (a.textContent || '').trim();
+            const href = a.href || '';
+            if (hasApplyIntent(aria) || hasApplyIntent(text)) return href;
+            if (href.includes('linkedin.com/safety/go/')) return href;
+        }
+        // 3. Bare button with external-apply intent (no wrapping anchor)
+        const buttons = document.querySelectorAll('button');
+        for (const b of buttons) {
+            const aria = b.getAttribute('aria-label') || '';
+            const text = (b.textContent || '').trim();
+            if (hasApplyIntent(aria) || hasApplyIntent(text)) return b.getAttribute('formaction') || '';
         }
         return null;
     }""")

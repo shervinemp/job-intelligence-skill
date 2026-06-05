@@ -1,0 +1,396 @@
+"""inspector.py — Page analysis engine with 7-depth probe cascade.
+
+Probe strategies:
+    0: Standard DOM (querySelectorAll)
+    1: Dialog-scoped
+    2: Iframe piercing (same-origin)
+    3: Shadow DOM (Playwright locator)
+    4: Lazy-load trigger (click + MutationObserver)
+    5: Custom widget scan (registry hints)
+    6: Raw HTML scan (probe --deep only)
+"""
+
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+
+from apply.common.field_reader import read_fields, count_fields
+
+SNAPSHOTS_DIR = Path(os.path.expanduser("~")) / ".openclaw" / "learnings" / "probe_failures"
+SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+class ProbeResult:
+    """Result from a single or cascaded probe."""
+
+    def __init__(self, fields=None, buttons=None, strategy="none", field_count=0,
+                 page_type="unknown", has_file_input=False, has_required_file=False,
+                 url="", iframe_srcs=None, error=None):
+        self.fields = fields or []
+        self.buttons = buttons or []
+        self.strategy = strategy
+        self.field_count = field_count or len(self.fields)
+        self.page_type = page_type
+        self.has_file_input = has_file_input
+        self.has_required_file = has_required_file
+        self.url = url
+        self.iframe_srcs = iframe_srcs or []
+        self.error = error
+
+    def success(self):
+        return self.field_count > 0 or self.error is None
+
+    def to_dict(self):
+        return {
+            "fieldCount": self.field_count,
+            "fields": self.fields[:5],  # preview only
+            "buttons": self.buttons[:5],
+            "strategy": self.strategy,
+            "pageType": self.page_type,
+            "hasFileInput": self.has_file_input,
+            "hasRequiredFile": self.has_required_file,
+            "url": self.url,
+            "iframe_srcs": self.iframe_srcs,
+        }
+
+
+def _snapshot_dom(page, jid=None):
+    """Save full DOM HTML and metadata for debugging. Keeps last 20 snapshots."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    jid_part = f"_{jid}" if jid else ""
+    prefix = f"{ts}{jid_part}"
+
+    try:
+        html = page.evaluate("() => document.documentElement.outerHTML")
+        html_path = SNAPSHOTS_DIR / f"{prefix}_dom.html"
+        html_path.write_text(html, encoding="utf-8")
+    except Exception:
+        html_path = None
+
+    try:
+        info_path = SNAPSHOTS_DIR / f"{prefix}_probe.json"
+        info_path.write_text(json.dumps({
+            "url": page.url,
+            "title": page.title(),
+            "timestamp": ts,
+        }, indent=2))
+    except Exception:
+        info_path = None
+
+    # Retention: keep last 20 snapshots, delete oldest
+    try:
+        snapshots = sorted(SNAPSHOTS_DIR.glob("*_dom.html"))
+        while len(snapshots) > 20:
+            oldest = snapshots.pop(0)
+            oldest.unlink(missing_ok=True)
+            # Also remove corresponding .json
+            json_oldest = oldest.with_suffix(".json").with_stem(
+                oldest.stem.replace("_dom", "_probe")
+            )
+            json_oldest.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    return str(html_path) if html_path else None
+
+
+def _probe_standard(page):
+    """Depth 0: Standard DOM querySelectorAll over entire document."""
+    result = read_fields(page, scope="document")
+    return ProbeResult(
+        fields=result["fields"],
+        buttons=result["buttons"],
+        strategy="standard",
+        field_count=result["fieldCount"],
+        page_type=result["pageType"],
+        has_file_input=result["hasFileInput"],
+        has_required_file=result["hasRequiredFile"],
+        url=result["url"],
+    )
+
+
+def _probe_dialog(page):
+    """Depth 1: Dialog-scoped — looks within [role="dialog"]."""
+    result = read_fields(page, scope="dialog")
+    return ProbeResult(
+        fields=result["fields"],
+        buttons=result["buttons"],
+        strategy="dialog",
+        field_count=result["fieldCount"],
+        page_type=result.get("pageType", "form"),
+        has_file_input=result["hasFileInput"],
+        has_required_file=result["hasRequiredFile"],
+        url=result["url"],
+    )
+
+
+def _probe_iframes(page):
+    """Depth 2: Probe same-origin iframes recursively."""
+    all_fields = []
+    all_buttons = []
+    iframe_srcs = []
+    field_count = 0
+
+    try:
+        frames = page.frames
+        for frame in frames:
+            if frame == page.main_frame:
+                continue
+            try:
+                result = frame.evaluate("""() => {
+                    const inputs = document.querySelectorAll(
+                        'input:not([type=hidden]):not([type=submit]), select, textarea'
+                    );
+                    const btns = document.querySelectorAll('button');
+                    return {
+                        fields: Array.from(inputs).length,
+                        buttons: Array.from(btns).filter(b => b.offsetParent).length,
+                    };
+                }""")
+                if result and result.get("fields", 0) > 0:
+                    field_count += result["fields"]
+                    all_buttons.extend([{"text": "?"}] * result.get("buttons", 0))
+                    iframe_srcs.append(frame.url)
+            except Exception:
+                pass  # cross-origin iframe — can't access
+    except Exception:
+        pass
+
+    if field_count == 0:
+        # Cross-origin detection: extract iframe src attributes
+        try:
+            srcs = page.evaluate("""() => {
+                return Array.from(document.querySelectorAll('iframe'))
+                    .map(f => f.src || f.getAttribute('data-src') || '')
+                    .filter(Boolean);
+            }""")
+            iframe_srcs.extend(srcs)
+        except Exception:
+            pass
+
+    return ProbeResult(
+        fields=all_fields,
+        buttons=all_buttons,
+        strategy="iframe",
+        field_count=field_count,
+        page_type="form" if field_count > 0 else "unknown",
+        url=page.url,
+        iframe_srcs=iframe_srcs,
+    )
+
+
+def _probe_shadow_dom(page):
+    """Depth 3: Attempt to find fields inside shadow roots via Playwright locators."""
+    field_count = 0
+    try:
+        field_count = page.evaluate("""() => {
+            let count = 0;
+            function walk(root) {
+                if (!root) return;
+                const hosts = root.querySelectorAll('*');
+                for (const el of hosts) {
+                    if (el.shadowRoot) {
+                        const inputs = el.shadowRoot.querySelectorAll(
+                            'input:not([type=hidden]):not([type=submit]), select, textarea'
+                        );
+                        count += inputs.length;
+                        walk(el.shadowRoot);
+                    }
+                }
+            }
+            walk(document);
+            return count;
+        }""")
+    except Exception:
+        pass
+
+    return ProbeResult(
+        strategy="shadow_dom",
+        field_count=field_count,
+        page_type="form" if field_count > 0 else "unknown",
+        url=page.url,
+    )
+
+
+def _probe_lazy_load(page):
+    """Depth 4: Click visible 'Apply' buttons and watch for new fields via MutationObserver.
+
+    Only fires when earlier depths found nothing and visible Apply buttons exist.
+    """
+    has_apply_button = page.evaluate("""() => {
+        const btns = document.querySelectorAll('button, a');
+        for (const b of btns) {
+            if (b.offsetParent === null) continue;
+            const t = (b.textContent || '').toLowerCase().trim();
+            if (t === 'apply' || t === 'apply now' || t === 'easy apply') return true;
+        }
+        return false;
+    }""")
+
+    if not has_apply_button:
+        return ProbeResult(strategy="lazy_load", field_count=0, page_type="unknown", url=page.url)
+
+    # Click all Apply buttons and watch for new inputs
+    new_fields = page.evaluate("""() => {
+        const before = document.querySelectorAll(
+            'input:not([type=hidden]):not([type=submit]), select, textarea'
+        ).length;
+
+        return new Promise((resolve) => {
+            const observer = new MutationObserver(() => {
+                const after = document.querySelectorAll(
+                    'input:not([type=hidden]):not([type=submit]), select, textarea'
+                ).length;
+                if (after > before) {
+                    observer.disconnect();
+                    resolve(after - before);
+                }
+            });
+            observer.observe(document.body, {
+                childList: true, subtree: true,
+                attributes: false,
+            });
+
+            // Click all visible Apply buttons
+            document.querySelectorAll('button, a').forEach(el => {
+                if (el.offsetParent === null) return;
+                const t = (el.textContent || '').toLowerCase().trim();
+                if (t === 'apply' || t === 'apply now' || t === 'easy apply') {
+                    el.click();
+                }
+            });
+
+            // Timeout after 5s
+            setTimeout(() => {
+                observer.disconnect();
+                const after = document.querySelectorAll(
+                    'input:not([type=hidden]):not([type=submit]), select, textarea'
+                ).length;
+                resolve(Math.max(0, after - before));
+            }, 5000);
+        });
+    }""")
+
+    field_count = count_fields(page) if new_fields > 0 else 0
+    return ProbeResult(
+        strategy="lazy_load",
+        field_count=field_count,
+        page_type="form" if field_count > 0 else "unknown",
+        url=page.url,
+    )
+
+
+def _probe_custom_widgets(page, registry_config=None):
+    """Depth 5: Use registry widget hints to find custom form controls."""
+    if not registry_config:
+        return ProbeResult(strategy="custom_widgets", field_count=0, page_type="unknown", url=page.url)
+
+    custom_selectors = registry_config.get("probe", {}).get("widgets", {})
+    field_count = 0
+    for widget_type, selector in custom_selectors.items():
+        try:
+            count = page.evaluate(f"""(sel) => {{
+                return document.querySelectorAll(sel).length;
+            }}""", selector)
+            field_count += count
+        except Exception:
+            pass
+
+    if field_count > 0:
+        result = read_fields(page, custom_widgets=custom_selectors)
+        return ProbeResult(
+            fields=result["fields"],
+            buttons=result["buttons"],
+            strategy="custom_widgets",
+            field_count=result["fieldCount"],
+            page_type="form",
+            has_file_input=result["hasFileInput"],
+            url=result["url"],
+        )
+
+    return ProbeResult(strategy="custom_widgets", field_count=0, page_type="unknown", url=page.url)
+
+
+def _probe_html_scan(page):
+    """Depth 6: Raw HTML scan for form-like patterns. probe --deep only."""
+    try:
+        html = page.evaluate("() => document.documentElement.outerHTML || ''").lower()
+        # Count input-like patterns in raw HTML
+        input_count = html.count("<input")
+        select_count = html.count("<select")
+        textarea_count = html.count("<textarea")
+        total = input_count + select_count + textarea_count
+        return ProbeResult(
+            strategy="html_scan",
+            field_count=total if total > 5 else 0,
+            page_type="maybe_form" if total > 5 else "unknown",
+            url=page.url,
+        )
+    except Exception as e:
+        return ProbeResult(strategy="html_scan", field_count=0, page_type="unknown", url=page.url, error=str(e))
+
+
+# ── Main probe function ───────────────────────────────────────────────────
+
+_PROBE_STRATEGIES = [
+    ("standard", _probe_standard),
+    ("dialog", _probe_dialog),
+    ("iframe", _probe_iframes),
+    ("shadow_dom", _probe_shadow_dom),
+    ("lazy_load", _probe_lazy_load),
+    ("custom_widgets", _probe_custom_widgets),
+    ("html_scan", _probe_html_scan),
+]
+
+# Strategies that should never be auto-tried (only via --deep)
+_DEEP_ONLY = {"html_scan"}
+
+
+def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=True, jid=None):
+    """Run the probe cascade. Returns the first successful ProbeResult.
+
+    Args:
+        page: Playwright page object
+        domain: Domain for cache lookup
+        registry_config: Platform registry YAML dict
+        deep: If True, run all strategies including --deep only
+        snapshot_on_fail: If True and all strategies fail, save DOM snapshot
+        jid: Job ID for snapshot naming
+    """
+    from apply.common.learner import SiteProfile
+
+    # Try cached best strategy first
+    if domain:
+        profile = SiteProfile.load(domain)
+        if profile.best_strategy:
+            strategy_fn = dict(_PROBE_STRATEGIES).get(profile.best_strategy)
+            if strategy_fn:
+                result = strategy_fn(page)
+                if result.field_count > 0:
+                    return result
+                # Cache miss — site changed, fall through
+
+    # Full cascade
+    for name, strategy_fn in _PROBE_STRATEGIES:
+        if not deep and name in _DEEP_ONLY:
+            continue
+
+        result = strategy_fn(page)
+        if result.field_count > 0:
+            # Cache successful strategy
+            if domain:
+                profile = SiteProfile.load(domain)
+                profile.best_strategy = name
+                profile.save()
+            return result
+
+    # All strategies failed
+    snapshot_path = None
+    if snapshot_on_fail:
+        snapshot_path = _snapshot_dom(page, jid)
+
+    result = ProbeResult(strategy="failed", field_count=0, page_type="unknown", url=page.url)
+    result.snapshot_path = snapshot_path
+    return result

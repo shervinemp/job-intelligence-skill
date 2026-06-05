@@ -1,0 +1,25 @@
+name: lever
+version: 1
+
+detect:
+  domains:
+    - lever.co
+    - jobs.lever.co
+
+probe:
+  best_strategy: standard
+
+patterns:
+  login_wall:
+    - "sign in to apply"
+  guest_apply:
+    - "continue without signing in"
+  already_applied:
+    - "already applied"
+    - "you have already applied"
+
+properties:
+  multi_page: false
+  has_eeo: false
+  has_progress_bar: false
+  page_range: [1, 1]
