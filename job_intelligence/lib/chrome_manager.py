@@ -18,6 +18,45 @@ import threading
 import time
 from pathlib import Path
 
+_LOCK_PATH = Path(os.path.expanduser("~")) / ".openclaw" / "pipeline.lock"
+
+
+def _acquire_lock():
+    """Prevent concurrent pipeline processes from corrupting shared state."""
+    _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if _LOCK_PATH.exists():
+        try:
+            pid = int(_LOCK_PATH.read_text().strip())
+            if os.name == "nt":
+                # Windows: check if process exists via tasklist
+                import subprocess as sp
+                r = sp.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                          capture_output=True, timeout=5)
+                alive = str(pid) in r.stdout.decode()
+            else:
+                os.kill(pid, 0)
+                alive = True
+            if alive:
+                print(f"ERROR: pipeline already running (PID {pid})", file=sys.stderr)
+                print(f"  Lockfile: {_LOCK_PATH}", file=sys.stderr)
+                print(f"  If stuck, delete the lockfile and retry.", file=sys.stderr)
+                sys.exit(1)
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            pass  # stale lockfile — overwrite
+    _LOCK_PATH.write_text(str(os.getpid()))
+    atexit.register(_release_lock)
+
+
+def _release_lock():
+    try:
+        if _LOCK_PATH.exists() and _LOCK_PATH.read_text().strip() == str(os.getpid()):
+            _LOCK_PATH.unlink()
+    except Exception:
+        pass
+
+
+_acquire_lock()
+
 CHROME_PATH = os.environ.get(
     "CHROME_PATH",
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
@@ -60,7 +99,8 @@ def close():
 
 def _cleanup(signum=None, frame=None):
     close()
-    sys.exit(0 if signum is None else 1)
+    if signum is not None:
+        sys.exit(1)
 
 
 atexit.register(_cleanup)
@@ -116,19 +156,34 @@ def start():
 
 
 def connect(timeout=15):
-    """Get a (browser, context) pair connected to the running Chrome.
-    Starts Chrome if not running."""
-    if not is_running():
-        if not start():
-            return None, None
+    """Get a (browser, context) pair connected to a healthy Chrome.
+    Auto-restarts Chrome if the process crashed or is unresponsive."""
     pw = _pw()
-    for _ in range(timeout):
-        try:
-            b = pw.chromium.connect_over_cdp(CDP_URL)
-            ctx = b.contexts[0]
-            return b, ctx
-        except Exception:
-            time.sleep(1)
+    for attempt in range(3):
+        # Check if Chrome is alive
+        running = is_running()
+        if not running:
+            if not start():
+                print("ERROR: could not start Chrome", file=__import__('sys').stderr)
+                return None, None
+        # Try connecting
+        for _ in range(timeout):
+            try:
+                b = pw.chromium.connect_over_cdp(CDP_URL)
+                ctx = b.contexts[0]
+                # Verify connection is alive (not a zombie)
+                _ = ctx.pages
+                return b, ctx
+            except Exception as e:
+                err = str(e)
+                if "Target closed" in err or "Connection" in err or "Not connected" in err:
+                    break  # Chrome died — restart
+                time.sleep(1)
+        # Chrome was running but connection failed — restart
+        print(f"Chrome unresponsive (attempt {attempt+1}/3), restarting...", file=__import__('sys').stderr)
+        close()
+        _PW = None
+        time.sleep(2)
     return None, None
 
 

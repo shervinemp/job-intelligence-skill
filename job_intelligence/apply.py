@@ -36,6 +36,7 @@ def main():
     act_p.add_argument("--confirm", action="store_true", help="Actually submit (dry-run without)")
     act_p.add_argument("--answers", help="JSON answers for --fill")
     act_p.add_argument("--candidate", type=int, default=None, help="Pick candidate N from CANDIDATES list")
+    act_p.add_argument("--trust", action="store_true", help="Enable auto-submit (default: learning mode)")
 
     verify_p = sub.add_parser("verify", help="Check submission result")
     verify_p.add_argument("jid", help="Job ID")

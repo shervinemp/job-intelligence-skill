@@ -17,17 +17,7 @@ def _save(r):
     with open(REGISTRY_PATH, "w") as f:
         json.dump(r, f, indent=2)
 
-def _tag(page, jid):
-    try:
-        page.evaluate(f"(jid) => document.body.setAttribute('data-job-id', jid)", jid)
-    except:
-        pass
-
-def _get_tag(page):
-    try:
-        return page.evaluate("() => document.body.getAttribute('data-job-id') || ''") or ""
-    except:
-        return ""
+from apply.common.page_helpers import _PAGE_JID_MAP as _page_map
 
 def _fingerprint(page):
     try:
@@ -44,10 +34,10 @@ class PageManager:
             self.reg[jid] = {"urls": [], "fp": ""}
 
     def register(self, page):
-        """Tag the page and record its URL + fingerprint."""
+        """Track the page and record its URL + fingerprint."""
         fp = _fingerprint(page)
         url = page.url
-        _tag(page, self.jid)
+        _page_map[id(page)] = self.jid
         entry = self.reg.setdefault(self.jid, {"urls": [], "fp": ""})
         if not entry["urls"] or entry["urls"][-1] != url:
             entry["urls"].append(url)
@@ -69,8 +59,7 @@ class PageManager:
             if "about:blank" in url or "chrome-error" in url:
                 continue
 
-            tag = _get_tag(p)
-            if tag == self.jid:
+            if _page_map.get(id(p)) == self.jid:
                 tagged = p
                 break
 
@@ -100,11 +89,11 @@ class PageManager:
         return None, [], None
 
     def snapshot(self, page):
-        return {"url": page.url, "fp": _fingerprint(page), "tag": _get_tag(page)}
+        return {"url": page.url, "fp": _fingerprint(page), "tag": _page_map.get(id(page), "")}
 
     def diff(self, before, after=None, page=None):
         if after is None and page is not None:
-            after = {"url": page.url, "fp": _fingerprint(page), "tag": _get_tag(page)}
+            after = {"url": page.url, "fp": _fingerprint(page), "tag": _page_map.get(id(page), "")}
         elif after is None:
             return {}
         changes = []
@@ -120,7 +109,7 @@ class PageManager:
 
     def find_new_tab(self, url_pattern=None):
         for p in self.ctx.pages:
-            if not _get_tag(p):
+            if not _page_map.get(id(p)):
                 url = p.url.lower()
                 if "about:blank" in url or "chrome-error" in url:
                     continue
@@ -130,14 +119,15 @@ class PageManager:
 
     def cleanup_all(self):
         for p in self.ctx.pages:
-            if not _get_tag(p):
+            if not _page_map.get(id(p)):
                 url = p.url.lower()
                 if "about:blank" in url or "chrome-error" in url or "newtab" in url:
                     try: p.close()
                     except: pass
 
     def close_others(self, keep_page):
+        keep_url = keep_page.url.rstrip("/")
         for p in self.ctx.pages:
-            if p != keep_page and _get_tag(p) == self.jid:
+            if p != keep_page and _page_map.get(id(p)) == self.jid:
                 try: p.close()
                 except: pass

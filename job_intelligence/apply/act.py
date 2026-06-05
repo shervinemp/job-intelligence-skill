@@ -3,21 +3,33 @@
 Always reads fresh state, verifies before/after, prints structured output.
 """
 import json, os, sys, re, time
+from urllib.parse import urlparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn
 from apply.common.page_helpers import load_state, save_state, read_page, find_page, resolve_label, handle_captcha, check_captcha
+from apply.common.registry import resolve as resolve_registry
+from apply.common.inspector import probe as probe_page
+from apply.common.field_reader import read_fields
+from apply.common.learner import LearnSession, SiteProfile, ButtonIntentClassifier, LabelRegistry
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 _EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
+
+# Pipeline mode
+_TRUSTED = False  # set via --trust or auto-promotion
 
 
 class CircuitBreaker:
     """Halt pipeline on 3+ consecutive identical failures."""
     _state = {"pattern": "", "count": 0}
 
+    _USER_TYPES = {"login_wall", "captcha"}
+
     @classmethod
     def record(cls, error_type):
+        if error_type in cls._USER_TYPES:
+            return False  # user-action-required — never trip breaker
         if error_type == cls._state["pattern"]:
             cls._state["count"] += 1
         else:
@@ -36,9 +48,71 @@ class CircuitBreaker:
 
 CircuitBreaker.reset()
 
+def _domain(url):
+    try:
+        return urlparse(url).netloc.lower()
+    except Exception:
+        return ""
+
+
+def _load_learn_session(domain, jid):
+    """Create or continue a learn session for this domain."""
+    if not domain:
+        return None
+    # Aggregator domains are always trusted (no learning needed)
+    from apply.common.learner import _SKIP_DOMAINS as _aggs
+    global _TRUSTED
+    if any(d in domain for d in _aggs):
+        _TRUSTED = True
+        return None
+    session = LearnSession(domain, jid)
+    profile = SiteProfile.load(domain)
+    if profile.trusted:
+        _TRUSTED = True
+    return session
+
+
+_KNOWN_PROFILE_KEYS = {
+    "first_name", "last_name", "email", "phone", "linkedin_url",
+    "github_url", "portfolio_url", "website", "address", "city",
+    "state", "zip", "country", "authorized_to_work", "visa_status",
+    "requires_sponsorship", "expected_salary", "salary_currency",
+    "work_preference", "remote_preference", "start_date",
+    "pronouns", "common_answers",
+}
+
+
+def _validate_profile(profile):
+    """Warn about unrecognized keys in profile.json to catch typos early."""
+    unknown = set(profile.keys()) - _KNOWN_PROFILE_KEYS
+    if unknown:
+        print(f"WARN: profile.json has unrecognized keys: {', '.join(sorted(unknown))}", file=sys.stderr)
+        print(f"  Known keys: {', '.join(sorted(_KNOWN_PROFILE_KEYS))}", file=sys.stderr)
+
+
 def _match_word(needle, haystack):
     """Word-boundary match: 'phone' matches 'phone number' but NOT 'phone extension'."""
     return f" {needle} " in f" {haystack} " or haystack.startswith(f"{needle} ") or haystack.endswith(f" {needle}")
+
+def _save_answer(label, value, profile_path):
+    """Normalize a field label to a common_answers key and save to profile.json."""
+    try:
+        with open(profile_path) as f:
+            profile = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+    norm = re.sub(r'[^a-z0-9]+', '_', label.lower()).strip('_')[:80]
+    words = [w for w in norm.split('_') if len(w) > 2]
+    key = '_'.join(words[:4]) if len(words) >= 3 else norm
+    ca = profile.setdefault("common_answers", {})
+    if key not in ca or ca[key] != value:
+        ca[key] = value
+        try:
+            with open(profile_path, "w") as f:
+                json.dump(profile, f, indent=2)
+        except OSError:
+            pass
+
 
 def _find_answer(label, label_norm, answers, ca, profile, required=False):
     """Find answer from --answers, common_answers, or profile.
@@ -198,6 +272,9 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         if f["tag"] == "INPUT" and f["type"] == "file":
             if file_uploaded or not f.get("required", False): continue
             results_dir = os.path.expanduser(f"~/.openclaw/results/{jid}")
+            if not os.path.isdir(results_dir) or not any("Resume" in fn and fn.endswith(".pdf") for fn in os.listdir(results_dir)):
+                print(f"WARN: no resume PDF found in {results_dir} — upload will be skipped", file=sys.stderr)
+                continue
             if os.path.isdir(results_dir):
                 candidates = []
                 for fn in os.listdir(results_dir):
@@ -330,7 +407,28 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             print("ERROR: no page found and no external URL", file=sys.stderr); sys.exit(1)
     if handle_captcha(page, state):
         print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
+
+    # Registry + probe cascade
+    domain = _domain(page.url)
+    registry = resolve_registry(page.url)
+    learn = _load_learn_session(domain, jid)
+
+    # Probe: try standard first, cascade on failure
     ps = read_page(page)
+    if ps.get("fieldCount", 0) == 0 and domain:
+        reg_config = {"probe": {"widgets": registry.widgets}} if registry and registry.widgets else None
+        probe_result = probe_page(page, domain=domain, registry_config=reg_config)
+        if probe_result.field_count > 0:
+            ps = probe_result.to_dict()
+        elif probe_result.snapshot_path:
+            print(f"PROBE_FAILED: snapshot saved to {probe_result.snapshot_path}", file=sys.stderr)
+
+    # Learn session tracking
+    if learn:
+        learn.record_page(ps.get("fields", []), ps.get("buttons", []))
+        state["_learn_page"] = learn.page_count
+        state["_learn_domain"] = learn.domain
+
     # Guard: if this page was already filled, warn but proceed
     last_fingerprint = state.get("page_fingerprint", "")
     current_fingerprint = str(len(ps["fields"])) + ":" + str(len(ps.get("buttons", [])))
@@ -421,7 +519,13 @@ def cmd_fill(jid, answers_json=None, candidate=None):
 
     profile = {}
     if os.path.exists(profile_path):
-        with open(profile_path) as f: profile = json.load(f)
+        try:
+            with open(profile_path) as f: profile = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            print(f"WARN: profile.json corrupt or unreadable — using empty profile", file=sys.stderr)
+            profile = {}
+        else:
+            _validate_profile(profile)
     ca = profile.get("common_answers", {})
 
     radio_filled, radio_unfilled = _fill_radios(page, ps["fields"], answers, ca, jid)
@@ -447,6 +551,11 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     from apply.common.page_helpers import read_and_save as rs
     state["filled"] = filled
     rs(page, state)
+
+    # Save new answers to profile common_answers for future use
+    if filled > 0 and answers:
+        for label, val in answers.items():
+            _save_answer(label, val, profile_path)
 
     print(f"FILLED: {filled}  UNFILLED: {len(unfilled)}", file=sys.stderr)
     for f in unfilled:
@@ -488,6 +597,13 @@ def cmd_next(jid, candidate=None):
     from apply.common.page_helpers import scan_actions
     advance_kws = ["next", "continue", "review", "done", "submit", "submit application"]
 
+    # Classify buttons via ButtonIntentClassifier
+    all_buttons = ps.get("buttons", [])
+    learn = state.get("_learn_session")
+    if not learn:
+        domain = _domain(page.url)
+        learn = _load_learn_session(domain, state.get("jid", ""))
+
     # If candidate was specified, click it directly
     if candidate is not None:
         cands = scan_actions(page, advance_kws, _EXCLUDED_BUTTONS)
@@ -504,13 +620,24 @@ def cmd_next(jid, candidate=None):
     print(f"CANDIDATES: {json.dumps(candidates[:8])}", file=sys.stderr)
 
     target = None
-    if candidates and candidates[0]["score"] >= 4:
+    if candidates:
+        best = ButtonIntentClassifier.pick(candidates, "submit")
+        if not best:
+            best = ButtonIntentClassifier.pick(candidates, "advance")
+        if best:
+            target = candidates[best["index"]]
+            if learn:
+                learn.record_transition(target["text"])
+    if not target and candidates and candidates[0]["score"] >= 4:
         target = candidates[0]
-    elif candidates:
+        if learn:
+            learn.record_transition(target["text"])
+    elif not target and candidates:
         print("CHOOSE: act --next <jid> --candidate N", file=sys.stderr)
         print("NEXT: model_choice", file=sys.stderr)
+        ButtonIntentClassifier.record_ambiguity(candidates[0]["text"], "advance")
         save_state(state); return
-    else:
+    elif not target:
         # Check if there are disabled advance buttons
         for c in scan_actions(page, advance_kws):
             if c.get("disabled"):
@@ -544,23 +671,60 @@ def cmd_submit(jid, confirm=False, candidate=None):
     state = load_state()
     if state.get("jid") != jid:
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
+
+    # Trust gate: learning mode never submits
+    domain = _domain(state.get("external_url", "") or state.get("url", ""))
+    if domain and not _TRUSTED:
+        profile = SiteProfile.load(domain)
+        learn = LearnSession(domain, jid)
+        learn.submit_reached = True
+        learn.complete(submit_reached=True)
+        print("LEARNING: submit gate reached — no submit until --trust is set", file=sys.stderr)
+        print("NEXT: verify or run with --trust", file=sys.stderr)
+        return
+
     b, ctx = connect()
     from apply.common.page_manager import PageManager
-    page = PageManager(ctx, jid).find(fallback_url=state.get("external_url", ""))[0]
-    if not page: print("ERROR: no page found", file=sys.stderr); sys.exit(1)
+    pm = PageManager(ctx, jid)
+    ext = state.get("external_url", "")
+    page, _, _ = pm.find(fallback_url=ext)
+    if not page:
+        if ext:
+            page = ctx.new_page()
+            page.goto(ext, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(5)
+            pm.register(page)
+        else:
+            print("ERROR: no page found and no external URL\nNEXT: detect or navigate first", file=sys.stderr)
+            return
 
-    from apply.common.page_helpers import scan_actions
     if handle_captcha(page, state):
         print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
-    submit_kws = ["submit application", "submit", "send application", "apply", "send"]
-    cands = [c for c in scan_actions(page, submit_kws, _EXCLUDED_BUTTONS) if not c.get("disabled")]
+
+    # ButtonIntentClassifier for submit buttons
+    all_buttons = page.evaluate("""() => {
+        return Array.from(document.querySelectorAll('button'))
+            .filter(b => b.offsetParent)
+            .map(b => ({text: (b.textContent||'').trim().slice(0,30), disabled: b.disabled}));
+    }""") or []
+    best = ButtonIntentClassifier.pick(all_buttons, "submit")
+
+    cands = []
+    if best:
+        cands = [{"text": all_buttons[best["index"]]["text"],
+                   "disabled": False,
+                   "score": best["confidence"] * 5}]
+    if not cands:
+        from apply.common.page_helpers import scan_actions
+        submit_kws = ["submit application", "submit", "send application", "apply", "send"]
+        cands = [c for c in scan_actions(page, submit_kws, _EXCLUDED_BUTTONS) if not c.get("disabled")]
 
     if candidate is not None:
         if candidate < len(cands):
             target = cands[candidate]
         else:
             print(f"ERROR: candidate {candidate} out of range (0-{len(cands)-1})", file=sys.stderr); return
-    elif cands and cands[0]["score"] >= 4:
+    elif cands and (cands[0].get("score", 0) >= 4 or cands[0].get("confidence", 0) >= 0.8):
         target = cands[0]
     elif cands:
         print(f"CANDIDATES: {json.dumps(cands[:8])}", file=sys.stderr)
@@ -578,10 +742,19 @@ def cmd_submit(jid, confirm=False, candidate=None):
     except: pass
     time.sleep(5)
 
-    if not page.evaluate("() => document.querySelector('[role=\"dialog\"]')"):
+    text = (page.evaluate("() => document.body.innerText") or "").lower()
+    has_form = page.evaluate("""() => {
+        const inputs = document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
+        return inputs.length > 0 && Array.from(inputs).some(i => i.offsetParent !== null);
+    }""") or False
+    has_error = any(w in text for w in ["error", "required", "invalid", "correct the"])
+    if has_error and has_form:
+        print("STATUS: validation_errors — form still present\nNEXT: act --fill", file=sys.stderr)
+    elif not page.evaluate("() => document.querySelector('[role=\"dialog\"]')") and not has_form:
+        get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
         print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
     else:
-        print("STATUS: unknown (modal still open)\nNEXT: verify", file=sys.stderr)
+        print("STATUS: unknown (page unchanged or not submitted)\nNEXT: verify", file=sys.stderr)
 
 def cmd_auto(jid, answers_json=None):
     state = load_state()
@@ -596,19 +769,38 @@ def cmd_auto(jid, answers_json=None):
         cmd_fill(jid, json.dumps(answers) if answers else None)
         state = load_state()
         ps = state.get("page", {})
+        btns = ps.get("buttons", [])
+        has_submit = any(b["text"].lower() in ("submit", "submit application", "apply", "send application") and not b.get("disabled") for b in btns)
+        has_next = any(b["text"].lower() in ("next", "review", "continue", "done") and not b.get("disabled") for b in btns)
         unfilled = [f for f in ps.get("fields", []) if f.get("required") and not f.get("value")]
-        if unfilled:
+
+        if has_submit and not unfilled:
+            print(f"AUTO: page {pn} — all filled, submitting", file=sys.stderr)
+            cmd_submit(jid, confirm=True)
+            state = load_state()
+            if state.get("result") in ("submitted", "modal_closed"):
+                print(f"AUTO: {state['result']}", file=sys.stderr)
+                return
+            print(f"AUTO: submit returned unknown state, continuing", file=sys.stderr)
+        elif unfilled:
             print(f"AUTO: page {pn} — {len(unfilled)} unfilled, stop", file=sys.stderr)
             return
-        print(f"AUTO: page {pn} — filled, advancing", file=sys.stderr)
-        cmd_next(jid)
-        state = load_state()
-        if state.get("result") in ("submitted", "modal_closed"):
-            print(f"AUTO: {state['result']}", file=sys.stderr)
+        elif has_next:
+            print(f"AUTO: page {pn} — filled, advancing", file=sys.stderr)
+            cmd_next(jid)
+            state = load_state()
+            if state.get("result") in ("submitted", "modal_closed"):
+                print(f"AUTO: {state['result']}", file=sys.stderr)
+                return
+        else:
+            print(f"AUTO: page {pn} — no buttons detected, stop", file=sys.stderr)
             return
     print(f"AUTO: max pages reached without submit", file=sys.stderr)
 
 def run(args):
+    global _TRUSTED
+    if getattr(args, 'trust', False):
+        _TRUSTED = True
     if args.fill: cmd_fill(args.jid, args.answers, args.candidate)
     elif args.next: cmd_next(args.jid, args.candidate)
     elif args.back: cmd_back(args.jid)
