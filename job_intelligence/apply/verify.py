@@ -6,7 +6,14 @@ import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
 from lib.chrome_manager import connect
-from apply.common.page_helpers import load_state
+from apply.common.page_helpers import load_state, is_aggregator, set_platform_trusted
+
+def _maybe_trust(state):
+    """Set platform trust on verified submission success."""
+    platform = state.get("platform", "")
+    domain = state.get("external_url", "") or state.get("url", "")
+    if platform and not is_aggregator(domain):
+        set_platform_trusted(platform)
 
 def run(jid):
     db_stage = get_conn().execute("SELECT stage FROM jobs WHERE id=?", (jid,)).fetchone()
@@ -45,6 +52,7 @@ def run(jid):
         if not has_inputs:
             print("STATUS: submitted (modal closed, no inputs)")
             get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
+            _maybe_trust(state)
             print("NEXT: none")
             return
 
@@ -54,6 +62,7 @@ def run(jid):
         if signal in text:
             print(f"STATUS: submitted (text: '{signal}')")
             get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
+            _maybe_trust(state)
             print("NEXT: none")
             return
 
@@ -66,6 +75,7 @@ def run(jid):
     if "Applied" in buttons:
         print("STATUS: submitted (Applied button)")
         get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
+        _maybe_trust(state)
         print("NEXT: none")
         return
 
