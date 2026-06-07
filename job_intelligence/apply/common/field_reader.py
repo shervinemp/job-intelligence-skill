@@ -14,7 +14,7 @@ _READER_JS = """(config) => {
         : document;
 
     const inputs = root.querySelectorAll(
-        'input:not([type=hidden]):not([type=submit]), select, textarea'
+        'input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable="true"]'
     );
     const dropdowns = root.querySelectorAll(customWidgets.dropdown || 'none');
     const fileInputs = root.querySelectorAll('input[type="file"]');

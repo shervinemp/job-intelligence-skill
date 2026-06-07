@@ -321,8 +321,34 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                 resume_inputs = [fi for fi in page.query_selector_all('input[type="file"]')
                                  if "resume" in ((page.evaluate(f'(el) => el.closest("div,fieldset,section")?.textContent || ""', fi) or "").lower())]
                 fi = resume_inputs[0] if resume_inputs else page.query_selector('input[type="file"]')
-                if fi: fi.set_input_files(pdf_path); file_uploaded = True; filled += 1
+                if fi:
+                    fi.set_input_files(pdf_path); file_uploaded = True; filled += 1
+                    continue
             except: pass
+            # Fallback: drag-and-drop zone with no visible file input
+            if not file_uploaded:
+                try:
+                    import base64
+                    with open(pdf_path, 'rb') as fh:
+                        b64 = base64.b64encode(fh.read()).decode()
+                    data_url = f"data:application/pdf;base64,{b64}"
+                    dropped = page.evaluate(f"""(dataUrl) => {{
+                        const dz = document.querySelector('.dropzone, [ondrop], [class*="file-upload"], [class*="drag-drop"], [class*="upload-resume"]');
+                        if (!dz) return false;
+                        return fetch(dataUrl).then(r => r.blob()).then(blob => {{
+                            const file = new File([blob], 'Resume.pdf', {{type: 'application/pdf'}});
+                            const dt = new DataTransfer();
+                            dt.items.add(file);
+                            ['dragenter', 'dragover'].forEach(t => {{
+                                dz.dispatchEvent(new DragEvent(t, {{dataTransfer: dt, bubbles: true, cancelable: true}}));
+                            }});
+                            return dz.dispatchEvent(new DragEvent('drop', {{dataTransfer: dt, bubbles: true, cancelable: true}}));
+                        }}).catch(() => false);
+                    }}""", data_url)
+                    if dropped:
+                        file_uploaded = True; filled += 1
+                except Exception:
+                    pass
             continue
 
         # Custom dropdown (e.g. Workday province selectors)
@@ -389,6 +415,12 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                             for opt in f["options"]:
                                 if ans.lower() in opt.lower(): el.select_option(opt); break
                             else: el.select_option(ans)
+                        elif f["tag"] == "DIV" or f.get("contenteditable"):
+                            page.evaluate(f"""(sel, val) => {{
+                                const el = document.querySelector(sel);
+                                if (el) {{ el.textContent = val; el.dispatchEvent(new Event('input', {{bubbles:true}})); }}
+                            }}""", [sel, ans])
+                            filled += 1
                         elif f["tag"] in ("INPUT", "TEXTAREA"):
                             # Check if this is an autocomplete field (multiselect widget)
                             is_ac = False
@@ -815,6 +847,13 @@ def cmd_submit(jid, confirm=False, candidate=None):
         if current != before_hash or \
            any(w in current_text for w in ["error", "required", "invalid"]):
             break
+
+    # Check for CAPTCHA triggered by submission
+    if check_captcha(page):
+        print("*** CAPTCHA DETECTED after submit — solve in browser, then retry submit ***", file=sys.stderr)
+        handle_captcha(page, state)
+        print("NEXT: act --submit --confirm", file=sys.stderr)
+        return
 
     text = (page.evaluate("() => document.body.innerText") or "").lower()
     has_form = page.evaluate("""() => {
