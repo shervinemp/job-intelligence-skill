@@ -667,8 +667,15 @@ def cmd_fill(jid, answers_json=None, candidate=None):
         print("NEXT: act --fill --answers '{\"<question>\": \"<answer>\"}'", file=sys.stderr)
     elif has_submit:
         print("NEXT: act --submit", file=sys.stderr)
-    else:
+    elif has_next:
         print("NEXT: act --next", file=sys.stderr)
+    elif not unfilled and not has_submit and not has_next:
+        # All fields filled, no buttons — possible auto-submit
+        page_text = (page.evaluate("() => document.body.innerText") or "").lower()
+        if any(w in page_text for w in ["thank you", "submitted", "your application", "has been sent"]):
+            print("NEXT: verify (auto-submit detected)", file=sys.stderr)
+        else:
+            print("NEXT: verify (no actionable buttons)", file=sys.stderr)
 
 def cmd_next(jid, candidate=None):
     state = load_state()
@@ -856,6 +863,15 @@ def cmd_submit(jid, confirm=False, candidate=None):
         return
 
     text = (page.evaluate("() => document.body.innerText") or "").lower()
+    # Check for success signals first (handles AJAX submit where form stays visible)
+    for signal in ["thank you", "submitted", "your application", "has been sent", "application received"]:
+        if signal in text:
+            get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
+            if platform_name and not is_aggregator(domain):
+                set_platform_trusted(platform_name)
+            print("STATUS: submitted (via AJAX)\nNEXT: verify", file=sys.stderr)
+            return
+
     has_form = page.evaluate("""() => {
         const inputs = document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
         return inputs.length > 0 && Array.from(inputs).some(i => i.offsetParent !== null);
@@ -865,7 +881,6 @@ def cmd_submit(jid, confirm=False, candidate=None):
         print("STATUS: validation_errors — form still present\nNEXT: act --fill", file=sys.stderr)
     elif not page.evaluate("() => document.querySelector('[role=\"dialog\"]')") and not has_form:
         get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-        # Auto-trust platform on first successful submit
         if platform_name and not is_aggregator(domain):
             set_platform_trusted(platform_name)
         print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
