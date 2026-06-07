@@ -13,9 +13,16 @@ _READER_JS = """(config) => {
         ? (document.querySelector('[role="dialog"]') || document)
         : document;
 
-    const inputs = root.querySelectorAll(
+    const inputs = Array.from(root.querySelectorAll(
         'input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable="true"]'
-    );
+    )).filter(el => {
+        // Skip honeypot fields: off-screen, clipped, or zero-size
+        const s = window.getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden') return false;
+        if (s.position === 'absolute' && parseInt(s.left) < -100) return false;
+        if (s.clip === 'rect(0px, 0px, 0px, 0px)' || s.clip === 'rect(0,0,0,0)') return false;
+        return true;
+    });
     const dropdowns = root.querySelectorAll(customWidgets.dropdown || 'none');
     const fileInputs = root.querySelectorAll('input[type="file"]');
     const btns = root.querySelectorAll('button');
