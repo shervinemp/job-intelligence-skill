@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from apply.common.field_reader import read_fields, count_fields
+from apply.common.field_reader import read_fields
 
 SNAPSHOTS_DIR = Path(os.path.expanduser("~")) / ".openclaw" / "learnings" / "probe_failures"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -179,6 +179,39 @@ def _probe_iframes(page):
         url=page.url,
         iframe_srcs=iframe_srcs,
     )
+
+
+def _probe_iframe_navigate(page, prev_result=None):
+    """Depth 2.5: Navigate to cross-origin iframe src URLs and re-probe.
+    Handles ATS that load forms in cross-origin iframes (UKG/UltiPro, etc.).
+    Navigates back to original URL if no fields found in the iframe.
+    """
+    iframe_srcs = prev_result.iframe_srcs if prev_result else []
+    if not iframe_srcs:
+        try:
+            iframe_srcs = page.evaluate("""() => {
+                return Array.from(document.querySelectorAll('iframe'))
+                    .map(f => f.src || f.getAttribute('data-src') || '')
+                    .filter(Boolean);
+            }""")
+        except Exception:
+            pass
+    original_url = page.url
+    for src in iframe_srcs[:3]:
+        if not src or 'http' not in src:
+            continue
+        try:
+            page.goto(src, wait_until="domcontentloaded", timeout=15000)
+            result = _probe_standard(page)
+            if result.field_count > 0:
+                return result
+            page.goto(original_url, wait_until="domcontentloaded", timeout=15000)
+        except Exception:
+            try:
+                page.goto(original_url, wait_until="domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+    return ProbeResult(strategy="iframe_navigate", field_count=0, page_type="unknown", url=page.url)
 
 
 def _probe_shadow_dom(page):
@@ -379,6 +412,7 @@ _PROBE_STRATEGIES = [
     ("standard", _probe_standard),
     ("dialog", _probe_dialog),
     ("iframe", _probe_iframes),
+    ("iframe_navigate", _probe_iframe_navigate),
     ("shadow_dom", _probe_shadow_dom),
     ("lazy_load", _probe_lazy_load),
     ("custom_widgets", _probe_custom_widgets),
@@ -413,12 +447,17 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
                 return result
             # Cache miss — site changed, fall through
 
-    # Full cascade
+    # Full cascade: track previous result for iframe_navigate
+    prev_result = None
     for name, strategy_fn in _PROBE_STRATEGIES:
         if not deep and name in _DEEP_ONLY:
             continue
 
-        result = strategy_fn(page)
+        if name == "iframe_navigate" and prev_result:
+            result = strategy_fn(page, prev_result=prev_result)
+        else:
+            result = strategy_fn(page)
+        prev_result = result
         if result.field_count > 0:
             if domain:
                 _probe_cache[domain] = name
