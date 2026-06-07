@@ -27,7 +27,8 @@ def run(jid):
         const hasApplyIntent = (s) => {
             const t = (s || '').toLowerCase();
             return t.includes('on company website') || t.includes('company site')
-                || /apply\\s*(on|at|through|via|externally)/.test(t);
+                || /apply\\s*(on|at|through|via|external(ly)?)/.test(t)
+                || /external\\s+apply/.test(t);
         };
         // 1. Anchor wrapping a button with external-apply intent
         for (const a of anchors) {
