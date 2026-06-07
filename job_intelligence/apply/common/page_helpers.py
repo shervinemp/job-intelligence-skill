@@ -105,8 +105,11 @@ def handle_captcha(page, state):
     return True
 
 def load_state():
-    with open(STATE_PATH) as f:
-        return json.load(f)
+    try:
+        with open(STATE_PATH) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError, FileNotFoundError):
+        return {}
 
 def save_state(state):
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)

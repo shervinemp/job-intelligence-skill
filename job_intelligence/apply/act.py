@@ -291,6 +291,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
     file_uploaded = False
 
     for f in fields:
+        prev_filled = filled
         if f["type"] == "radio": continue
         if f["tag"] == "INPUT" and f["type"] == "file":
             if file_uploaded and not f.get("required", False): continue
@@ -447,6 +448,9 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                 except: pass
         elif f.get("required"):
             unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
+        # Brief random delay if a field was filled (masks automation speed)
+        if filled > prev_filled:
+            time.sleep(random.uniform(0.15, 0.4))
     return filled, unfilled
 
 def _should_block_submit(state, page_url):
@@ -863,12 +867,10 @@ def cmd_submit(jid, confirm=False, candidate=None):
         return
 
     text = (page.evaluate("() => document.body.innerText") or "").lower()
-    # Check for success signals first (handles AJAX submit where form stays visible)
+        # Check for success signals first (handles AJAX submit where form stays visible)
     for signal in ["thank you", "submitted", "your application", "has been sent", "application received"]:
         if signal in text:
             get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-            if platform_name and not is_aggregator(domain):
-                set_platform_trusted(platform_name)
             print("STATUS: submitted (via AJAX)\nNEXT: verify", file=sys.stderr)
             return
 
@@ -881,8 +883,6 @@ def cmd_submit(jid, confirm=False, candidate=None):
         print("STATUS: validation_errors — form still present\nNEXT: act --fill", file=sys.stderr)
     elif not page.evaluate("() => document.querySelector('[role=\"dialog\"]')") and not has_form:
         get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-        if platform_name and not is_aggregator(domain):
-            set_platform_trusted(platform_name)
         print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
     else:
         print("STATUS: unknown (page unchanged or not submitted)\nNEXT: verify", file=sys.stderr)
