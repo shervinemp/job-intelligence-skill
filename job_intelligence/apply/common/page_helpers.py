@@ -4,6 +4,45 @@ import webbrowser
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
+PLATFORMS_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "platforms.json")
+
+# Aggregator domains — always trusted, no learning needed
+_SKIP_DOMAINS = {"linkedin.com", "linkedin.com/jobs", "indeed.com",
+                 "ca.indeed.com", "indeed.ca", "glassdoor.com",
+                 "monster.com", "ziprecruiter.com", "simplyhired.com"}
+
+
+def is_aggregator(domain):
+    """Check if a domain is a job aggregator (not an ATS to learn from)."""
+    for skip in _SKIP_DOMAINS:
+        if skip in domain:
+            return True
+    return False
+
+
+def is_platform_trusted(platform):
+    """Check if a platform name has been trusted via platforms.json."""
+    if not platform:
+        return False
+    try:
+        data = json.load(open(PLATFORMS_PATH, encoding="utf-8"))
+        return data.get("platforms", {}).get(platform, {}).get("trusted", False)
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
+def set_platform_trusted(platform):
+    """Mark a platform as trusted in platforms.json."""
+    if not platform:
+        return
+    try:
+        data = json.load(open(PLATFORMS_PATH, encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        data = {"platforms": {}}
+    data.setdefault("platforms", {})[platform] = {"trusted": True}
+    os.makedirs(os.path.dirname(PLATFORMS_PATH), exist_ok=True)
+    with open(PLATFORMS_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
 _PAGE_JID_MAP = {}  # page object id -> jid mapping (no DOM mutation)
 
@@ -11,33 +50,31 @@ _CAPTCHA_SIGNALS = [
     "recaptcha", "hcaptcha", "cf-turnstile", "turnstile",
     "cloudflare", "challenge-platform", "g-recaptcha",
     "data-sitekey", "data-callback",
+    "cf-browser-verification", "challenge-running", "challenge-stage",
 ]
 
 
 def check_captcha(page):
-    """Check if the current page has a CAPTCHA challenge. Returns True if detected."""
+    """Check if the current page has a CAPTCHA challenge. Returns True if detected.
+    Single evaluate call for efficiency."""
     try:
-        text = (page.evaluate("() => document.body.innerText") or "").lower()
-        captcha_keywords = ["verify you are human", "security check", "captcha",
-                            "i'm not a robot", "complete the security check"]
-        for kw in captcha_keywords:
-            if kw in text:
-                return True
-        html = page.evaluate("() => document.documentElement.innerHTML")
-        for signal in _CAPTCHA_SIGNALS:
-            if signal in html.lower():
-                return True
-        result = page.evaluate("""() => {
+        result = page.evaluate(f"""((args) => {{
+            const signals = args[0], keywords = args[1];
+            const text = (document.body.innerText || '').toLowerCase();
+            for (const kw of keywords) {{ if (text.includes(kw)) return true; }}
+            const html = (document.documentElement.innerHTML || '').toLowerCase();
+            for (const sig of signals) {{ if (html.includes(sig)) return true; }}
             const iframes = document.querySelectorAll('iframe');
-            for (const f of iframes) {
+            for (const f of iframes) {{
                 const src = (f.src || '').toLowerCase();
                 if (src.includes('recaptcha') || src.includes('hcaptcha') ||
                     src.includes('turnstile') || src.includes('challenge')) return true;
-            }
+            }}
             return false;
-        }""")
-        if result:
-            return True
+        }})""", [_CAPTCHA_SIGNALS,
+               ["verify you are human", "security check", "captcha",
+                "i'm not a robot", "complete the security check"]])
+        return result
     except Exception:
         pass
     return False
@@ -51,6 +88,7 @@ def handle_captcha(page, state):
     print(f"\n*** CAPTCHA DETECTED ***", file=sys.stderr)
     print(f"  URL: {url}", file=sys.stderr)
     print(f"  Solve it in your Chrome browser, then press Enter to continue", file=sys.stderr)
+    print(f"  (Pipeline will wait up to 300s, then abort)", file=sys.stderr)
     try:
         page.bring_to_front()
     except Exception:
@@ -59,7 +97,10 @@ def handle_captcha(page, state):
         webbrowser.open(url)
     except Exception:
         pass
-    input()
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n  CAPTCHA wait aborted.", file=sys.stderr)
     print(f"  Resuming...", file=sys.stderr)
     return True
 
@@ -144,13 +185,17 @@ def read_and_save(p, state):
     return ps
 
 def resolve_label(label, profile):
-    """Resolve a label to a profile value. Name + email only. Returns None if uncertain."""
+    """Resolve a label to a profile value by exact key match. Falls back to answer_matcher."""
     norm = re.sub(r'[^a-z0-9+#]+', ' ', label.lower()).strip()
-    if norm in ("full name"):
-        fn, ln = profile.get("first_name", ""), profile.get("last_name", "")
+    fn, ln = profile.get("first_name", ""), profile.get("last_name", "")
+    if norm in ("full name", "name", "your name"):
         return f"{fn} {ln}" if fn and ln else fn or ln or None
-    if norm in ("email", "email address"):
-        return profile.get("email")
+    for pk, pv in profile.items():
+        if not pv or not isinstance(pv, str) or len(pv) < 2:
+            continue
+        pn = re.sub(r'[^a-z0-9]+', ' ', pk.lower()).strip()
+        if pn == norm:
+            return pv
     return None
 
 def retry_with_backoff(fn, max_retries=2, base_delay=2, is_rate_limit=None):

@@ -182,34 +182,70 @@ def _probe_iframes(page):
 
 
 def _probe_shadow_dom(page):
-    """Depth 3: Attempt to find fields inside shadow roots via Playwright locators."""
-    field_count = 0
+    """Depth 3: Find and read fields inside shadow roots via JS."""
+    fields = []
     try:
-        field_count = page.evaluate("""() => {
-            let count = 0;
+        fields = page.evaluate("""() => {
+            const result = [];
+            function resolveLabel(el, root) {
+                let label = '';
+                if (el.getAttribute('aria-labelledby')) {
+                    const ref = root.getElementById(el.getAttribute('aria-labelledby'));
+                    if (ref) label = ref.textContent.trim();
+                }
+                if (!label && el.getAttribute('aria-label')) label = el.getAttribute('aria-label');
+                if (!label) {
+                    const lbl = root.querySelector('label[for="' + el.id + '"]');
+                    if (lbl) label = lbl.textContent.trim();
+                }
+                if (!label) {
+                    const parentLabel = el.closest('label');
+                    if (parentLabel) label = parentLabel.textContent.trim();
+                }
+                if (!label && el.placeholder) label = el.placeholder;
+                if (!label) {
+                    const parent = el.closest('div,fieldset,section,li,form');
+                    const plbl = parent ? parent.querySelector('label, legend, strong, span') : null;
+                    if (plbl) label = plbl.textContent.trim();
+                }
+                return (label || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+            }
             function walk(root) {
-                if (!root) return;
                 const hosts = root.querySelectorAll('*');
                 for (const el of hosts) {
-                    if (el.shadowRoot) {
-                        const inputs = el.shadowRoot.querySelectorAll(
-                            'input:not([type=hidden]):not([type=submit]), select, textarea'
-                        );
-                        count += inputs.length;
-                        walk(el.shadowRoot);
-                    }
+                    if (!el.shadowRoot) continue;
+                    const inputs = el.shadowRoot.querySelectorAll(
+                        'input:not([type=hidden]):not([type=submit]), select, textarea'
+                    );
+                    inputs.forEach(inp => {
+                        const opts = inp.tagName === 'SELECT'
+                            ? Array.from(inp.options).map(o => o.text.trim()).filter(Boolean).slice(0, 15)
+                            : [];
+                        result.push({
+                            tag: inp.tagName, type: inp.getAttribute('type') || '',
+                            id: inp.id, name: inp.getAttribute('name') || '',
+                            label: resolveLabel(inp, el.shadowRoot),
+                            placeholder: inp.placeholder || '',
+                            data_automation_id: inp.getAttribute('data-automation-id') || '',
+                            role: inp.getAttribute('role') || '',
+                            required: !!inp.required || inp.getAttribute('aria-required') === 'true',
+                            value: inp.value || '', checked: null, options: opts,
+                        });
+                    });
+                    walk(el.shadowRoot);
                 }
             }
             walk(document);
-            return count;
+            return result;
         }""")
     except Exception:
         pass
 
     return ProbeResult(
+        fields=fields,
         strategy="shadow_dom",
-        field_count=field_count,
-        page_type="form" if field_count > 0 else "unknown",
+        field_count=len(fields),
+        page_type="form" if fields else "unknown",
         url=page.url,
     )
 
@@ -273,13 +309,18 @@ def _probe_lazy_load(page):
         });
     }""")
 
-    field_count = count_fields(page) if new_fields > 0 else 0
-    return ProbeResult(
-        strategy="lazy_load",
-        field_count=field_count,
-        page_type="form" if field_count > 0 else "unknown",
-        url=page.url,
-    )
+    if new_fields > 0:
+        from apply.common.field_reader import read_fields as _rf
+        result = _rf(page)
+        return ProbeResult(
+            fields=result["fields"], buttons=result["buttons"],
+            strategy="lazy_load",
+            field_count=result["fieldCount"],
+            page_type="form" if result["fieldCount"] > 0 else "unknown",
+            has_file_input=result["hasFileInput"],
+            url=page.url,
+        )
+    return ProbeResult(strategy="lazy_load", field_count=0, page_type="unknown", url=page.url)
 
 
 def _probe_custom_widgets(page, registry_config=None):
@@ -347,6 +388,9 @@ _PROBE_STRATEGIES = [
 # Strategies that should never be auto-tried (only via --deep)
 _DEEP_ONLY = {"html_scan"}
 
+# In-memory probe strategy cache — resets on process restart
+_probe_cache = {}  # domain -> best_strategy_name
+
 
 def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=True, jid=None):
     """Run the probe cascade. Returns the first successful ProbeResult.
@@ -359,18 +403,15 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
         snapshot_on_fail: If True and all strategies fail, save DOM snapshot
         jid: Job ID for snapshot naming
     """
-    from apply.common.learner import SiteProfile
-
     # Try cached best strategy first
-    if domain:
-        profile = SiteProfile.load(domain)
-        if profile.best_strategy:
-            strategy_fn = dict(_PROBE_STRATEGIES).get(profile.best_strategy)
-            if strategy_fn:
-                result = strategy_fn(page)
-                if result.field_count > 0:
-                    return result
-                # Cache miss — site changed, fall through
+    if domain and domain in _probe_cache:
+        cached = _probe_cache[domain]
+        strategy_fn = dict(_PROBE_STRATEGIES).get(cached)
+        if strategy_fn:
+            result = strategy_fn(page)
+            if result.field_count > 0:
+                return result
+            # Cache miss — site changed, fall through
 
     # Full cascade
     for name, strategy_fn in _PROBE_STRATEGIES:
@@ -379,11 +420,8 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
 
         result = strategy_fn(page)
         if result.field_count > 0:
-            # Cache successful strategy
             if domain:
-                profile = SiteProfile.load(domain)
-                profile.best_strategy = name
-                profile.save()
+                _probe_cache[domain] = name
             return result
 
     # All strategies failed

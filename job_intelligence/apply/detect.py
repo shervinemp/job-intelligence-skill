@@ -6,7 +6,7 @@ import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn, desc_exists
-from apply.common.page_helpers import read_page
+from apply.common.page_helpers import read_page, check_captcha
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 
@@ -116,6 +116,10 @@ def run(jid):
             pass
         time.sleep(2)
 
+        if check_captcha(p):
+            print("CAPTCHA: detected on Easy Apply modal — solve in browser then retry detect\nNEXT: retry after solving", file=sys.stderr)
+            return
+
         page_state = read_page(p)
         buttons = p.evaluate("""() => {
             const all = document.querySelectorAll('button, a');
@@ -127,10 +131,14 @@ def run(jid):
         }""")
 
         if page_state and page_state["fieldCount"] > 0:
+            _merge_state({"jid": jid, "_detect_fields": page_state})
             print(f"TYPE: easy_apply\nPAGE: {json.dumps(page_state)}\nNEXT: act --fill")
         elif apply_fields:
-            print(f"TYPE: easy_apply\nPAGE: {json.dumps({'fieldCount': len(apply_fields), 'fields': apply_fields})}\nNEXT: act --fill")
+            fb = {"fieldCount": len(apply_fields), "fields": apply_fields}
+            _merge_state({"jid": jid, "_detect_fields": fb})
+            print(f"TYPE: easy_apply\nPAGE: {json.dumps(fb)}\nNEXT: act --fill")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
+            _merge_state({"jid": jid})
             print("TYPE: easy_apply\nPAGE: {{}}\nNOTE: dialog not auto-opened\nNEXT: act --fill")
         else:
             print("TYPE: unknown\nNEXT: none")
@@ -141,6 +149,19 @@ def run(jid):
         except:
             pass
         time.sleep(2)
+        if check_captcha(p):
+            print("CAPTCHA: detected on job page — solve in browser then retry detect\nNEXT: retry after solving", file=sys.stderr)
+            return
+        # Check for already-applied text patterns before proceeding
+        from apply.common.platforms import check_page, ALREADY_APPLIED
+        from apply.common.registry import resolve as resolve_registry
+        plat_text = (p.evaluate("() => document.body.innerText") or "").lower()
+        reg = resolve_registry(url)
+        plat_name = reg.name if reg else None
+        if check_page(plat_text, plat_name, ALREADY_APPLIED):
+            print("TYPE: already_applied\nNEXT: none")
+            _merge_state({"jid": jid})
+            sys.exit(0)
         page_state = read_page(p)
         if page_state and page_state["fieldCount"] > 0:
             from apply.common.registry import resolve as resolve_registry
