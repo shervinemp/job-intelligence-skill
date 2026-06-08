@@ -91,20 +91,28 @@ job_intelligence/
 │   └── platforms/        # Site-specific description cleaners
 │       ├── linkedin.py   # LinkedIn: click "…more" + strip chrome
 │       └── jobright.py   # Jobright: section-level DOM extraction
-└── apply/
-    ├── detect.py          # Job type classification (pre-flight)
-    ├── navigate.py        # LinkedIn → External ATS navigation
-    ├── verify.py          # Post-submit verification
-    ├── common/
-    │   ├── page_helpers.py  # read_page, scan_actions, page finding
-    │   ├── page_manager.py  # Page registry (tag → domain → candidates)
-    │   └── platforms.py     # Platform detection + login wall patterns
-    └── platforms/
-        ├── ashby.md
-        ├── greenhouse.md
-        ├── lever.md
-        ├── linkedin.md
-        └── workday.md
+    ├── apply.py              # Unified entry: detect|navigate|act|verify
+    └── apply/
+        ├── act.py             # Fill, next, back, submit actions
+        ├── detect.py          # Job type classification (pre-flight)
+        ├── navigate.py        # LinkedIn → External ATS navigation
+        ├── verify.py          # Post-submit verification (4 strategies)
+        ├── common/
+        │   ├── output.py      # Standardized formatter (emit_next/status/type/...)
+        │   ├── field_reader.py# Canonical DOM field reader (JS, crash-guarded)
+        │   ├── inspector.py   # 8-depth probe cascade + DOM snapshot
+        │   ├── answer_matcher.py # Exact match + safe word-overlap fallback
+        │   ├── learner.py     # ButtonIntentClassifier only
+        │   ├── page_helpers.py# read_page, scan_actions, page finding, trust
+        │   ├── page_manager.py# Page registry (tag → domain → candidates)
+        │   └── platforms.py   # Platform detection + login wall patterns
+        ├── registry/          # Platform YAML configs (greenhouse, lever, workday, ashby)
+        └── platforms/         # Platform-specific docs
+            ├── ashby.md
+            ├── greenhouse.md
+            ├── lever.md
+            ├── linkedin.md
+            └── workday.md
 ```
 
 ---
@@ -163,12 +171,14 @@ All scripts respond to `help` and `status` subcommands.
 
 ### Apply Pipeline
 
-`detect` classifies job type (Easy Apply / External / Applied).  
+`detect` classifies job type (Easy Apply / External / Applied / ATS direct).  
 `navigate` clicks "Apply on company website" on LinkedIn, decodes safety redirect, lands on ATS form.  
-`act --fill` fills all fields from `--answers` → common_answers → profile. Supports INPUT, SELECT, TEXTAREA, DROPDOWN (custom `button[aria-haspopup]`), and autocomplete widgets.  
-`act --next` advances through multi-page forms. Ambiguous buttons → prints CANDIDATES, model picks with `--candidate N`.  
-`act --submit` clicks Submit. Requires `--confirm` to actually send.  
-`verify` checks DB stage + LinkedIn page for "you have applied" text.
+`act --fill` fills all fields from `--answers` → profile (exact + word-overlap). Supports INPUT, SELECT, TEXTAREA, radio grids, DROPDOWN, flatpickr dates, autocomplete, file uploads, and contenteditable.  
+`act --next` advances through multi-page forms. Ambiguous buttons → CANDIDATES, pick with `--candidate N`.  
+`act --submit` clicks Submit (dry-run w/o `--confirm`). Checks result: CAPTCHA, validation errors, AJAX submit.  
+`verify` 4-strategy check (modal closed, success text, Applied button, DB stage). Grants platform trust on success.
+
+**Output contract:** scan stderr for `NEXT:` — that's the next action. Always last, always alone.
 
 ### PageManager
 

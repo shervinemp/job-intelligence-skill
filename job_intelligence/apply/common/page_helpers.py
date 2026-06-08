@@ -4,7 +4,6 @@ import webbrowser
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
-PLATFORMS_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "platforms.json")
 
 # Aggregator domains — always trusted, no learning needed
 _SKIP_DOMAINS = {"linkedin.com", "linkedin.com/jobs", "indeed.com",
@@ -19,30 +18,6 @@ def is_aggregator(domain):
             return True
     return False
 
-
-def is_platform_trusted(platform):
-    """Check if a platform name has been trusted via platforms.json."""
-    if not platform:
-        return False
-    try:
-        data = json.load(open(PLATFORMS_PATH, encoding="utf-8"))
-        return data.get("platforms", {}).get(platform, {}).get("trusted", False)
-    except (json.JSONDecodeError, OSError):
-        return False
-
-
-def set_platform_trusted(platform):
-    """Mark a platform as trusted in platforms.json."""
-    if not platform:
-        return
-    try:
-        data = json.load(open(PLATFORMS_PATH, encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        data = {"platforms": {}}
-    data.setdefault("platforms", {})[platform] = {"trusted": True}
-    os.makedirs(os.path.dirname(PLATFORMS_PATH), exist_ok=True)
-    with open(PLATFORMS_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
 
 _PAGE_JID_MAP = {}  # page object id -> jid mapping (no DOM mutation)
 

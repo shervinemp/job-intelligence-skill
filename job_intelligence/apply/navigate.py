@@ -6,6 +6,7 @@ from lib.chrome_manager import connect
 from lib.db import get_conn
 from apply.common.page_helpers import read_page, save_state
 from apply.common.platforms import detect_platform
+from apply.common.output import emit_next, emit_error
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 
@@ -75,7 +76,8 @@ def run(jid):
             if 'linkedin.com' not in current: external_url = current
 
     if not external_url or 'linkedin.com' in (external_url or ''):
-        print("ERROR: no external URL — job may be closed or premium-walled\nNEXT: none", file=sys.stderr); sys.exit(1)
+        emit_error("no external URL — job may be closed or premium-walled")
+        emit_next("none"); sys.exit(1)
 
     plat = detect_platform(external_url)
     print(f"EXTERNAL_URL: {external_url}\nPLATFORM: {plat}", file=sys.stderr)
@@ -98,6 +100,6 @@ def run(jid):
     pm.close_others(ep)
     page_state = read_page(ep)
     print(f"PAGE: {json.dumps(page_state)}", file=sys.stderr)
-    print("NEXT: act --fill", file=sys.stderr)
+    emit_next("act --fill")
 
     save_state({"jid": jid, "external_url": external_url, "platform": plat, "page": page_state})

@@ -6,22 +6,17 @@ import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
 from lib.chrome_manager import connect
-from apply.common.page_helpers import load_state, is_aggregator, set_platform_trusted
-
-def _maybe_trust(state):
-    """Set platform trust on verified submission success."""
-    platform = state.get("platform", "")
-    domain = state.get("external_url", "") or state.get("url", "")
-    if platform and not is_aggregator(domain):
-        set_platform_trusted(platform)
+from apply.common.page_helpers import load_state
+from apply.common.output import emit_next, emit_status, emit_error
 
 def run(jid):
     db_stage = get_conn().execute("SELECT stage FROM jobs WHERE id=?", (jid,)).fetchone()
-    if not db_stage: print(f"ERROR: job {jid} not found", file=sys.stderr); sys.exit(1)
+    if not db_stage: emit_error(f"job {jid} not found"); sys.exit(1)
     stage = db_stage["stage"]
 
     if stage == "applied":
-        print("STATUS: submitted (DB)\nNEXT: none")
+        emit_status("submitted (DB)")
+        emit_next("none")
         return
 
     b, ctx = connect()
@@ -40,9 +35,8 @@ def run(jid):
         text = (page.evaluate("() => document.body.innerText") or "").lower()
         if any(s in text for s in success_signals):
             get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-            _maybe_trust(state)
-            print("STATUS: submitted (text match on page)")
-            print("NEXT: none")
+            emit_status("submitted (text match on page)")
+            emit_next("none")
             return
     else:
         # No matching page — scan ALL pages for success text
@@ -51,13 +45,13 @@ def run(jid):
                 t = (p.evaluate("() => document.body.innerText") or "").lower()
                 if any(s in t for s in success_signals):
                     get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-                    _maybe_trust(state)
-                    print("STATUS: submitted (cross-domain redirect)")
-                    print("NEXT: none")
+                    emit_status("submitted (cross-domain redirect)")
+                    emit_next("none")
                     return
             except Exception:
                 pass
-        print(f"STATUS: unknown (no active pages)\nNEXT: act --fill or check manually")
+        emit_status("unknown", "no active pages")
+        emit_next("act --fill or check manually")
         return
 
     # Strategy 1: Modal closed (Easy Apply)
@@ -69,20 +63,18 @@ def run(jid):
             return inputs.length > 0 && Array.from(inputs).some(i => i.offsetParent !== null);
         }""") or False
         if not has_inputs:
-            print("STATUS: submitted (modal closed, no inputs)")
+            emit_status("submitted (modal closed, no inputs)")
             get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-            _maybe_trust(state)
-            print("NEXT: none")
+            emit_next("none")
             return
 
     # Strategy 2: Success text in body
     text = (page.evaluate("() => document.body.innerText") or "").lower()
     for signal in ["thank you", "submitted", "your application", "has been sent", "application received"]:
         if signal in text:
-            print(f"STATUS: submitted (text: '{signal}')")
+            emit_status(f"submitted (text: '{signal}')")
             get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-            _maybe_trust(state)
-            print("NEXT: none")
+            emit_next("none")
             return
 
     # Strategy 3: "Applied" button visible
@@ -92,10 +84,10 @@ def run(jid):
             .map(b => b.textContent.trim());
     }""")
     if "Applied" in buttons:
-        print("STATUS: submitted (Applied button)")
+        emit_status("submitted (Applied button)")
         get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-        _maybe_trust(state)
-        print("NEXT: none")
+        emit_next("none")
         return
 
-    print(f"STATUS: unknown (DB stage: {stage})\nNEXT: act --fill or check manually")
+    emit_status("unknown", f"DB stage: {stage}")
+    emit_next("act --fill or check manually")

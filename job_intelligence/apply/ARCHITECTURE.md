@@ -6,8 +6,8 @@ A generalized form-filling pipeline that handles ~95% of ATS systems without pla
 
 **Guiding principles:**
 
-- **Never submit on unvetted sites** — learning mode fills and advances but stops at the submit gate
-- **One vetted site = all subsequent jobs on that domain trust it**
+- **Every submit requires explicit `--confirm`** — no persistence, no auto-bypass
+- **Every submit requires explicit `--confirm` — no auto-trust, no persistence**
 - **LLM sees compressed ambiguity, not verbose status** — deterministic code handles everything it can
 - **Variable page counts handled dynamically** — no pre-configuration per platform
 - **Platform configs are YAML, not Python** — only truly custom interactions get Python hooks
@@ -21,14 +21,15 @@ apply/
 ├── apply.py              # Router: detect | fill | next | submit | probe | verify
 ├── detect.py             # Job type classification + entry
 ├── navigate.py            # LinkedIn → External ATS URL extraction
-├── act.py                 # All form actions (fill, next, back, submit, auto)
+├── act.py                 # All form actions (fill, next, back, submit)
 ├── verify.py              # Post-submit verification
 ├── ARCHITECTURE.md        # This file
 ├── common/
 │   ├── inspector.py       # 7-depth probe cascade, DOM snapshot
-│   ├── learner.py         # LearnSession, LabelRegistry, ButtonClassifier, SiteProfile
-│   ├── field_reader.py    # Canonical DOM field reader (single JS block)
-│   ├── answer_matcher.py  # Label→answer matching with confidence scoring
+│   ├── output.py          # Standardized formatter (emit_next/status/type/fill_report/candidates)
+│   ├── learner.py         # ButtonIntentClassifier only
+│   ├── field_reader.py    # Canonical DOM field reader (single JS block, crash-guarded)
+│   ├── answer_matcher.py  # Exact match + safe word-overlap fallback (ambiguous → LLM)
 │   ├── page_helpers.py    # Existing: find_page, scan_actions, tag_page, etc.
 │   ├── page_manager.py    # Existing: PageRegistry
 │   └── platforms.py       # Existing: text pattern dictionaries
@@ -90,10 +91,9 @@ apply act --next <jid>
 
 apply act --submit <jid>
   │
-  ├─ Learning mode (site not vetted): STOP — print LEARNED, save guide
-  ├─ Production mode (site vetted): verify match → click submit
-  ├─ verify_match fails? → fall to learning mode, no submit
-  └─ Explicit --trust overrides all gates
+  ├─ Not confirmed: show submit context (platform, fields, URL, warnings)
+  ├─ Confirmed: click submit, check result (CAPTCHA, validation, success)
+  └─ --confirm required for every submit
 ```
 
 ---
@@ -112,27 +112,7 @@ Seven probe strategies, run in order. Cached per-domain after first success.
 | 5 | Custom widget scan (registry hints) | 100ms | 0 fields at depth 0-4 |
 | 6 | Raw HTML scan | 200ms | `apply probe --deep` only |
 
-**Adaptive skipping**: If `SiteProfile(domain).best_strategy` is set, start there. On miss, run from depth 0 upward.
-
-```python
-def probe(page, domain=None, depth=0):
-    cached = SiteProfile.get(domain)
-    if cached and cached.best_strategy:
-        result = try_strategy(page, cached.best_strategy)
-        if result.fields:
-            return result
-        # Cache invalid — site changed
-        cached.best_strategy = None
-
-    for d in range(depth, 7):
-        result = try_strategy(page, d)
-        if result.fields:
-            SiteProfile.set(domain, best_strategy=d)
-            return result
-        if d >= 4:
-            break  # depth 4+ only if earlier depths failed
-    return ProbeResult([], strategy="failed")
-```
+**Cached probe strategy**: `_probe_cache[domain]` stores last successful strategy in memory (resets on process restart). Falls through to full cascade on cache miss.
 
 ---
 
@@ -207,132 +187,26 @@ verify --jid <jid>
 
 ---
 
-## Submit Safety Gates
+## Submit Safety
 
-### Two Modes
+Every submit requires `--confirm`. No trust persistence.
 
-```
-apply act --fill <jid>              # Learning mode (default)
-apply act --fill <jid> --trust      # Production mode (explicit opt-in)
-```
-
-### Mode Resolution
-
-```python
-def should_trust(domain):
-    """Resolve trust level for current domain."""
-    if args.trust:
-        return True
-    if args.no_trust:
-        return False
-
-    profile = SiteProfile.load(domain)
-    if not profile:
-        return False  # Unknown site → learning mode
-
-    if profile.verify_match(current_page):
-        return True   # Known site, pattern matches → trusted
-    else:
-        return False  # Pattern mismatch → re-learn
-```
-
-### What Happens at Submit Gate
-
-**Learning mode:** The fill loop runs completely. When the submit button is detected:
+The SLM always sees a context summary before confirming:
 
 ```
-LEARNED: site_myworkdayjobs.com
-  Transitions: [Next, Next, Continue, Continue, Review]
-  Widgets: [custom_dropdown, native_select]
-  Pages: 5 (dynamic: 3-7)
-  
-Guide saved to ~/.openclaw/learnings/myworkdayjobs.com.md
-Run with --trust to enable auto-submit on this site
+SUBMIT: greenhouse.io — 12 filled, 2 unfilled (last submit had validation errors)
+  Unfilled: Expected Salary
+  URL: https://careers.greenhouse.io/jobs/123
+  Pass --confirm to submit, or investigate first.
 ```
 
-**Production mode:** Verify against learned pattern, then:
+The warning adapts based on `_last_submit` in job state:
+- `validation_error` → "last submit had validation errors"
+- `captcha` → "CAPTCHA was triggered last time"
+- `unknown` → "last submit was not confirmed"
+- `""` (cleared on success) → no warning
 
-```
-VERIFY: match (5 pages, 4 transitions)
-SUBMIT: clicked
-STATE: submitted
-```
-
-If verification fails:
-
-```
-VERIFY: mismatch (expected 5 pages, got 3 — site changed)
-FALLBACK: learning mode
-No submit — re-learning new pattern
-```
-
----
-
-## Learning Persistence
-
-### Storage Layout
-
-```
-~/.openclaw/learnings/
-├── myworkdayjobs.com.md        # LLM-readable site guide
-├── myworkdayjobs.com.json      # Machine-readable patterns
-├── greenhouse.io.md
-├── greenhouse.io.json
-└── probe_failures/
-    ├── <jid>_dom.html          # Full DOM snapshot on probe failure
-    └── <jid>_probe.json        # Probe metadata
-```
-
-### LLM-Readable Guide (generated)
-
-```markdown
-# myworkdayjobs.com
-
-## Navigation
-- Pages: 3-7 (dynamic — EEO page conditional)
-- Forward buttons: "Continue" (always enabled when required filled)
-- Last page: "Review" heading, "Submit" button
-- Back: never needed (form auto-saves per page)
-
-## Widgets
-- Dropdowns: button[aria-haspopup="listbox"] (not native SELECT)
-- File upload: "Upload Resume" link (not drag-and-drop)
-- Autocomplete: input[role="combobox"] on School/University fields
-
-## Indicators
-- Error: red text below field "This field is required"
-- Submit disabled until all required fields filled
-- Progress bar at top shows step N of M
-
-## Edge Cases
-- EEO/Veteran page appears ~50% of the time, after page 2
-- Phone auto-formats — fill raw digits
-- "How did you hear about us?" always defaults to "LinkedIn"
-```
-
-### Machine-Readable Patterns (code-consumed)
-
-```json
-{
-  "domain": "myworkdayjobs.com",
-  "first_seen": "2026-06-04",
-  "last_seen": "2026-06-04",
-  "best_strategy": "dialog_probe",
-  "transitions": [
-    {"from": 0, "button": "Continue"},
-    {"from": 1, "button": "Continue"},
-    {"from": 2, "button": "Continue"},
-    {"from": 3, "button": "Review"},
-    {"from": 4, "button": "Submit"}
-  ],
-  "page_range": [3, 7],
-  "widgets": ["custom_dropdown", "native_select"],
-  "has_eeo": true,
-  "fill_count": 1,
-  "last_success": "2026-06-04",
-  "trusted": false
-}
-```
+If the page has 0 fields after probe cascade, `--inspect` dumps the visible text so the SLM can identify login walls, blank pages, or errors.
 
 ### LearnSession
 

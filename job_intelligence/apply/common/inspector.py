@@ -45,8 +45,8 @@ class ProbeResult:
     def to_dict(self):
         return {
             "fieldCount": self.field_count,
-            "fields": self.fields[:5],  # preview only
-            "buttons": self.buttons[:5],
+            "fields": self.fields,
+            "buttons": self.buttons,
             "strategy": self.strategy,
             "pageType": self.page_type,
             "hasFileInput": self.has_file_input,
@@ -131,7 +131,6 @@ def _probe_iframes(page):
     all_fields = []
     all_buttons = []
     iframe_srcs = []
-    field_count = 0
 
     try:
         frames = page.frames
@@ -141,25 +140,43 @@ def _probe_iframes(page):
             try:
                 result = frame.evaluate("""() => {
                     const inputs = document.querySelectorAll(
-                        'input:not([type=hidden]):not([type=submit]), select, textarea'
+                        'input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable="true"]'
                     );
                     const btns = document.querySelectorAll('button');
-                    return {
-                        fields: Array.from(inputs).length,
-                        buttons: Array.from(btns).filter(b => b.offsetParent).length,
-                    };
+                    const fields = Array.from(inputs).map(el => {
+                        let label = '';
+                        if (el.id) { const lbl = document.querySelector('label[for="' + el.id + '"]'); if (lbl) label = lbl.textContent.trim(); }
+                        if (!label) { const pl = el.closest('label'); if (pl) label = pl.textContent.trim(); }
+                        if (!label && el.placeholder) label = el.placeholder;
+                        if (!label) { const p = el.closest('div,fieldset,section,li,form'); const plbl = p ? p.querySelector('label, legend, strong, span') : null; if (plbl) label = plbl.textContent.trim(); }
+                        return {
+                            tag: el.tagName, type: el.getAttribute('type') || '',
+                            id: el.id, name: el.getAttribute('name') || '',
+                            label: (label || '').replace(/\\s+/g, ' ').trim().slice(0, 80),
+                            placeholder: el.placeholder || '',
+                            data_automation_id: el.getAttribute('data-automation-id') || '',
+                            role: el.getAttribute('role') || '',
+                            required: !!el.required || el.getAttribute('aria-required') === 'true',
+                            value: el.value || '',
+                            options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0, 15) : [],
+                        };
+                    });
+                    return { fields: fields, buttons: Array.from(btns).filter(b => b.offsetParent).map(b => ({
+                        text: (b.textContent || '').trim().slice(0, 30),
+                        disabled: b.disabled || false,
+                        type: b.getAttribute('type') || 'button',
+                    })) };
                 }""")
-                if result and result.get("fields", 0) > 0:
-                    field_count += result["fields"]
-                    all_buttons.extend([{"text": "?"}] * result.get("buttons", 0))
+                if result and result.get("fields", []):
+                    all_fields.extend(result["fields"])
+                    all_buttons.extend(result.get("buttons", []))
                     iframe_srcs.append(frame.url)
             except Exception:
                 pass  # cross-origin iframe — can't access
     except Exception:
         pass
 
-    if field_count == 0:
-        # Cross-origin detection: extract iframe src attributes
+    if not all_fields:
         try:
             srcs = page.evaluate("""() => {
                 return Array.from(document.querySelectorAll('iframe'))
@@ -174,8 +191,8 @@ def _probe_iframes(page):
         fields=all_fields,
         buttons=all_buttons,
         strategy="iframe",
-        field_count=field_count,
-        page_type="form" if field_count > 0 else "unknown",
+        field_count=len(all_fields),
+        page_type="form" if all_fields else "unknown",
         url=page.url,
         iframe_srcs=iframe_srcs,
     )
@@ -471,3 +488,23 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
     result = ProbeResult(strategy="failed", field_count=0, page_type="unknown", url=page.url)
     result.snapshot_path = snapshot_path
     return result
+
+
+def probe_all(page, domain=None, registry_config=None):
+    """Run ALL probe strategies and return best result + full report.
+    Unlike probe(), does not stop at first success — runs every depth.
+    Returns (best_ProbeResult, list_of_ProbeResults)."""
+    prev_result = None
+    results = []
+    for name, strategy_fn in _PROBE_STRATEGIES:
+        try:
+            if name == "iframe_navigate" and prev_result:
+                r = strategy_fn(page, prev_result=prev_result)
+            else:
+                r = strategy_fn(page)
+            prev_result = r
+            results.append(r)
+        except Exception:
+            results.append(ProbeResult(strategy=name, field_count=0, url=page.url))
+    best = max(results, key=lambda r: r.field_count) if results else ProbeResult(strategy="none", field_count=0, url=page.url)
+    return best, results

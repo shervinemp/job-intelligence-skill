@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""act.py — One action per call: fill, next, back, submit, auto.
+"""act.py — One action per call: fill, next, back, submit.
 Always reads fresh state, verifies before/after, prints structured output.
 """
 import json, os, sys, re, time, random
@@ -7,44 +7,15 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn
-from apply.common.page_helpers import load_state, save_state, read_page, find_page, handle_captcha, check_captcha, scan_actions, read_and_save, is_aggregator, is_platform_trusted, set_platform_trusted, DEFAULT_EXCLUDED_BUTTONS as _EXCLUDED_BUTTONS
+from apply.common.page_helpers import load_state, save_state, read_page, handle_captcha, scan_actions, read_and_save, DEFAULT_EXCLUDED_BUTTONS as _EXCLUDED_BUTTONS
 from apply.common.registry import resolve as resolve_registry
 from apply.common.inspector import probe as probe_page
-from apply.common.field_reader import read_fields
 from apply.common.learner import ButtonIntentClassifier
+from apply.common.output import emit_next, emit_status, emit_warn, emit_fill_report, emit_candidates
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 # Pipeline mode
-_TRUSTED = False  # set via --trust or auto-promotion
-
-
-class CircuitBreaker:
-    """Halt pipeline on 3+ consecutive identical failures."""
-    _state = {"pattern": "", "count": 0}
-
-    _USER_TYPES = {"login_wall", "captcha"}
-
-    @classmethod
-    def record(cls, error_type):
-        if error_type in cls._USER_TYPES:
-            return False  # user-action-required — never trip breaker
-        if error_type == cls._state["pattern"]:
-            cls._state["count"] += 1
-        else:
-            cls._state["pattern"] = error_type
-            cls._state["count"] = 1
-        if cls._state["count"] >= 3:
-            print(f"\n*** CIRCUIT BREAKER: {cls._state['count']} consecutive '{error_type}' failures ***", file=sys.stderr)
-            print(f"  Pipeline halted. Inspect the ATS form or job, then reset state.", file=sys.stderr)
-            return True
-        return False
-
-    @classmethod
-    def reset(cls):
-        cls._state = {"pattern": "", "count": 0}
-
-
-CircuitBreaker.reset()
+_DEBUG = False    # set via --debug; controls verbose output like PAGE full JSON
 
 def _domain(url):
     try:
@@ -189,19 +160,21 @@ def _click_candidate(page, c, state=None):
         _wait_for_change(page, before)
 def _handle_post_click(state, ps, page):
     if not ps or ps["fieldCount"] == 0:
-        # Don't treat review pages (0 inputs + submit button) as submitted
-        has_submit_btn = any(b["text"].lower() in ("submit", "submit application", "apply", "send") and not b.get("disabled")
+        # Don't treat review pages (0 inputs + submit/review button) as submitted
+        has_submit_btn = any(b["text"].lower() in ("submit", "submit application", "apply", "send", "review", "review application") and not b.get("disabled")
                             for b in (ps.get("buttons") or []))
         if has_submit_btn:
             return False
         text = (page.evaluate("() => document.body.innerText") or "").lower()
         for w in ["thank you", "submitted", "your application", "has been sent"]:
             if w in text:
-                print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
+                emit_status("submitted")
+                emit_next("verify")
                 state["result"] = "submitted"
                 save_state(state)
                 return True
-        print("STATUS: modal_closed\nNEXT: verify", file=sys.stderr)
+        emit_status("modal_closed")
+        emit_next("verify")
         state["result"] = "modal_closed"
         save_state(state)
         return True
@@ -209,18 +182,14 @@ def _handle_post_click(state, ps, page):
     error_btns = [b for b in (ps.get("buttons") or []) if "error" in b.get("text","").lower()]
     if error_btns:
         print(f"ERRORS: {json.dumps([b['text'] for b in error_btns])}", file=sys.stderr)
-        if CircuitBreaker.record("validation_error"):
-            return True
         cands = scan_actions(page, ["save and continue", "next", "continue", "review", "submit"])
-        print("CANDIDATES:", file=sys.stderr)
-        for i, c in enumerate(cands[:5]):
-            d = " [DISABLED]" if c.get("disabled") else ""
-            print(f"  [{i}] '{c['text'][:40]}' score={c.get('score','?')}{d}", file=sys.stderr)
-        print("NEXT: model_choice — fix errors or skip", file=sys.stderr)
+        emit_candidates(cands)
+        emit_next("model_choice", "fix errors or skip")
         state["result"] = "validation_error"
         save_state(state)
         return True
-    print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
+    if _DEBUG:
+        print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
     return False
 
 def _fill_radios(page, fields, answers, ca, profile, jid):
@@ -248,6 +217,23 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
         gk = _radio_group_key(rf, idx)
         groups.setdefault(gk, []).append(rf)
 
+    def _check_radio(rf):
+        """Check a radio element by id or name+value. Returns True if checked."""
+        try:
+            if rf.get("id"):
+                el = page.locator(f'id={rf["id"]}')
+                if el.count() > 0 and not el.first.is_checked():
+                    el.first.check(); return True
+            if rf.get("name"):
+                selector = f'input[type="radio"][name="{rf["name"]}"]'
+                rv = (rf.get("value") or "")
+                if rv: selector += f'[value="{rv}"]'
+                el = page.query_selector(selector)
+                if el and not el.is_checked():
+                    el.check(); return True
+        except: pass
+        return False
+
     for gk, group in groups.items():
         opts = [rf["label"] for rf in group]
         q_label = opts[0].split(" - ")[0] if " - " in opts[0] else opts[0]
@@ -255,23 +241,29 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
 
         ans = _find_answer(q_label, q_norm, answers, ca, profile, required=True)
         if ans:
-            for opt in opts:
-                if ans.lower() in opt.lower():
-                    for rf in group:
-                        if rf["label"] == opt and rf["id"]:
-                            try:
-                                el = page.locator(f'id={rf["id"]}')
-                                if el.count() > 0 and not el.first.is_checked():
-                                    el.first.check(); filled += 1
-                            except: pass
-                            break
-                        elif rf["label"] == opt and rf["name"]:
-                            try:
-                                el = page.query_selector(f'[name="{rf["name"]}"][value="on"]')
-                                if el and not el.is_checked():
-                                    el.check(); filled += 1
-                            except: pass
-                            break
+            ans_lower = ans.lower()
+            matched = False
+            # 1. Match by option_label (for grid/matrix: column header or choice text)
+            for rf in group:
+                ol = (rf.get("option_label", "") or "").lower()
+                if ol and (ans_lower in ol or ol in ans_lower):
+                    if _check_radio(rf):
+                        filled += 1; matched = True; break
+            if not matched:
+                # 2. Match by value attribute
+                for rf in group:
+                    rv = (rf.get("value", "") or "").lower()
+                    if rv and (ans_lower == rv or rv in ans_lower or ans_lower in rv):
+                        if _check_radio(rf):
+                            filled += 1; matched = True; break
+            if not matched:
+                # 3. Fallback: match by primary label (original behavior)
+                for opt in opts:
+                    if ans_lower in opt.lower():
+                        for rf in group:
+                            if rf["label"] == opt and _check_radio(rf):
+                                filled += 1; matched = True; break
+                        if matched: break
         else:
             unfilled.append({"label": q_label[:60], "options": opts, "tag": "radio_group"})
     return filled, unfilled
@@ -407,20 +399,55 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             continue
 
         ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
-
         if ans is not None:
             sel = ""
             if f["id"]: sel = f'[id="{f["id"]}"]'
             elif f["name"]: sel = f'[name="{f["name"]}"]'
             elif f.get("placeholder"): sel = f'[placeholder="{f["placeholder"]}"]'
+            if not sel and f.get("label"):
+                try:
+                    sel = page.evaluate("""(lbl) => {
+                        const labels = document.querySelectorAll('label');
+                        for (const l of labels) {
+                            if (l.textContent.trim().toLowerCase() === lbl.toLowerCase()) {
+                                const forId = l.getAttribute('for');
+                                if (forId && document.getElementById(forId)) return '#' + CSS.escape(forId);
+                                const inp = l.querySelector('input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable]');
+                                if (inp && inp.id) return '#' + CSS.escape(inp.id);
+                            }
+                        }
+                        const all = document.querySelectorAll('[aria-labelledby]');
+                        for (const el of all) {
+                            const ref = document.getElementById(el.getAttribute('aria-labelledby'));
+                            if (ref && ref.textContent.trim().toLowerCase() === lbl.toLowerCase() && el.id) return '#' + CSS.escape(el.id);
+                        }
+                        return '';
+                    }""", f["label"]) or ""
+                except: pass
             if sel:
                 try:
                     el = page.query_selector(sel)
                     if el:
                         if f["tag"] == "SELECT":
-                            values = ans if isinstance(ans, list) else [ans]
-                            selected = [next((o for o in f['options'] if v.lower() in o.lower()), v) for v in values]
-                            el.select_option(selected if len(selected) > 1 else selected[0])
+                            try:
+                                values = ans if isinstance(ans, list) else [ans]
+                                selected = [next((o for o in f['options'] if v.lower() in o.lower()), v) for v in values]
+                                el.select_option(selected if len(selected) > 1 else selected[0])
+                                filled += 1
+                            except Exception:
+                                if f.get("required"):
+                                    unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": "SELECT"})
+                                continue
+                        elif f.get("datepicker") == "flatpickr":
+                            page.evaluate("""(args) => {
+                                var sel = args[0], val = args[1];
+                                var el = document.querySelector(sel);
+                                if (!el) return;
+                                if (el._flatpickr) { el._flatpickr.setDate(val, true); return; }
+                                var fp = el.closest('.flatpickr');
+                                if (fp && fp._flatpickr) { fp._flatpickr.setDate(val, true); }
+                            }""", [sel, ans])
+                            filled += 1
                         elif f["tag"] == "DIV" or f.get("contenteditable"):
                             page.evaluate(f"""(sel, val) => {{
                                 const el = document.querySelector(sel);
@@ -428,6 +455,12 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                             }}""", [sel, ans])
                             filled += 1
                         elif f["tag"] in ("INPUT", "TEXTAREA"):
+                            # Check maxlength and truncate if needed
+                            try:
+                                ml = el.get_attribute('maxlength')
+                                if ml and ans and len(ans) > int(ml):
+                                    ans = ans[:int(ml)]
+                            except: pass
                             # Check if this is an autocomplete field (multiselect widget)
                             is_ac = False
                             try:
@@ -465,24 +498,13 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             time.sleep(random.uniform(0.15, 0.4))
     return filled, unfilled
 
-def _should_block_submit(state, page_url):
-    """Check if the trust gate should block submit. Returns True if blocked."""
-    domain = _domain(page_url)
-    if not domain:
-        return False
-    platform_name = state.get("platform", "")
-    if _TRUSTED or is_aggregator(domain) or is_platform_trusted(platform_name):
-        return False
-    return True
-
-
 def _check_already_submitted(state, jid):
     """Check DB stage and return True if already applied. Prevents re-filling."""
     from lib.db import get_conn
     r = get_conn().execute("SELECT stage FROM jobs WHERE id=?", (jid,)).fetchone()
     if r and r["stage"] == "applied":
         print(f"ALREADY: job {jid} is already applied (stage=applied)", file=sys.stderr)
-        print("NEXT: none", file=sys.stderr)
+        emit_next("none")
         return True
     return False
 
@@ -509,8 +531,8 @@ def cmd_fill(jid, answers_json=None, candidate=None):
                 print(f"  [{i}] {p.url[:100]}", file=sys.stderr)
             if ext:
                 print(f"WANTED: {ext[:100]}", file=sys.stderr)
-            print("TIP: navigate to the job URL, then retry", file=sys.stderr)
-            print("NEXT: retry", file=sys.stderr); return
+            print("TIP: open the job URL in Chrome to check, then retry", file=sys.stderr)
+            emit_next("act --inspect"); return
         elif ext:
             page = ctx.new_page()
             page.goto(ext, wait_until="domcontentloaded", timeout=30000)
@@ -519,7 +541,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
         else:
             print("ERROR: no page found and no external URL", file=sys.stderr); return
     if handle_captcha(page, state):
-        print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
+        emit_next("retry after solving CAPTCHA"); return
 
     # Registry + probe cascade
     domain = _domain(page.url)
@@ -530,6 +552,13 @@ def cmd_fill(jid, answers_json=None, candidate=None):
 
     # Probe: try standard first, cascade on failure
     ps = read_page(page)
+    # Poll for React SPA fields that render 3-8s after DOMContentLoaded
+    if ps.get("fieldCount", 0) == 0:
+        for _ in range(16):
+            time.sleep(0.5)
+            ps = read_page(page)
+            if ps.get("fieldCount", 0) > 0:
+                print(f"SPA_WAIT: {(_+1)*0.5:.1f}s", file=sys.stderr); break
     # Use detect-phase fields (e.g., GraphQL) if DOM returned nothing
     if ps.get("fieldCount", 0) == 0 and state.get("_detect_fields", {}).get("fieldCount", 0) > 0:
         ps = state["_detect_fields"]
@@ -601,34 +630,29 @@ def cmd_fill(jid, answers_json=None, candidate=None):
                 print(f"GUEST_APPLY: clicked '{gp}'", file=sys.stderr)
                 break
         if not guest_clicked:
-            print("LOGIN_WALL: sign in required — login in your Chrome browser, then retry this command", file=sys.stderr)
-            CircuitBreaker.record("login_wall")
-            print("NEXT: retry after login", file=sys.stderr)
+            emit_status("login_wall", "sign in required — retry after login")
+            emit_next("retry after login")
             return
 
     # If no fields detected, use model-assisted action finding
     if ps["fieldCount"] == 0:
         apply_kws = ["apply", "apply for this job", "apply manually", "submit", "apply now"]
         candidates = scan_actions(page, apply_kws, _EXCLUDED_BUTTONS)
-        print("CANDIDATES:", file=sys.stderr)
-        for i, c in enumerate(candidates[:8]):
-            d = " [DISABLED]" if c.get("disabled") else ""
-            print(f"  [{i}] '{c['text'][:40]}' score={c.get('score','?')}{d}", file=sys.stderr)
+        emit_candidates(candidates)
 
         if candidates and candidates[0]["score"] >= 4:
-            # Certain match — auto-follow
             c = candidates[0]
             _click_candidate(page, c, state)
             ps = read_page(page)
             print(f"AUTO_FOLLOW: '{c['text']}' → {ps['fieldCount']} fields", file=sys.stderr)
         elif candidates:
             print("CHOOSE: act --fill <jid> --candidate N", file=sys.stderr)
-            print("NEXT: model_choice", file=sys.stderr)
+            emit_next("model_choice")
             state["page"] = ps; state["filled"] = 0; save_state(state); return
         else:
-            print("WARN: no actionable buttons found — page may not be an application form", file=sys.stderr)
-            CircuitBreaker.record("no_buttons")
-            print("NEXT: skip", file=sys.stderr)
+            emit_warn("no fields or buttons found")
+            print("  Open Chrome to inspect the page, then retry.", file=sys.stderr)
+            emit_next("act --inspect")
             state["page"] = ps; state["filled"] = 0; save_state(state); return
 
     profile = {}
@@ -671,18 +695,31 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     # Re-scan for conditional fields that may have appeared after fill (e.g., "Do you have a portfolio?" → URL field)
     if filled > 0:
         time.sleep(0.5)
-        # Re-read with both scopes — dialog may have appeared after conditional fill
-        from apply.common.field_reader import read_fields as _rf
-        ps2 = read_page(page)
-        if ps2.get("fieldCount", 0) == 0 and page.evaluate("() => !!document.querySelector('[role=\"dialog\"]')"):
-            ps2 = _rf(page, scope="dialog")
+        ps2 = read_page(page)  # read_page already falls back to dialog scope
         seen_labels = {f.get("label", "") for f in ps.get("fields", [])}
         new_fields = [f for f in ps2.get("fields", []) if f.get("required") and f.get("label", "") not in seen_labels]
         if new_fields:
             text_filled2, text_unfilled2 = _fill_text(page, new_fields, answers, ca, profile, jid, state)
             filled += text_filled2
             unfilled.extend(text_unfilled2)
-            ps = ps2  # use updated page state
+            ps = ps2
+
+    # Re-check unfilled selects — options may have populated after cascading fill (Country → State)
+    select_unfilled = [f for f in unfilled if f.get("tag") == "SELECT"]
+    if select_unfilled:
+        time.sleep(0.3)
+        ps3 = read_page(page)
+        filled_any = False
+        for cf in select_unfilled:
+            match = next((f3 for f3 in ps3.get("fields", []) if f3.get("tag") == "SELECT" and f3.get("label") == cf.get("label")), None)
+            if match and len(match.get("options", [])) > len(cf.get("options", []) or []):
+                nf, nu = _fill_text(page, [match], answers, ca, profile, jid, state)
+                if nf:
+                    filled_any = True
+                    filled += nf
+                    unfilled = [u for u in unfilled if u.get("label") != cf.get("label")]
+        if filled_any:
+            ps = ps3
 
     read_and_save(page, state)
 
@@ -691,28 +728,27 @@ def cmd_fill(jid, answers_json=None, candidate=None):
         for label, val in answers.items():
             _save_answer(label, val, profile_path)
 
-    progress = f" [Page {state.get('_page', '?')}]"
-    print(f"FILLED: {filled}  UNFILLED: {len(unfilled)}{progress}", file=sys.stderr)
-    for f in unfilled:
-        opts = f" options={f['options'][:3]}" if f.get('options') else ''
-        print(f"  {f['label']}{opts}", file=sys.stderr)
+    page_num = state.get('_page', '?')
+    emit_fill_report(filled, unfilled, page_num, profile if unfilled else None)
 
     btns = ps.get("buttons", [])
     has_submit = any(b["text"].lower() in ("submit", "submit application", "apply", "send application") and not b["disabled"] for b in btns)
     has_next = any(b["text"].lower() in ("next", "review", "continue", "done") and not b["disabled"] for b in btns)
     if unfilled:
-        print("NEXT: act --fill --answers '{\"<question>\": \"<answer>\"}'", file=sys.stderr)
+        emit_next('act --fill --answers \'{"<question>": "<answer>"}\'')
     elif has_submit:
-        print("NEXT: act --submit", file=sys.stderr)
+        emit_next("act --submit")
     elif has_next:
-        print("NEXT: act --next", file=sys.stderr)
+        emit_next("act --next")
     elif not unfilled and not has_submit and not has_next:
         # All fields filled, no buttons — possible auto-submit
         page_text = (page.evaluate("() => document.body.innerText") or "").lower()
         if any(w in page_text for w in ["thank you", "submitted", "your application", "has been sent"]):
-            print("NEXT: verify (auto-submit detected)", file=sys.stderr)
+            emit_status("submitted", "auto-submit without clicking")
+            emit_next("verify")
         else:
-            print("NEXT: verify (no actionable buttons)", file=sys.stderr)
+            emit_status("unknown", "all fields filled but no buttons")
+            emit_next("verify")
 
 def cmd_next(jid, candidate=None):
     state = load_state()
@@ -736,7 +772,7 @@ def cmd_next(jid, candidate=None):
 
     ps = read_page(page)
     if handle_captcha(page, state):
-        print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
+        emit_next("retry after solving CAPTCHA"); return
 
     advance_kws = ["next", "continue", "review", "done", "submit", "submit application"]
     all_candidates = scan_actions(page, advance_kws, _EXCLUDED_BUTTONS)
@@ -769,26 +805,23 @@ def cmd_next(jid, candidate=None):
 
     if not target and candidates:
         print("CHOOSE: act --next <jid> --candidate N", file=sys.stderr)
-        print("NEXT: model_choice", file=sys.stderr)
+        emit_next("model_choice")
         save_state(state); return
     elif not target:
         # Check if there are disabled advance buttons
         for c in scan_actions(page, advance_kws):
             if c.get("disabled"):
                 print(f"BUTTON_DISABLED: {c['text']} — fill required fields first", file=sys.stderr)
-                print("NEXT: act --fill", file=sys.stderr); return
-        print("NO_BUTTON\nNEXT: none", file=sys.stderr); return
+                emit_next("act --fill"); return
+        print("NO_BUTTON", file=sys.stderr)
+        emit_next("none"); return
 
     print(f"ACTION: {target['text']}", file=sys.stderr)
-    # Gate: if target is a submit button, route through trust gate
-    if ButtonIntentClassifier.classify(target["text"])[0] == "submit" and _should_block_submit(state, page.url):
-        print("LEARNING: submit gate reached — use act --submit to submit, or act --fill to continue", file=sys.stderr)
-        return
     _click_candidate(page, target, state)
     ps2 = read_page(page)
     if not _handle_post_click(state, ps2, page):
         has_submit = any(b["text"].lower() in ("submit", "submit application", "apply", "send application") and not b["disabled"] for b in ps2.get("buttons",[]))
-        print(f"NEXT: {'act --submit' if has_submit else 'act --fill'}", file=sys.stderr)
+        emit_next("act --submit" if has_submit else "act --fill")
 
 def cmd_back(jid):
     state = load_state()
@@ -806,22 +839,15 @@ def cmd_back(jid):
     ps = read_page(page)
     state["page"] = ps
     save_state(state)
-    print(f"ACTION: Back\nPAGE: {json.dumps(ps)}\nNEXT: act --fill", file=sys.stderr)
+    if _DEBUG:
+        print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
+    emit_next("act --fill")
 
 def cmd_submit(jid, confirm=False, candidate=None):
     state = load_state()
     if state.get("jid") != jid:
         print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
     if _check_already_submitted(state, jid):
-        return
-
-    # Trust gate: learning mode never submits (unless aggregator or platform-trusted)
-    submit_url = state.get("external_url", "") or state.get("url", "")
-    domain = _domain(submit_url)
-    platform_name = state.get("platform", "")
-    if _should_block_submit(state, submit_url):
-        print("LEARNING: submit gate reached — no submit until --trust is set", file=sys.stderr)
-        print("  Platform will auto-trust after first successful submit on this site", file=sys.stderr)
         return
 
     b, ctx = connect()
@@ -836,11 +862,12 @@ def cmd_submit(jid, confirm=False, candidate=None):
             time.sleep(5)
             pm.register(page)
         else:
-            print("ERROR: no page found and no external URL\nNEXT: detect or navigate first", file=sys.stderr)
+            print("ERROR: no page found and no external URL", file=sys.stderr)
+            emit_next("detect or navigate first")
             return
 
     if handle_captcha(page, state):
-        print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
+        emit_next("retry after solving CAPTCHA"); return
 
     # Capture alert dialogs (validation errors, success alerts)
     _alerts = []
@@ -875,12 +902,34 @@ def cmd_submit(jid, confirm=False, candidate=None):
         for i, c in enumerate(cands[:8]):
             print(f"  [{i}] '{c['text'][:40]}' score={c.get('score','?')}", file=sys.stderr)
         print("CHOOSE: act --submit <jid> --candidate N", file=sys.stderr)
-        print("NEXT: model_choice", file=sys.stderr); return
+        emit_next("model_choice"); return
     else:
-        print("NO_SUBMIT_BUTTON\nNEXT: none", file=sys.stderr); return
-    print(f"SUBMIT: {target['text']}\nDISABLED: {target.get('disabled', False)}", file=sys.stderr)
+        print("NO_SUBMIT_BUTTON", file=sys.stderr)
+        emit_next("none"); return
     if not confirm:
-        print("DRY_RUN: pass --confirm to submit\nNEXT: act --submit --confirm", file=sys.stderr); return
+        url = state.get("external_url", "") or state.get("url", "")
+        url_short = url.split("?")[0][:80] if url else "?"
+        plat = state.get("platform", "") or _domain(url) or "unknown"
+        filled = state.get("filled", 0)
+        ps = state.get("page", {})
+        unfilled_fields = [f for f in ps.get("fields", []) if f.get("required") and not f.get("value")]
+        last = state.get("_last_submit", "")
+        warn = ""
+        if last == "validation_error":
+            warn = " (last submit had validation errors)"
+        elif last == "captcha":
+            warn = " (CAPTCHA was triggered last time)"
+        elif last == "unknown":
+            warn = " (last submit was not confirmed)"
+        print(f"SUBMIT: {plat} — {filled} filled, {len(unfilled_fields)} unfilled{warn}", file=sys.stderr)
+        for f in unfilled_fields[:3]:
+            print(f"  Unfilled: {f.get('label', '?')}", file=sys.stderr)
+        if len(unfilled_fields) > 3:
+            print(f"  ... and {len(unfilled_fields)-3} more", file=sys.stderr)
+        print(f"  URL: {url_short}", file=sys.stderr)
+        print("  Pass --confirm to submit, or investigate first.", file=sys.stderr)
+        emit_next("act --submit --confirm"); return
+    print(f"SUBMIT: {target['text']}\nDISABLED: {target.get('disabled', False)}", file=sys.stderr)
 
     before_hash = _page_hash(page)
     b_loc = page.locator(f'button:has-text("{target["text"]}")')
@@ -903,7 +952,9 @@ def cmd_submit(jid, confirm=False, candidate=None):
     # Check for CAPTCHA triggered by submission
     if handle_captcha(page, state):
         print("*** Solve the CAPTCHA above, then retry submit ***", file=sys.stderr)
-        print("NEXT: act --submit --confirm", file=sys.stderr)
+        state["_last_submit"] = "captcha"
+        save_state(state)
+        emit_next("act --submit --confirm")
         return
 
     text = (page.evaluate("() => document.body.innerText") or "").lower()
@@ -914,7 +965,10 @@ def cmd_submit(jid, confirm=False, candidate=None):
     for signal in ["thank you", "submitted", "your application", "has been sent", "application received"]:
         if signal in text:
             get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-            print("STATUS: submitted (via AJAX)\nNEXT: verify", file=sys.stderr)
+            state["_last_submit"] = ""
+            save_state(state)
+            emit_status("submitted (via AJAX)")
+            emit_next("verify")
             return
 
     has_form = page.evaluate("""() => {
@@ -923,63 +977,123 @@ def cmd_submit(jid, confirm=False, candidate=None):
     }""") or False
     has_error = any(w in text for w in ["error", "required", "invalid", "correct the"])
     if has_error and has_form:
-        print("STATUS: validation_errors — form still present\nNEXT: act --fill", file=sys.stderr)
+        state["_last_submit"] = "validation_error"
+        save_state(state)
+        emit_status("validation_errors", "form still present")
+        emit_next("act --fill")
     elif not page.evaluate("() => document.querySelector('[role=\"dialog\"]')") and not has_form:
         get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
-        print("STATUS: submitted\nNEXT: verify", file=sys.stderr)
+        state["_last_submit"] = ""
+        save_state(state)
+        emit_status("submitted")
+        emit_next("verify")
     else:
-        print("STATUS: unknown (page unchanged or not submitted)\nNEXT: verify", file=sys.stderr)
+        state["_last_submit"] = "unknown"
+        save_state(state)
+        emit_status("unknown", "page unchanged or not submitted")
+        emit_next("verify")
 
-def cmd_auto(jid, answers_json=None):
+def cmd_inspect(jid, candidate=None):
+    """Analyze the job page: dump fields, buttons, probe result, screenshot.
+    No fill, no submit — pure analysis. Use when stuck with NEXT: act --inspect."""
     state = load_state()
     if state.get("jid") != jid:
-        print(f"ERROR: state is for job {state.get('jid','?')}, not {jid} — run detect {jid} first", file=sys.stderr); return
-    if _check_already_submitted(state, jid):
-        return
-    answers = {}
-    if answers_json:
-        try: answers = json.loads(answers_json)
-        except: pass
+        emit_error(f"state is for job {state.get('jid','?')}, not {jid}")
+        print("  Run detect first.", file=sys.stderr); return
 
-    for pn in range(1, 11):
-        cmd_fill(jid, json.dumps(answers) if answers else None)
-        state = load_state()
-        ps = state.get("page", {})
-        btns = ps.get("buttons", [])
-        has_submit = any(b["text"].lower() in ("submit", "submit application", "apply", "send application") and not b.get("disabled") for b in btns)
-        has_next = any(b["text"].lower() in ("next", "review", "continue", "done") and not b.get("disabled") for b in btns)
-        unfilled = [f for f in ps.get("fields", []) if f.get("required") and not f.get("value")]
+    b, ctx = connect()
+    from apply.common.page_manager import PageManager
+    pm = PageManager(ctx, jid)
+    ext = state.get("external_url", "")
+    page, score, candidates = pm.find(fallback_url=ext)
 
-        if has_submit and not unfilled:
-            print(f"AUTO: page {pn} — all filled, submitting", file=sys.stderr)
-            cmd_submit(jid, confirm=True)
-            state = load_state()
-            if state.get("result") in ("submitted", "modal_closed"):
-                print(f"AUTO: {state['result']}", file=sys.stderr)
-                return
-            print(f"AUTO: submit returned unknown state, continuing", file=sys.stderr)
-        elif unfilled:
-            print(f"AUTO: page {pn} — {len(unfilled)} unfilled, stop", file=sys.stderr)
-            return
-        elif has_next:
-            print(f"AUTO: page {pn} — filled, advancing", file=sys.stderr)
-            cmd_next(jid)
-            state = load_state()
-            if state.get("result") in ("submitted", "modal_closed"):
-                print(f"AUTO: {state['result']}", file=sys.stderr)
-                return
+    # Show all open pages for context
+    print(f"Open pages ({len(ctx.pages)}):", file=sys.stderr)
+    for i, p in enumerate(ctx.pages):
+        url = p.url[:100]
+        match = " [MATCH]" if p == page else ""
+        print(f"  [{i}] {url}{match}", file=sys.stderr)
+
+    if not page:
+        if candidate is not None and candidate < len(ctx.pages):
+            page = ctx.pages[candidate]
+            print(f"Picked page [{candidate}]: {page.url[:100]}", file=sys.stderr)
         else:
-            print(f"AUTO: page {pn} — no buttons detected, stop", file=sys.stderr)
+            emit_warn(f"no page matches job {jid}")
+            print(f"  Wanted: {ext[:100] if ext else '?'}", file=sys.stderr)
+            if ctx.pages:
+                print(f"  Use --inspect --candidate N to pick one.", file=sys.stderr)
+                emit_next("model_choice")
+            else:
+                emit_next("none")
             return
-    print(f"AUTO: max pages reached without submit", file=sys.stderr)
+
+    if _DEBUG:
+        import pathlib
+        ss_dir = pathlib.Path.home() / ".openclaw"
+        ss_dir.mkdir(exist_ok=True)
+        ss = page.screenshot(path=str(ss_dir / f"inspect_{jid}_{int(time.time())}.png"))
+        print(f"Screenshot: {ss}", file=sys.stderr)
+
+    # Page info
+    print(f"URL: {page.url}", file=sys.stderr)
+    print(f"Title: {page.title() or '?'}", file=sys.stderr)
+    print(f"Platform: {state.get('platform', '?')}", file=sys.stderr)
+    print(f"Filled: {state.get('filled', 0)} fields", file=sys.stderr)
+
+    # Run all probe strategies and report best result
+    ps = read_page(page)
+    from apply.common.registry import resolve as resolve_registry
+    from apply.common.inspector import probe_all
+    domain = _domain(page.url)
+    registry = resolve_registry(page.url)
+    reg_config = {"probe": {"widgets": registry.widgets}} if registry and registry.widgets else None
+
+    best, all_results = probe_all(page, domain=domain, registry_config=reg_config)
+    if best and best.field_count > 0:
+        ps = best.to_dict()
+        print(f"Probe results ({len(all_results)} strategies):", file=sys.stderr)
+        for r in all_results:
+            if r.field_count > 0 or r is best:
+                marker = " [BEST]" if r is best else ""
+                print(f"  {r.strategy}: {r.field_count} fields{marker}", file=sys.stderr)
+
+    fc = ps.get("fieldCount", 0)
+    print(f"Fields: {fc}", file=sys.stderr)
+    for f in ps.get("fields", []):
+        opts = f.get("options", [])
+        extra = f" -> {opts[:5]}" if opts else ""
+        print(f"  [{f.get('tag','?')}] {f.get('label','?')} req={f.get('required')}{extra}", file=sys.stderr)
+
+    btns = ps.get("buttons", [])
+    print(f"Buttons: {len(btns)}", file=sys.stderr)
+    for b in btns:
+        d = " [DISABLED]" if b.get("disabled") else ""
+        print(f"  '{b.get('text','?')}'{d}", file=sys.stderr)
+
+    print(f"Page type: {ps.get('pageType', '?')}", file=sys.stderr)
+    print(f"Dialog: {'yes' if page.evaluate('() => !!document.querySelector(\"[role=dialog], dialog\")') else 'no'}", file=sys.stderr)
+
+    if fc > 0:
+        emit_next("act --fill")
+    else:
+        # Show page text so SLM can identify login walls, blank pages, errors, etc.
+        raw = (page.evaluate("() => document.body.innerText") or "")[:500]
+        if raw.strip():
+            print(f"Page text (first 500 chars):", file=sys.stderr)
+            for line in raw.split("\n")[:10]:
+                if line.strip():
+                    print(f"  {line.strip()[:120]}", file=sys.stderr)
+        else:
+            print("Page text: empty — page may be blank or not loaded.", file=sys.stderr)
+        emit_next("none")
 
 def run(args):
-    global _TRUSTED
-    if getattr(args, 'trust', False):
-        _TRUSTED = True
+    global _DEBUG
+    _DEBUG = getattr(args, 'debug', False)
     if args.fill: cmd_fill(args.jid, args.answers, args.candidate)
     elif args.next: cmd_next(args.jid, args.candidate)
     elif args.back: cmd_back(args.jid)
     elif args.submit: cmd_submit(args.jid, args.confirm, args.candidate)
-    elif args.auto: cmd_auto(args.jid, args.answers)
-    else: print("ERROR: specify --fill, --next, --back, --submit, or --auto", file=sys.stderr)
+    elif args.inspect: cmd_inspect(args.jid, args.candidate)
+    else: print("ERROR: specify --fill, --next, --back, --submit, or --inspect", file=sys.stderr)
