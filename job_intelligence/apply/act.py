@@ -299,7 +299,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             # Skip optional uploads after the first file is placed (unless it's a distinct field like Cover Letter)
             if file_uploaded and not f.get("required", False):
                 # Only skip if not a distinct secondary upload (cover letter vs resume)
-                if "cover" not in lbl_lower and "letter" not in lbl_lower:
+                if "cover" not in lbl_lower and "letter" not in lbl_lower and "discovery" not in lbl_lower:
                     continue
             if not os.path.isdir(results_dir) or not any("Resume" in fn and fn.endswith(".pdf") for fn in os.listdir(results_dir)):
                 if f.get("required", False):
@@ -679,7 +679,11 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     # Re-scan for conditional fields that may have appeared after fill (e.g., "Do you have a portfolio?" → URL field)
     if filled > 0:
         time.sleep(0.5)
+        # Re-read with both scopes — dialog may have appeared after conditional fill
+        from apply.common.field_reader import read_fields as _rf
         ps2 = read_page(page)
+        if ps2.get("fieldCount", 0) == 0 and page.evaluate("() => !!document.querySelector('[role=\"dialog\"]')"):
+            ps2 = _rf(page, scope="dialog")
         seen_labels = {f.get("label", "") for f in ps.get("fields", [])}
         new_fields = [f for f in ps2.get("fields", []) if f.get("required") and f.get("label", "") not in seen_labels]
         if new_fields:
