@@ -1,5 +1,7 @@
 name: ashby
 version: 1
+notes: |
+  Recaptcha textarea at bottom of form — ignore (not a real field).
 
 detect:
   domains:

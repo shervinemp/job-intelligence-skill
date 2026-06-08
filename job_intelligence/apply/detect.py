@@ -8,6 +8,7 @@ from lib.chrome_manager import connect
 from lib.db import get_conn, desc_exists
 from apply.common.page_helpers import read_page, check_captcha
 from apply.common.output import emit_next, emit_status, emit_type, emit_error
+from apply.common.registry import resolve as resolve_registry
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 
@@ -137,18 +138,22 @@ def run(jid):
             }));
         }""")
 
+        reg = resolve_registry(url)
         if page_state and page_state["fieldCount"] > 0:
             _merge_state({"jid": jid, "_detect_fields": page_state})
             emit_type("easy_apply")
+            if reg: reg.emit_notes()
             emit_next("act --fill")
         elif apply_fields:
             fb = {"fieldCount": len(apply_fields), "fields": apply_fields}
             _merge_state({"jid": jid, "_detect_fields": fb})
             emit_type("easy_apply")
+            if reg: reg.emit_notes()
             emit_next("act --fill")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
             _merge_state({"jid": jid})
             emit_type("easy_apply", "dialog not auto-opened")
+            if reg: reg.emit_notes()
             emit_next("act --fill")
         else:
             emit_type("unknown")
@@ -166,7 +171,6 @@ def run(jid):
             return
         # Check for already-applied text patterns before proceeding
         from apply.common.platforms import check_page, ALREADY_APPLIED
-        from apply.common.registry import resolve as resolve_registry
         plat_text = (p.evaluate("() => document.body.innerText") or "").lower()
         reg = resolve_registry(url)
         plat_name = reg.name if reg else None
@@ -177,12 +181,12 @@ def run(jid):
             sys.exit(0)
         page_state = read_page(p)
         if page_state and page_state["fieldCount"] > 0:
-            from apply.common.registry import resolve as resolve_registry
             from apply.common.platforms import detect_platform
             plat = detect_platform(url)
             reg = resolve_registry(url)
             plat_name = reg.name if reg else plat
             emit_type("ats_direct", f"EXTERNAL_URL: {url}\nPLATFORM: {plat_name}")
+            if reg: reg.emit_notes()
             emit_next("act --fill")
             _merge_state({"jid": jid, "url": url, "title": title, "company": company,
                          "external_url": url, "platform": plat_name, "page": page_state})

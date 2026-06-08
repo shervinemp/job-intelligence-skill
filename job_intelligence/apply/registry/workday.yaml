@@ -1,5 +1,8 @@
 name: workday
 version: 1
+notes: |
+  Phone: strip +1 prefix when separate Country Phone Code field present.
+  Skills autocomplete: type skill then press Enter.
 
 detect:
   domains:

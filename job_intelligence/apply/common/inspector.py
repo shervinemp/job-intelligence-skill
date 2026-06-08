@@ -378,7 +378,7 @@ def _probe_custom_widgets(page, registry_config=None):
     if not registry_config:
         return ProbeResult(strategy="custom_widgets", field_count=0, page_type="unknown", url=page.url)
 
-    custom_selectors = registry_config.get("probe", {}).get("widgets", {})
+    custom_selectors = registry_config.widgets if hasattr(registry_config, 'widgets') else {}
     field_count = 0
     for widget_type, selector in custom_selectors.items():
         try:
@@ -449,7 +449,7 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
     Args:
         page: Playwright page object
         domain: Domain for cache lookup
-        registry_config: Platform registry YAML dict
+        registry_config: Platform registry config (RegistryConfig or None)
         deep: If True, run all strategies including --deep only
         snapshot_on_fail: If True and all strategies fail, save DOM snapshot
         jid: Job ID for snapshot naming
@@ -464,6 +464,20 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
                 return result
             # Cache miss — site changed, fall through
 
+    # Try best_strategy from YAML config before full cascade
+    best_strategy = getattr(registry_config, 'best_strategy', None) if registry_config else None
+    if best_strategy:
+        strategy_fn = dict(_PROBE_STRATEGIES).get(best_strategy)
+        if strategy_fn:
+            kw = {}
+            if best_strategy == "custom_widgets":
+                kw["registry_config"] = registry_config
+            result = strategy_fn(page, **kw)
+            if result.field_count > 0:
+                if domain:
+                    _probe_cache[domain] = best_strategy
+                return result
+
     # Full cascade: track previous result for iframe_navigate
     prev_result = None
     for name, strategy_fn in _PROBE_STRATEGIES:
@@ -472,6 +486,8 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
 
         if name == "iframe_navigate" and prev_result:
             result = strategy_fn(page, prev_result=prev_result)
+        elif name == "custom_widgets" and registry_config:
+            result = strategy_fn(page, registry_config=registry_config)
         else:
             result = strategy_fn(page)
         prev_result = result
@@ -500,6 +516,8 @@ def probe_all(page, domain=None, registry_config=None):
         try:
             if name == "iframe_navigate" and prev_result:
                 r = strategy_fn(page, prev_result=prev_result)
+            elif name == "custom_widgets" and registry_config:
+                r = strategy_fn(page, registry_config=registry_config)
             else:
                 r = strategy_fn(page)
             prev_result = r
