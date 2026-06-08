@@ -439,31 +439,17 @@ _PROBE_STRATEGIES = [
 # Strategies that should never be auto-tried (only via --deep)
 _DEEP_ONLY = {"html_scan"}
 
-# In-memory probe strategy cache — resets on process restart
-_probe_cache = {}  # domain -> best_strategy_name
-
-
 def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=True, jid=None):
     """Run the probe cascade. Returns the first successful ProbeResult.
 
     Args:
         page: Playwright page object
-        domain: Domain for cache lookup
+        domain: Domain (unused, kept for compatibility)
         registry_config: Platform registry config (RegistryConfig or None)
         deep: If True, run all strategies including --deep only
         snapshot_on_fail: If True and all strategies fail, save DOM snapshot
         jid: Job ID for snapshot naming
     """
-    # Try cached best strategy first
-    if domain and domain in _probe_cache:
-        cached = _probe_cache[domain]
-        strategy_fn = dict(_PROBE_STRATEGIES).get(cached)
-        if strategy_fn:
-            result = strategy_fn(page)
-            if result.field_count > 0:
-                return result
-            # Cache miss — site changed, fall through
-
     # Try best_strategy from YAML config before full cascade
     best_strategy = getattr(registry_config, 'best_strategy', None) if registry_config else None
     if best_strategy:
@@ -474,8 +460,6 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
                 kw["registry_config"] = registry_config
             result = strategy_fn(page, **kw)
             if result.field_count > 0:
-                if domain:
-                    _probe_cache[domain] = best_strategy
                 return result
 
     # Full cascade: track previous result for iframe_navigate
@@ -492,8 +476,6 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
             result = strategy_fn(page)
         prev_result = result
         if result.field_count > 0:
-            if domain:
-                _probe_cache[domain] = name
             return result
 
     # All strategies failed

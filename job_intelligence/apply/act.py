@@ -546,6 +546,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     # Registry + probe cascade
     domain = _domain(page.url)
     registry = resolve_registry(page.url)
+    if registry: registry.emit_notes()
 
     # Track page number for progress indicator
     state["_page"] = state.get("_page", 0) + 1
@@ -1041,20 +1042,28 @@ def cmd_inspect(jid, candidate=None):
     print(f"Platform: {state.get('platform', '?')}", file=sys.stderr)
     print(f"Filled: {state.get('filled', 0)} fields", file=sys.stderr)
 
-    # Run all probe strategies and report best result
+    # Run probe (short-circuits via YAML best_strategy if configured)
     ps = read_page(page)
     from apply.common.registry import resolve as resolve_registry
-    from apply.common.inspector import probe_all
+    from apply.common.inspector import probe as probe_page, probe_all
     domain = _domain(page.url)
     registry = resolve_registry(page.url)
-    best, all_results = probe_all(page, domain=domain, registry_config=registry)
+    best = probe_page(page, domain=domain, registry_config=registry)
     if best and best.field_count > 0:
         ps = best.to_dict()
-        print(f"Probe results ({len(all_results)} strategies):", file=sys.stderr)
-        for r in all_results:
-            if r.field_count > 0 or r is best:
-                marker = " [BEST]" if r is best else ""
-                print(f"  {r.strategy}: {r.field_count} fields{marker}", file=sys.stderr)
+        print(f"Probe: {best.strategy} ({best.field_count} fields)", file=sys.stderr)
+    else:
+        # Full diagnostic probe_all on failure
+        best, all_results = probe_all(page, domain=domain, registry_config=registry)
+        if best and best.field_count > 0:
+            ps = best.to_dict()
+            print(f"Probe results ({len(all_results)} strategies):", file=sys.stderr)
+            for r in all_results:
+                if r.field_count > 0 or r is best:
+                    marker = " [BEST]" if r is best else ""
+                    print(f"  {r.strategy}: {r.field_count} fields{marker}", file=sys.stderr)
+        else:
+            print("Probe: all strategies failed", file=sys.stderr)
 
     fc = ps.get("fieldCount", 0)
     print(f"Fields: {fc}", file=sys.stderr)
