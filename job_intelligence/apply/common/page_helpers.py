@@ -118,19 +118,12 @@ def save_state(state):
 
 def read_page(p):
     """Read page content including fields, buttons, page type hints.
-    Delegates to the canonical field_reader for consistency."""
+    Tries document scope first, falls back to dialog scope if no fields found.
+    Dialog scope auto-detection via activeElement was unreliable — this is simpler and catches more cases."""
     from apply.common.field_reader import read_fields as _rf
     result = _rf(p, scope="document")
-    # Auto-detect dialog scope: if activeElement is inside a dialog, re-read with dialog scope
-    try:
-        in_dialog = p.evaluate("""() => {
-            const d = document.querySelector('[role="dialog"]');
-            return d && d.contains(document.activeElement) ? true : false;
-        }""")
-        if in_dialog:
-            result = _rf(p, scope="dialog")
-    except Exception:
-        pass
+    if result["fieldCount"] == 0:
+        result = _rf(p, scope="dialog")
     return result
 
 def find_page(ctx, state):
