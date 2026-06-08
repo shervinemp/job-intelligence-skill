@@ -7,6 +7,8 @@ from urllib.parse import urlparse
 
 REGISTRY_DIR = Path(os.path.dirname(__file__)).parent / "registry"
 
+_noted_platforms = set()  # tracks which platforms had QUIRKS printed this session
+
 
 class RegistryConfig:
     """Loaded platform configuration from a registry YAML + optional Python hooks."""
@@ -22,7 +24,15 @@ class RegistryConfig:
         self.has_eeo = data.get("properties", {}).get("has_eeo", False)
         self.has_progress_bar = data.get("properties", {}).get("has_progress_bar", False)
         self.page_range = tuple(data.get("properties", {}).get("page_range", [1, 10]))
+        self.notes = data.get("notes", "")
         self._hook_module = hook_module
+
+    def emit_notes(self):
+        """Print platform QUIRKS: once per session on first detect."""
+        if self.notes and self.name not in _noted_platforms:
+            _noted_platforms.add(self.name)
+            for line in self.notes.strip().splitlines():
+                print(f"QUIRKS: {line.strip()}")
 
     def has_hook(self, name):
         """Check if a hook function exists in the Python module."""

@@ -563,7 +563,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     if ps.get("fieldCount", 0) == 0 and state.get("_detect_fields", {}).get("fieldCount", 0) > 0:
         ps = state["_detect_fields"]
     if ps.get("fieldCount", 0) == 0 and domain:
-        reg_config = {"probe": {"widgets": registry.widgets}} if registry and registry.widgets else None
+        reg_config = registry  # Pass RegistryConfig object for best_strategy + widgets
         probe_result = probe_page(page, domain=domain, registry_config=reg_config)
         if probe_result.field_count > 0:
             ps = probe_result.to_dict()
@@ -1047,9 +1047,7 @@ def cmd_inspect(jid, candidate=None):
     from apply.common.inspector import probe_all
     domain = _domain(page.url)
     registry = resolve_registry(page.url)
-    reg_config = {"probe": {"widgets": registry.widgets}} if registry and registry.widgets else None
-
-    best, all_results = probe_all(page, domain=domain, registry_config=reg_config)
+    best, all_results = probe_all(page, domain=domain, registry_config=registry)
     if best and best.field_count > 0:
         ps = best.to_dict()
         print(f"Probe results ({len(all_results)} strategies):", file=sys.stderr)
