@@ -223,7 +223,7 @@ def _handle_post_click(state, ps, page):
     print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
     return False
 
-def _fill_radios(page, fields, answers, ca, jid):
+def _fill_radios(page, fields, answers, ca, profile, jid):
     """Fill radio groups. Returns filled count + unfilled list."""
     filled = 0
     unfilled = []
@@ -253,15 +253,7 @@ def _fill_radios(page, fields, answers, ca, jid):
         q_label = opts[0].split(" - ")[0] if " - " in opts[0] else opts[0]
         q_norm = re.sub(r'[^a-z0-9+#]+', ' ', q_label.lower()).strip()
 
-        ans = None
-        for k, v in answers.items():
-            k_norm = re.sub(r'[^a-z0-9+#]+', ' ', k.lower()).strip()
-            if k_norm == q_norm:
-                ans = v; break
-        if not ans:
-            for ck, cv in ca.items():
-                if cv and ck.lower().replace('_', ' ').strip() == q_norm:
-                    ans = cv; break
+        ans = _find_answer(q_label, q_norm, answers, ca, profile, required=True)
         if ans:
             for opt in opts:
                 if ans.lower() in opt.lower():
@@ -650,7 +642,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             _validate_profile(profile)
     ca = profile.get("common_answers", {})
 
-    radio_filled, radio_unfilled = _fill_radios(page, ps["fields"], answers, ca, jid)
+    radio_filled, radio_unfilled = _fill_radios(page, ps["fields"], answers, ca, profile, jid)
     text_filled, text_unfilled = _fill_text(page, ps["fields"], answers, ca, profile, jid, state)
     filled = radio_filled + text_filled
     unfilled = radio_unfilled + text_unfilled
@@ -747,20 +739,20 @@ def cmd_next(jid, candidate=None):
         print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
 
     advance_kws = ["next", "continue", "review", "done", "submit", "submit application"]
+    all_candidates = scan_actions(page, advance_kws, _EXCLUDED_BUTTONS)
 
     # If candidate was specified, click it directly
     if candidate is not None:
-        cands = scan_actions(page, advance_kws, _EXCLUDED_BUTTONS)
-        if candidate < len(cands):
-            c = cands[candidate]
+        if candidate < len(all_candidates):
+            c = all_candidates[candidate]
             _click_candidate(page, c, state)
             ps2 = read_page(page)
             _handle_post_click(state, ps2, page)
         else:
-            print(f"ERROR: candidate {candidate} out of range (0-{len(cands)-1})", file=sys.stderr)
+            print(f"ERROR: candidate {candidate} out of range (0-{len(all_candidates)-1})", file=sys.stderr)
         return
 
-    candidates = [c for c in scan_actions(page, advance_kws, _EXCLUDED_BUTTONS) if not c.get("disabled")]
+    candidates = [c for c in all_candidates if not c.get("disabled")]
     print("CANDIDATES:", file=sys.stderr)
     for i, c in enumerate(candidates[:8]):
         print(f"  [{i}] '{c['text'][:40]}' score={c.get('score','?')}", file=sys.stderr)
@@ -909,9 +901,8 @@ def cmd_submit(jid, confirm=False, candidate=None):
             break
 
     # Check for CAPTCHA triggered by submission
-    if check_captcha(page):
-        print("*** CAPTCHA DETECTED after submit — solve in browser, then retry submit ***", file=sys.stderr)
-        handle_captcha(page, state)
+    if handle_captcha(page, state):
+        print("*** Solve the CAPTCHA above, then retry submit ***", file=sys.stderr)
         print("NEXT: act --submit --confirm", file=sys.stderr)
         return
 
