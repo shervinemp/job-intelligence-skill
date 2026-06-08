@@ -2,7 +2,7 @@
 """act.py — One action per call: fill, next, back, submit, auto.
 Always reads fresh state, verifies before/after, prints structured output.
 """
-import json, os, sys, re, time
+import json, os, sys, re, time, random
 from urllib.parse import urlparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
@@ -14,7 +14,7 @@ from apply.common.field_reader import read_fields
 from apply.common.learner import ButtonIntentClassifier
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
-_EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
+_EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse", "clear", "reset", "start over"}
 
 # Pipeline mode
 _TRUSTED = False  # set via --trust or auto-promotion
@@ -91,8 +91,10 @@ def _save_answer(label, value, profile_path):
     if key not in ca or ca[key] != value:
         ca[key] = value
         try:
-            with open(profile_path, "w") as f:
+            tmp_path = profile_path + ".tmp"
+            with open(tmp_path, "w") as f:
                 json.dump(profile, f, indent=2)
+            os.replace(tmp_path, profile_path)
         except OSError:
             pass
 
@@ -268,9 +270,9 @@ def _fill_radios(page, fields, answers, ca, jid):
                     for rf in group:
                         if rf["label"] == opt and rf["id"]:
                             try:
-                                el = page.query_selector(f'[id="{rf["id"]}"]')
-                                if el and not el.is_checked():
-                                    el.check(); filled += 1
+                                el = page.locator(f'id={rf["id"]}')
+                                if el.count() > 0 and not el.first.is_checked():
+                                    el.first.check(); filled += 1
                             except: pass
                             break
                         elif rf["label"] == opt and rf["name"]:
@@ -304,7 +306,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             for fn in os.listdir(results_dir):
                 if re.search(r'\bResume\b', fn, re.I) and fn.lower().endswith(".pdf"):
                     score = 0
-                    if state.get("title","").split(" ")[0].lower() in fn.lower(): score += 2
+                    if (state.get("title") or "").split(" ")[0].lower() in fn.lower(): score += 2
                     if state.get("company","").lower() in fn.lower(): score += 1
                     candidates.append((score, fn))
             candidates.sort(key=lambda x: -x[0])
@@ -356,7 +358,14 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         if f["tag"] == "DROPDOWN":
             current = f.get("value", "")
             if current and current != "Select One" and current != "Select...":
-                continue  # already filled
+                # Check if current value matches the answer — overwrite if different
+                lbl = f["label"]
+                lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
+                ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
+                if ans_check and ans_check.lower() != current.lower():
+                    pass  # will overwrite below
+                else:
+                    continue  # already filled correctly
             lbl = f["label"]
             lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
             ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
@@ -635,17 +644,21 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     filled = radio_filled + text_filled
     unfilled = radio_unfilled + text_unfilled
 
-    # Unfollow company checkbox (always)
+    # Unfollow company/social update checkboxes (always)
     page.evaluate("""() => {
         const c = document.querySelector('[role="dialog"]') || document;
-        const cbs = c.querySelectorAll('input[type="checkbox"]');
-        for (const cb of cbs) {
-            const lbl = c.querySelector('label[for="' + cb.id + '"]');
-            if (lbl) {
-                const t = (lbl.textContent||'').toLowerCase();
-                if (/\bfollow\b/.test(t) && /\b(updates?|company|page)\b/.test(t)) {
-                    cb.checked = false; cb.dispatchEvent(new Event('change', {bubbles:true}));
-                }
+        const labels = c.querySelectorAll('label');
+        for (const lbl of labels) {
+            const t = (lbl.textContent||'').toLowerCase().trim();
+            const m = t.match(/^(follow|subscribe|sign up|receive)\\s+(updates?|newsletter|company|page)/);
+            if (!m) continue;
+            const cbId = lbl.getAttribute('for');
+            if (cbId) {
+                const cb = c.querySelector('input[type="checkbox"][id="' + cbId + '"]');
+                if (cb && cb.checked) { cb.checked = false; cb.dispatchEvent(new Event('change', {bubbles:true})); }
+            } else {
+                const cb = lbl.querySelector('input[type="checkbox"]');
+                if (cb && cb.checked) { cb.checked = false; cb.dispatchEvent(new Event('change', {bubbles:true})); }
             }
         }
     }""")
@@ -809,6 +822,10 @@ def cmd_submit(jid, confirm=False, candidate=None):
     if handle_captcha(page, state):
         print("NEXT: retry after solving CAPTCHA", file=sys.stderr); return
 
+    # Capture alert dialogs (validation errors, success alerts)
+    _alerts = []
+    page.on("dialog", lambda d: (_alerts.append(d.message), d.accept()))
+
     # ButtonIntentClassifier for submit buttons
     all_buttons = page.evaluate("""() => {
         return Array.from(document.querySelectorAll('button'))
@@ -846,10 +863,14 @@ def cmd_submit(jid, confirm=False, candidate=None):
         print("DRY_RUN: pass --confirm to submit\nNEXT: act --submit --confirm", file=sys.stderr); return
 
     before_hash = _page_hash(page)
-    try:
-        b_loc = page.locator(f'button:has-text("{target["text"]}")')
-        b_loc.first.click(timeout=5000)
-    except: pass
+    b_loc = page.locator(f'button:has-text("{target["text"]}")')
+    if b_loc.count() == 0:
+        print(f"  Submit warning: button '{target['text']}' not found on page", file=sys.stderr)
+    else:
+        try:
+            b_loc.first.click(timeout=5000)
+        except Exception as e:
+            print(f"  Submit warning: click failed — {e}", file=sys.stderr)
     # Wait for either a page transition OR visible error text
     for _ in range(30):
         time.sleep(0.5)
@@ -867,7 +888,10 @@ def cmd_submit(jid, confirm=False, candidate=None):
         return
 
     text = (page.evaluate("() => document.body.innerText") or "").lower()
-        # Check for success signals first (handles AJAX submit where form stays visible)
+    # Include alert dialog messages in error/success detection
+    for msg in _alerts:
+        text += " " + msg.lower()
+    # Check for success signals first (handles AJAX submit where form stays visible)
     for signal in ["thank you", "submitted", "your application", "has been sent", "application received"]:
         if signal in text:
             get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
