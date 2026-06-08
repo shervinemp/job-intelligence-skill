@@ -79,9 +79,21 @@ class PageManager:
             return domain_matches[0], [], "domain"
 
         if domain_matches:
-            # Multiple candidates — pick the one whose URL is closest to fallback_url
+            # Multiple candidates — pick the one with the longest matching URL path
             if fallback_url:
-                best_match = max(domain_matches, key=lambda p: len(os.path.commonprefix([p.url.lower(), fallback_url.lower()])))
+                from urllib.parse import urlparse
+                fb_path = urlparse(fallback_url).path.rstrip("/")
+                def path_score(p):
+                    pp = urlparse(p.url).path.rstrip("/")
+                    # Count matching path segments from the start
+                    score = 0
+                    for a, b in zip(fb_path.split("/"), pp.split("/")):
+                        if a == b:
+                            score += 1
+                        else:
+                            break
+                    return score
+                best_match = max(domain_matches, key=path_score)
                 self.register(best_match)
                 return best_match, [], "domain"
             return None, domain_matches, "multiple"
