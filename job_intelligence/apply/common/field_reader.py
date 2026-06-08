@@ -10,7 +10,7 @@ _READER_JS = """(config) => {
     const scope = config.scope || 'document';
     const customWidgets = config.custom_widgets || {};
     const root = scope === 'dialog'
-        ? (document.querySelector('[role="dialog"]') || document)
+        ? (document.querySelector('[role="dialog"], dialog') || document)
         : document;
 
     const inputs = Array.from(root.querySelectorAll(
@@ -54,6 +54,46 @@ _READER_JS = """(config) => {
             const plbl = parent ? parent.querySelector('label, legend, strong, span') : null;
             if (plbl) label = plbl.textContent.trim();
         }
+        // Table grid: row label is in the first cell of the same row
+        if (!label) {
+            const td = el.closest('td');
+            if (td) {
+                const firstCell = td.parentElement ? td.parentElement.querySelector('td:first-child, th:first-child') : null;
+                if (firstCell && firstCell !== td) label = firstCell.textContent.trim();
+            }
+        }
+
+        // For radio inputs, extract option label (the choice text, distinct from question label)
+        let optLabel = '';
+        if (el.type === 'radio') {
+            const td = el.closest('td');
+            if (td) {
+                // Table grid: column header IS the option label
+                const colIdx = Array.from(td.parentNode.children).indexOf(td);
+                const tbl = td.closest('table');
+                if (tbl) {
+                    const hr = tbl.querySelector('thead tr, tbody tr:first-child');
+                    if (hr && hr.children[colIdx]) optLabel = hr.children[colIdx].textContent.trim();
+                }
+            } else if (el.id) {
+                // Label[for] with full choice text
+                const lblFor = root.querySelector('label[for="' + el.id + '"]');
+                if (lblFor) optLabel = lblFor.textContent.trim();
+            }
+            if (!optLabel) {
+                const pl = el.closest('label');
+                if (pl) optLabel = pl.textContent.trim();
+            }
+            if (!optLabel) {
+                const tn = el.nextSibling;
+                if (tn && tn.nodeType === 3) optLabel = tn.textContent.trim();
+                else if (el.parentElement) {
+                    const parentText = el.parentElement.textContent.trim();
+                    if (label && parentText.includes(label)) optLabel = parentText.replace(label, '').replace(/^[-:,\\s]+/, '').trim();
+                }
+            }
+            if (!optLabel) optLabel = el.value || '';
+        }
 
         const opts = el.tagName === 'SELECT'
             ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0, 15)
@@ -65,6 +105,7 @@ _READER_JS = """(config) => {
             id: el.id,
             name: el.getAttribute('name') || '',
             label: (label || '').replace(/\\s+/g, ' ').trim().slice(0, 80),
+            option_label: optLabel.slice(0, 40),
             placeholder: el.placeholder || '',
             data_automation_id: el.getAttribute('data-automation-id') || '',
             role: el.getAttribute('role') || '',
@@ -73,6 +114,11 @@ _READER_JS = """(config) => {
             checked: el.type === 'radio' ? el.checked : null,
             multiple: el.tagName === 'SELECT' && el.multiple || false,
             options: opts,
+            datepicker: el.type === 'date'
+                ? 'native'
+                : el.classList.contains('flatpickr-input') || (el.closest && el.closest('.flatpickr'))
+                    ? 'flatpickr'
+                    : '',
         };
     });
 
@@ -142,20 +188,29 @@ def read_fields(page, scope="document", custom_widgets=None):
         page: Playwright page object
         scope: 'document' for full page, 'dialog' for modal only
         custom_widgets: dict of widget type → CSS selector from registry config
+
+    Returns structured dict on success or empty dict on failure (dead tab, cross-origin, detached element).
     """
-    return page.evaluate(_READER_JS, {
-        "scope": scope,
-        "custom_widgets": custom_widgets or {},
-    })
+    try:
+        return page.evaluate(_READER_JS, {
+            "scope": scope,
+            "custom_widgets": custom_widgets or {},
+        })
+    except Exception:
+        return {"fieldCount": 0, "fields": [], "buttons": [], "pageType": "error", "hasFileInput": False,
+                "hasRequiredFile": False, "url": ""}
 
 
 def count_fields(page):
     """Quick field count without full field details. ~2x faster than read_fields."""
-    return page.evaluate("""(scope) => {
-        const root = scope === 'dialog'
-            ? (document.querySelector('[role="dialog"]') || document)
-            : document;
-        return root.querySelectorAll(
-            'input:not([type=hidden]):not([type=submit]), select, textarea'
-        ).length;
-    }""", scope)
+    try:
+        return page.evaluate("""(scope) => {
+            const root = scope === 'dialog'
+                ? (document.querySelector('[role="dialog"]') || document)
+                : document;
+            return root.querySelectorAll(
+                'input:not([type=hidden]):not([type=submit]), select, textarea'
+            ).length;
+        }""", scope)
+    except Exception:
+        return 0

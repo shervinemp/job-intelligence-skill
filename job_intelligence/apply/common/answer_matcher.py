@@ -50,7 +50,9 @@ def match_answer(label, answers=None, common_answers=None, profile=None, require
 
 
 def _match_profile(norm, profile):
-    """Match a normalized label against profile keys. Exact match only + name special case."""
+    """Match a normalized label against profile keys. Exact match only + name special case.
+    Word-overlap fallback: if exactly one profile key shares a word with the label, use it.
+    """
     fn, ln = profile.get("first_name", ""), profile.get("last_name", "")
     if norm in ("full name", "name", "your name"):
         return f"{fn} {ln}" if fn and ln else fn or ln or None
@@ -61,5 +63,19 @@ def _match_profile(norm, profile):
         pn = normalize(pk.replace('_', ' '))
         if pn == norm:
             return pv
+
+    # Word-overlap fallback: find profile keys sharing a word with the label
+    label_words = set(w for w in norm.split() if len(w) > 2)
+    if label_words:
+        candidates = []
+        for pk, pv in profile.items():
+            if not pv or not isinstance(pv, str) or len(pv) < 2:
+                continue
+            pn = normalize(pk.replace('_', ' '))
+            key_words = set(w for w in pn.split() if len(w) > 2)
+            if key_words & label_words:
+                candidates.append((pk, pv))
+        if len(candidates) == 1:
+            return candidates[0][1]
 
     return None

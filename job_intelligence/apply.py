@@ -8,7 +8,6 @@ Usage:
   python3 apply.py act --next <jid>
   python3 apply.py act --back <jid>
   python3 apply.py act --submit <jid> [--confirm]
-  python3 apply.py act --auto <jid> [--answers '{}']
   python3 apply.py verify <jid>
 """
 import os, sys
@@ -26,17 +25,17 @@ def main():
     nav_p = sub.add_parser("navigate", help="LinkedIn -> External ATS")
     nav_p.add_argument("jid", help="Job ID")
 
-    act_p = sub.add_parser("act", help="Perform action: --fill/--next/--back/--submit/--auto")
+    act_p = sub.add_parser("act", help="Perform action: --fill/--next/--back/--submit")
     act_p.add_argument("jid", help="Job ID")
-    act_p.add_argument("--fill", action="store_true", help="Fill fields on current page")
-    act_p.add_argument("--next", action="store_true", help="Click Next/Review/Submit")
+    act_p.add_argument("--fill", action="store_true", help="Fill fields")
+    act_p.add_argument("--next", action="store_true", help="Click forward (Next/Review/Submit)")
     act_p.add_argument("--back", action="store_true", help="Click Back")
-    act_p.add_argument("--submit", action="store_true", help="Click Submit on review page")
-    act_p.add_argument("--auto", action="store_true", help="Full auto loop")
-    act_p.add_argument("--confirm", action="store_true", help="Actually submit (dry-run without)")
-    act_p.add_argument("--answers", help="JSON answers for --fill")
-    act_p.add_argument("--candidate", type=int, default=None, help="Pick candidate N from CANDIDATES list")
-    act_p.add_argument("--trust", action="store_true", help="Enable auto-submit (default: learning mode)")
+    act_p.add_argument("--submit", action="store_true", help="Click Submit (dry-run w/o --confirm)")
+    act_p.add_argument("--inspect", action="store_true", help="Analyze page: fields, buttons, probe, screenshot")
+    act_p.add_argument("--answers", help="JSON field->value mapping for --fill")
+    act_p.add_argument("--candidate", type=int, default=None, help="Pick Nth from CANDIDATES")
+    act_p.add_argument("--confirm", action="store_true", help="Confirm submit (required to actually send)")
+    act_p.add_argument("--debug", action="store_true", help="Verbose: PAGE JSON dumps, probe details")
 
     verify_p = sub.add_parser("verify", help="Check submission result")
     verify_p.add_argument("jid", help="Job ID")

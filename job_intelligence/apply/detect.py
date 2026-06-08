@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn, desc_exists
 from apply.common.page_helpers import read_page, check_captcha
+from apply.common.output import emit_next, emit_status, emit_type, emit_error
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 
@@ -34,22 +35,26 @@ def run(jid):
     c = get_conn()
     r = c.execute("SELECT url, title, company, stage FROM jobs WHERE id=?", (jid,)).fetchone()
     if not r:
-        print(f"ERROR: job {jid} not found", file=sys.stderr); sys.exit(1)
+        emit_error(f"job {jid} not found"); sys.exit(1)
     url, title, company, stage = r["url"], r["title"], r["company"], r["stage"]
 
     print(f"JOB: {title or '?'} @ {company or '?'}", file=sys.stderr)
 
     # Stage check
     if stage == "applied":
-        print("TYPE: already_applied\nNEXT: none"); _merge_state({"jid": jid}); sys.exit(0)
+        emit_type("already_applied")
+        emit_next("none"); _merge_state({"jid": jid}); sys.exit(0)
     if stage == "failed":
-        print("STATUS: failed — run tailor.py retry first\nNEXT: tailor.py retry"); _merge_state({"jid": jid}); sys.exit(0)
+        emit_status("failed", "run tailor.py retry first")
+        emit_next("tailor.py retry"); _merge_state({"jid": jid}); sys.exit(0)
     if stage in ("extracted", "described"):
         if not _has_pdf(jid):
             if desc_exists(jid):
-                print(f"STATUS: needs advance + tailor (stage={stage}, has desc, no PDF)\nNEXT: tailor.py --jid {jid}")
+                emit_status(f"needs advance + tailor (stage={stage}, has desc, no PDF)")
+                emit_next(f"tailor.py --jid {jid}")
             else:
-                print(f"STATUS: needs description (stage={stage}, no desc, no PDF)\nNEXT: fetch.py  then  tailor.py --jid {jid}")
+                emit_status(f"needs description (stage={stage}, no desc, no PDF)")
+                emit_next(f"fetch.py  then  tailor.py --jid {jid}")
             _merge_state({"jid": jid}); sys.exit(0)
 
     # Classify type
@@ -98,13 +103,14 @@ def run(jid):
         }""")
 
         if any(b["text"] == "Applied" for b in buttons):
-            print("TYPE: already_applied\nNEXT: none"); _merge_state({"jid": jid}); sys.exit(0)
-        if any("applied" in (b.get("aria") or "").lower() for b in buttons):
-            print("TYPE: already_applied\nNEXT: none"); _merge_state({"jid": jid}); sys.exit(0)
-        if "you have applied" in (p.evaluate("() => (document.body.innerText || '').toLowerCase()") or ""):
-            print("TYPE: already_applied\nNEXT: none"); _merge_state({"jid": jid}); sys.exit(0)
+            emit_type("already_applied")
+            emit_next("none")
+            _merge_state({"jid": jid})
+            sys.exit(0)
         if any("on company website" in (b.get("aria") or "").lower() for b in buttons):
-            print(f"TYPE: external\nBUTTONS: {json.dumps([b for b in buttons if 'company website' in b['aria']])}\nNEXT: navigate")
+            buttons_detail = json.dumps([b for b in buttons if 'company website' in b['aria']])
+            emit_type("external", f"BUTTONS: {buttons_detail}")
+            emit_next("navigate")
             _merge_state({"jid": jid, "url": url, "title": title, "company": company})
             sys.exit(0)
 
@@ -117,7 +123,8 @@ def run(jid):
         time.sleep(2)
 
         if check_captcha(p):
-            print("CAPTCHA: detected on Easy Apply modal — solve in browser then retry detect\nNEXT: retry after solving", file=sys.stderr)
+            emit_status("captcha", "detected on Easy Apply modal")
+            emit_next("retry after solving")
             return
 
         page_state = read_page(p)
@@ -132,16 +139,20 @@ def run(jid):
 
         if page_state and page_state["fieldCount"] > 0:
             _merge_state({"jid": jid, "_detect_fields": page_state})
-            print(f"TYPE: easy_apply\nPAGE: {json.dumps(page_state)}\nNEXT: act --fill")
+            emit_type("easy_apply")
+            emit_next("act --fill")
         elif apply_fields:
             fb = {"fieldCount": len(apply_fields), "fields": apply_fields}
             _merge_state({"jid": jid, "_detect_fields": fb})
-            print(f"TYPE: easy_apply\nPAGE: {json.dumps(fb)}\nNEXT: act --fill")
+            emit_type("easy_apply")
+            emit_next("act --fill")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
             _merge_state({"jid": jid})
-            print("TYPE: easy_apply\nPAGE: {{}}\nNOTE: dialog not auto-opened\nNEXT: act --fill")
+            emit_type("easy_apply", "dialog not auto-opened")
+            emit_next("act --fill")
         else:
-            print("TYPE: unknown\nNEXT: none")
+            emit_type("unknown")
+            emit_next("none")
     else:
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
         try:
@@ -150,7 +161,8 @@ def run(jid):
             pass
         time.sleep(2)
         if check_captcha(p):
-            print("CAPTCHA: detected on job page — solve in browser then retry detect\nNEXT: retry after solving", file=sys.stderr)
+            emit_status("captcha", "detected on job page")
+            emit_next("retry after solving")
             return
         # Check for already-applied text patterns before proceeding
         from apply.common.platforms import check_page, ALREADY_APPLIED
@@ -159,7 +171,8 @@ def run(jid):
         reg = resolve_registry(url)
         plat_name = reg.name if reg else None
         if check_page(plat_text, plat_name, ALREADY_APPLIED):
-            print("TYPE: already_applied\nNEXT: none")
+            emit_type("already_applied")
+            emit_next("none")
             _merge_state({"jid": jid})
             sys.exit(0)
         page_state = read_page(p)
@@ -169,7 +182,8 @@ def run(jid):
             plat = detect_platform(url)
             reg = resolve_registry(url)
             plat_name = reg.name if reg else plat
-            print(f"TYPE: ats_direct\nEXTERNAL_URL: {url}\nPLATFORM: {plat_name}\nPAGE: {json.dumps(page_state)}\nNEXT: act --fill")
+            emit_type("ats_direct", f"EXTERNAL_URL: {url}\nPLATFORM: {plat_name}")
+            emit_next("act --fill")
             _merge_state({"jid": jid, "url": url, "title": title, "company": company,
                          "external_url": url, "platform": plat_name, "page": page_state})
         else:
@@ -177,8 +191,10 @@ def run(jid):
             plat = detect_platform(url)
             text = (p.evaluate("() => document.body.innerText") or "").lower()
             if plat and check_page(text, plat, LOGIN_WALL):
-                print(f"TYPE: login_wall\nPLATFORM: {plat}\nNEXT: login then retry")
+                emit_type("login_wall", f"PLATFORM: {plat}")
+                emit_next("login then retry")
                 _merge_state({"jid": jid})
             else:
-                print(f"TYPE: unknown\nNEXT: none")
+                emit_type("unknown")
+                emit_next("none")
                 _merge_state({"jid": jid})
