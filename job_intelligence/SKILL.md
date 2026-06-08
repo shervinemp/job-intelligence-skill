@@ -141,6 +141,7 @@ Stale entries auto-pruned.
 | `TYPE:` | Detect | Job type (easy_apply / ats_direct / external / already_applied / login_wall / unknown) |
 | `NEXT:` | Any step | Recommended next command |
 | `QUIRKS:` | Detect or fill | Platform-specific notes from registry YAML — printed once per platform per session |
+| `GUEST_AVAILABLE:` | Detect | Guest apply button found on login wall — pipeline will auto-click it on `act --fill` |
 
 ## Technical notes
 

@@ -9,9 +9,11 @@ from lib.chrome_manager import connect
 from lib.db import get_conn
 from apply.common.page_helpers import load_state, save_state, read_page, handle_captcha, scan_actions, read_and_save, DEFAULT_EXCLUDED_BUTTONS as _EXCLUDED_BUTTONS
 from apply.common.registry import resolve as resolve_registry
-from apply.common.inspector import probe as probe_page
+from apply.common.inspector import probe as probe_page, probe_all
 from apply.common.learner import ButtonIntentClassifier
 from apply.common.output import emit_next, emit_status, emit_warn, emit_fill_report, emit_candidates
+from apply.common.page_manager import PageManager
+from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 # Pipeline mode
@@ -70,7 +72,6 @@ def _save_answer(label, value, profile_path):
 
 def _find_answer(label, label_norm, answers, ca, profile, required=False):
     """Find answer from --answers, common_answers, or profile. Delegates to answer_matcher."""
-    from apply.common.answer_matcher import match_answer
     return match_answer(label, answers=answers, common_answers=ca, profile=profile, required=required)
 
 def _page_hash(page):
@@ -146,7 +147,6 @@ def _click_candidate(page, c, state=None):
                 print(f"  Click warning: {e}", file=sys.stderr)
     before = _page_hash(page)
     if state:
-        from apply.common.page_manager import PageManager
         pm = PageManager(page.context, state.get("jid", ""))
         snap = pm.snapshot(page)
         state["external_url"] = page.url
@@ -520,7 +520,6 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     if _check_already_submitted(state, jid):
         return
     b, ctx = connect()
-    from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
     ext = state.get("external_url", "")
     page, _, _ = pm.find(fallback_url=ext)
@@ -593,7 +592,6 @@ def cmd_fill(jid, answers_json=None, candidate=None):
 
     # Check for login wall — try guest apply first, then abort
     text = page.evaluate("() => document.body.innerText") or ""
-    from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
     plat = state.get("platform", "")
     if check_page(text, plat, LOGIN_WALL):
         # Try guest apply buttons
@@ -758,7 +756,6 @@ def cmd_next(jid, candidate=None):
     if _check_already_submitted(state, jid):
         return
     b, ctx = connect()
-    from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
     ext = state.get("external_url", "")
     page, _, _ = pm.find(fallback_url=ext)
@@ -831,7 +828,6 @@ def cmd_back(jid):
     if _check_already_submitted(state, jid):
         return
     b, ctx = connect()
-    from apply.common.page_manager import PageManager
     page = PageManager(ctx, jid).find(fallback_url=state.get("external_url", ""))[0]
     if not page: print("ERROR: no page found", file=sys.stderr); return
     before = _page_hash(page)
@@ -852,7 +848,6 @@ def cmd_submit(jid, confirm=False, candidate=None):
         return
 
     b, ctx = connect()
-    from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
     ext = state.get("external_url", "")
     page, _, _ = pm.find(fallback_url=ext)
@@ -1003,7 +998,6 @@ def cmd_inspect(jid, candidate=None):
         print("  Run detect first.", file=sys.stderr); return
 
     b, ctx = connect()
-    from apply.common.page_manager import PageManager
     pm = PageManager(ctx, jid)
     ext = state.get("external_url", "")
     page, score, candidates = pm.find(fallback_url=ext)
@@ -1044,8 +1038,6 @@ def cmd_inspect(jid, candidate=None):
 
     # Run probe (short-circuits via YAML best_strategy if configured)
     ps = read_page(page)
-    from apply.common.registry import resolve as resolve_registry
-    from apply.common.inspector import probe as probe_page, probe_all
     domain = _domain(page.url)
     registry = resolve_registry(page.url)
     best = probe_page(page, domain=domain, registry_config=registry)
