@@ -9,7 +9,7 @@ from lib.db import get_conn, desc_exists
 from apply.common.page_helpers import read_page, check_captcha
 from apply.common.output import emit_next, emit_status, emit_type, emit_error
 from apply.common.registry import resolve as resolve_registry
-from apply.common.platforms import check_page, detect_platform, ALREADY_APPLIED, LOGIN_WALL
+from apply.common.platforms import check_page, detect_platform, ALREADY_APPLIED, LOGIN_WALL, GUEST_APPLY
 
 STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 
@@ -193,8 +193,26 @@ def run(jid):
             plat = detect_platform(url)
             text = (p.evaluate("() => document.body.innerText") or "").lower()
             if plat and check_page(text, plat, LOGIN_WALL):
-                emit_type("login_wall", f"PLATFORM: {plat}")
-                emit_next("login then retry")
+                # Check for guest apply buttons before declaring full login wall
+                guest_patterns = GUEST_APPLY.get(plat, []) + GUEST_APPLY["default"]
+                guest_btn = p.evaluate(f"""() => {{
+                    const patterns = {json.dumps(guest_patterns)};
+                    const all = document.querySelectorAll('button, a, span, div');
+                    for (const el of all) {{
+                        if (el.offsetParent === null) continue;
+                        const t = (el.textContent || '').trim().toLowerCase();
+                        for (const p of patterns) {{
+                            if (t === p || t.startsWith(p)) return p;
+                        }}
+                    }}
+                    return null;
+                }}""")
+                if guest_btn:
+                    emit_status("guest_available", f"PLATFORM: {plat}, button: '{guest_btn}'")
+                    emit_next("act --fill")
+                else:
+                    emit_type("login_wall", f"PLATFORM: {plat}")
+                    emit_next("login then retry")
                 _merge_state({"jid": jid})
             else:
                 emit_type("unknown")
