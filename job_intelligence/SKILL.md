@@ -75,6 +75,12 @@
 - **Autocomplete** — JS native value setter + input/change events (Workday multiselect).
 - **3x guard** — same page state 3 fills in a row → warns model to break loop.
 
+### Account & login notes
+
+- **Guest apply is preferred** — pipeline auto-clicks "continue without signing in" when available.
+- **Repeat portals** (e.g., a second Workday): guest apply works but creates a *new* account per company. No credential reuse across sessions. If the user already has an account, they should log in manually before running `detect`.
+- **Hands-free**: the pipeline cannot create accounts (email verification), remember passwords, or handle 2FA. Login-required portals always need manual intervention.
+
 ### Platform quirks
 
 | Platform | Key quirks |
