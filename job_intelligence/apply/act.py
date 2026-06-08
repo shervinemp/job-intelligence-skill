@@ -7,15 +7,13 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn
-from apply.common.page_helpers import load_state, save_state, read_page, find_page, handle_captcha, check_captcha, scan_actions, read_and_save, is_aggregator, is_platform_trusted, set_platform_trusted
+from apply.common.page_helpers import load_state, save_state, read_page, find_page, handle_captcha, check_captcha, scan_actions, read_and_save, is_aggregator, is_platform_trusted, set_platform_trusted, DEFAULT_EXCLUDED_BUTTONS as _EXCLUDED_BUTTONS
 from apply.common.registry import resolve as resolve_registry
 from apply.common.inspector import probe as probe_page
 from apply.common.field_reader import read_fields
 from apply.common.learner import ButtonIntentClassifier
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
-_EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse", "clear", "reset", "start over"}
-
 # Pipeline mode
 _TRUSTED = False  # set via --trust or auto-promotion
 
@@ -396,7 +394,8 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                                     time.sleep(0.5)
                                     filled += 1
                                 else:
-                                    page.keyboard.press("Escape")
+                                    # Click outside the dropdown rather than Escape (Escape may close modal on LinkedIn)
+                                    page.mouse.click(0, 0)
                     except: pass
             elif f.get("required"):
                 unfilled.append({"label": lbl[:60], "options": [], "tag": "DROPDOWN"})

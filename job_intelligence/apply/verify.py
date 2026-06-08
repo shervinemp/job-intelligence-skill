@@ -48,7 +48,7 @@ def run(jid):
         has_inputs = page.evaluate("""() => {
             const inputs = document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
             return inputs.length > 0 && Array.from(inputs).some(i => i.offsetParent !== null);
-        }""") or True
+        }""") or False
         if not has_inputs:
             print("STATUS: submitted (modal closed, no inputs)")
             get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
