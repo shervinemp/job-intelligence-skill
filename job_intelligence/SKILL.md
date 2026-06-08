@@ -75,15 +75,15 @@
 - **Autocomplete** — JS native value setter + input/change events (Workday multiselect).
 - **3x guard** — same page state 3 fills in a row → warns model to break loop.
 
-### Platform-specific guides
+### Platform quirks
 
-| Platform | File | Key quirks |
-|----------|------|------------|
-| Ashby | `apply/platforms/ashby.md` | One-page, standard HTML, "Submit Application" |
-| Greenhouse | `apply/platforms/greenhouse.md` | 29 fields pre-loaded, no Apply click needed |
-| Lever | `apply/platforms/lever.md` | `/apply` URL after apply-link, 12 fields, label-in-label structure |
-| Workday | `apply/platforms/workday.md` | 7-step SPA, DROPDOWN+autocomplete widgets, per-company login |
-| LinkedIn | `apply/platforms/linkedin.md` | Easy Apply modal vs External (safety redirect) |
+| Platform | Key quirks |
+|----------|------------|
+| Ashby | One-page std HTML. Recaptcha textarea at bottom — ignore. Radios grouped by `name` attr. |
+| Greenhouse | No `<select>` — all dropdowns are custom autocomplete. Country is `<input>` not `<select>`. "Submit application" at bottom, not "Apply" (scroll trigger). |
+| Lever | 0 fields on job page → apply-link → `/apply` URL. Labels nest: `<label><div>Text</div><div><input></div></label>`. No Select/Radio. |
+| Workday | 7-step SPA: Info → Experience → Questions → Disclosures → Review. DROPDOWN=`button[aria-haspopup]`. Autocomplete multiselect = JS value + events. Phone: strip +1 prefix. Skills: type + Enter. Per-company login. |
+| LinkedIn | 2 modes: Easy Apply (modal, Next/Review/Submit) vs External (`<a>` tag, safety redirect). detect checks `<a>` not just `<button>`. "…more" button = `[data-testid="expandable-text-button"]`. |
 
 ## Extraction rules
 

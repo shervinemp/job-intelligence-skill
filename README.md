@@ -106,13 +106,8 @@ job_intelligence/
         │   ├── page_helpers.py# read_page, scan_actions, page finding, trust
         │   ├── page_manager.py# Page registry (tag → domain → candidates)
         │   └── platforms.py   # Platform detection + login wall patterns
-        ├── registry/          # Platform YAML configs (greenhouse, lever, workday, ashby)
-        └── platforms/         # Platform-specific docs
-            ├── ashby.md
-            ├── greenhouse.md
-            ├── lever.md
-            ├── linkedin.md
-            └── workday.md
+        └── registry/          # Platform YAML configs (greenhouse, lever, workday, ashby)
+            └── docs/           # Platform-specific deep reference docs
 ```
 
 ---
