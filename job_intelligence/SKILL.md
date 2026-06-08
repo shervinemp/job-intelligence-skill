@@ -127,6 +127,15 @@ Stale entries auto-pruned.
 | DB crash | `extract.py reset` |
 | Auth wall stuck | `fetch.py open` + `fetch.py --refresh` |
 
+## Output signals
+
+| Signal | When | Meaning |
+|--------|------|---------|
+| `STATUS:` | Any step | Status update (filled count, captcha, etc.) |
+| `TYPE:` | Detect | Job type (easy_apply / ats_direct / external / already_applied / login_wall / unknown) |
+| `NEXT:` | Any step | Recommended next command |
+| `QUIRKS:` | Detect or fill | Platform-specific notes from registry YAML — printed once per platform per session |
+
 ## Technical notes
 
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain). `browser.close()` not awaited — handled internally.
