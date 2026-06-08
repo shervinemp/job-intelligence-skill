@@ -221,10 +221,12 @@ def retry_with_backoff(fn, max_retries=2, base_delay=2, is_rate_limit=None):
             raise
 
 
+DEFAULT_EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse", "clear", "reset", "start over"}
+
 def scan_actions(page, keywords, exclude=None):
     """Score all clickable elements (buttons + links) against keyword list.
     Returns sorted list of candidates with scores."""
-    exclude = exclude or {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse"}
+    exclude = exclude or DEFAULT_EXCLUDED_BUTTONS
     result = page.evaluate("""((args) => {
         const kws = args[0], excl = new Set(args[1].map(e => e.toLowerCase()));
         const currentUrl = location.href.replace(/\\/$/, '').toLowerCase();
