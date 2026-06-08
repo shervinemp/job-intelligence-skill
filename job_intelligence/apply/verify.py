@@ -34,10 +34,29 @@ def run(jid):
             page = p
             break
 
-    if not page:
-        page = ctx.pages[0] if ctx.pages else None
-
-    if not page:
+    # Fallback: scan all pages for success text (handles cross-domain redirects)
+    success_signals = ["thank you", "submitted", "your application", "has been sent", "application received"]
+    if page:
+        text = (page.evaluate("() => document.body.innerText") or "").lower()
+        if any(s in text for s in success_signals):
+            get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
+            _maybe_trust(state)
+            print("STATUS: submitted (text match on page)")
+            print("NEXT: none")
+            return
+    else:
+        # No matching page — scan ALL pages for success text
+        for p in ctx.pages:
+            try:
+                t = (p.evaluate("() => document.body.innerText") or "").lower()
+                if any(s in t for s in success_signals):
+                    get_conn().execute("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid)).connection.commit()
+                    _maybe_trust(state)
+                    print("STATUS: submitted (cross-domain redirect)")
+                    print("NEXT: none")
+                    return
+            except Exception:
+                pass
         print(f"STATUS: unknown (no active pages)\nNEXT: act --fill or check manually")
         return
 

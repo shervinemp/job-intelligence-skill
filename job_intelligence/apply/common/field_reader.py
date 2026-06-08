@@ -71,6 +71,7 @@ _READER_JS = """(config) => {
             required: !!el.required || el.getAttribute('aria-required') === 'true',
             value: el.value || '',
             checked: el.type === 'radio' ? el.checked : null,
+            multiple: el.tagName === 'SELECT' && el.multiple || false,
             options: opts,
         };
     });

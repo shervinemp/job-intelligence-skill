@@ -294,8 +294,13 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         prev_filled = filled
         if f["type"] == "radio": continue
         if f["tag"] == "INPUT" and f["type"] == "file":
-            if file_uploaded and not f.get("required", False): continue
             results_dir = os.path.expanduser(f"~/.openclaw/results/{jid}")
+            lbl_lower = (f.get("label", "") or "").lower()
+            # Skip optional uploads after the first file is placed (unless it's a distinct field like Cover Letter)
+            if file_uploaded and not f.get("required", False):
+                # Only skip if not a distinct secondary upload (cover letter vs resume)
+                if "cover" not in lbl_lower and "letter" not in lbl_lower:
+                    continue
             if not os.path.isdir(results_dir) or not any("Resume" in fn and fn.endswith(".pdf") for fn in os.listdir(results_dir)):
                 if f.get("required", False):
                     unfilled.append({"label": "Resume Upload", "options": [], "tag": "FILE"})
@@ -394,8 +399,8 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                                     time.sleep(0.5)
                                     filled += 1
                                 else:
-                                    # Click outside the dropdown rather than Escape (Escape may close modal on LinkedIn)
-                                    page.mouse.click(0, 0)
+                                    # Close dropdown by clicking trigger again (safe toggle, won't close modal)
+                                    btn.first.click(force=True, timeout=5000)
                     except: pass
             elif f.get("required"):
                 unfilled.append({"label": lbl[:60], "options": [], "tag": "DROPDOWN"})
@@ -421,9 +426,9 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                     el = page.query_selector(sel)
                     if el:
                         if f["tag"] == "SELECT":
-                            for opt in f["options"]:
-                                if ans.lower() in opt.lower(): el.select_option(opt); break
-                            else: el.select_option(ans)
+                            values = ans if isinstance(ans, list) else [ans]
+                            selected = [next((o for o in f['options'] if v.lower() in o.lower()), v) for v in values]
+                            el.select_option(selected if len(selected) > 1 else selected[0])
                         elif f["tag"] == "DIV" or f.get("contenteditable"):
                             page.evaluate(f"""(sel, val) => {{
                                 const el = document.querySelector(sel);
@@ -439,16 +444,23 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                             except:
                                 pass
                             if is_ac:
-                                page.evaluate("""(args) => {
-                                    var ans = args[0], sel = args[1];
-                                    var el = document.querySelector(sel);
-                                    if (!el) return;
-                                    el.focus();
-                                    var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                                    nativeInputValueSetter.call(el, ans);
-                                    el.dispatchEvent(new Event("input", { bubbles: true }));
-                                    el.dispatchEvent(new Event("change", { bubbles: true }));
-                                }""", [ans, sel])
+                                # Use press_sequentially for autocomplete (triggers dropdown, suggests options)
+                                try:
+                                    el.click()
+                                    time.sleep(0.3)
+                                    el.press_sequentially(ans, delay=random.randint(40, 90))
+                                except Exception:
+                                    # Fallback: native value setter
+                                    page.evaluate("""(args) => {
+                                        var ans = args[0], sel = args[1];
+                                        var el = document.querySelector(sel);
+                                        if (!el) return;
+                                        el.focus();
+                                        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                                        nativeInputValueSetter.call(el, ans);
+                                        el.dispatchEvent(new Event("input", { bubbles: true }));
+                                        el.dispatchEvent(new Event("change", { bubbles: true }));
+                                    }""", [ans, sel])
                                 time.sleep(0.5)
                             else:
                                 el.fill(ans)
@@ -663,6 +675,19 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     }""")
 
     state["filled"] = filled
+
+    # Re-scan for conditional fields that may have appeared after fill (e.g., "Do you have a portfolio?" → URL field)
+    if filled > 0:
+        time.sleep(0.5)
+        ps2 = read_page(page)
+        seen_labels = {f.get("label", "") for f in ps.get("fields", [])}
+        new_fields = [f for f in ps2.get("fields", []) if f.get("required") and f.get("label", "") not in seen_labels]
+        if new_fields:
+            text_filled2, text_unfilled2 = _fill_text(page, new_fields, answers, ca, profile, jid, state)
+            filled += text_filled2
+            unfilled.extend(text_unfilled2)
+            ps = ps2  # use updated page state
+
     read_and_save(page, state)
 
     # Save new answers to profile common_answers for future use
