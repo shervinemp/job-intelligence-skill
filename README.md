@@ -248,7 +248,7 @@ report.py export json     # export all jobs
 ```powershell
 # 1. Start Chrome with persistent profile
 & "C:\Program Files\Google\Chrome\Application\chrome.exe" `
-    --user-data-dir="$env:USERPROFILE\.openclaw\chrome-profile" `
+    --user-data-dir="$env:USERPROFILE\.ji\chrome-profile" `
     --remote-debugging-port=9222 --no-first-run
 
 # 2. Authenticate Gmail
@@ -269,10 +269,10 @@ python3 tailor.py
 
 ## Output
 
-Tailored CVs and application files are written to `~/.openclaw/results/{jid}/`:
+Tailored CVs and application files are written to `~/.ji/results/{jid}/`:
 
 ```
-📁 ~/.openclaw/results/{jid}/
+📁 ~/.ji/results/{jid}/
 ├── gemini_response.txt    # Full Gemini output
 ├── script.py              # Extracted Python script for PDF
 ├── {jid}.url              # Browser shortcut to job posting

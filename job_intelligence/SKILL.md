@@ -117,7 +117,7 @@ Stale entries auto-pruned.
 
 ## Output directory
 
-`~/.openclaw/results/{jid}/`:
+`~/.ji/results/{jid}/`:
 - `gemini_response.txt` — Gemini output
 - `script.py` — PDF build script
 - `{jid}.url` — job shortcut
@@ -129,7 +129,7 @@ Stale entries auto-pruned.
 |--------|------|
 | `invalid_grant` | `gmail-cli auth add email` |
 | TIMEOUT / RATE_LIMIT | `tailor.py retry` |
-| Chrome crash | `Start-Process chrome '--user-data-dir="~/.openclaw/chrome-profile"','--remote-debugging-port=9222'` |
+| Chrome crash | `Start-Process chrome '--user-data-dir="~/.ji/chrome-profile"','--remote-debugging-port=9222'` |
 | DB crash | `extract.py reset` |
 | Auth wall stuck | `fetch.py open` + `fetch.py --refresh` |
 
