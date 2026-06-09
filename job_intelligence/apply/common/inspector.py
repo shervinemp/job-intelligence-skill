@@ -452,6 +452,7 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
     """
     # Try best_strategy from YAML config before full cascade
     best_strategy = getattr(registry_config, 'best_strategy', None) if registry_config else None
+    best_strategy_failed = False
     if best_strategy:
         strategy_fn = dict(_PROBE_STRATEGIES).get(best_strategy)
         if strategy_fn:
@@ -461,6 +462,7 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
             result = strategy_fn(page, **kw)
             if result.field_count > 0:
                 return result
+            best_strategy_failed = True
 
     # Full cascade: track previous result for iframe_navigate
     prev_result = None
@@ -476,6 +478,8 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
             result = strategy_fn(page)
         prev_result = result
         if result.field_count > 0:
+            if best_strategy_failed:
+                print(f"CONFIG_STALE: {best_strategy} returned 0 fields, cascade found {name} with {result.field_count} fields", file=sys.stderr)
             return result
 
     # All strategies failed
