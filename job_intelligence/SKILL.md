@@ -54,8 +54,7 @@
 |------|---------|-------------|
 | Detect | `python3 apply.py detect <jid>` | Pre-flight: checks DB stage, PDF, classify type (Easy Apply / External / Applied / ATS). Prints PAGE state + NEXT. |
 | Navigate | `python3 apply.py navigate <jid>` | LinkedIn → External ATS: clicks external button, decodes redirect, detects platform, reads form. |
-| Act (act) | `python3 apply.py act --fill/--next/--back/--submit/--inspect <jid> [options]` | Fill, advance, go back, submit, or inspect. `--inspect` captures screenshot + full page analysis. |
-| Inspect | `python3 apply.py inspect <jid> [--candidate N]` | Full page analysis: screenshot, HTML dump, probes, fields, buttons. Same as `act --inspect`. Always outputs `IMG:` and `HTML:` paths. Overwrites previous files. Use when stuck. |
+| Act (act) | `python3 apply.py act --fill/--next/--back/--submit/--inspect <jid> [options]` | Fill, advance, go back, submit, or inspect. `--inspect` captures screenshot + full page analysis (IMG:, HTML:). Use when stuck. |
 | Verify | `python3 apply.py verify <jid>` | Check submission: DB stage, LinkedIn "you have applied" text. Updates DB if confirmed. |
 
 ### Apply notes
