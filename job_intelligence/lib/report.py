@@ -31,7 +31,7 @@ from .db import (
 
 
 def cmd_shell():
-    subprocess.run(["sqlite3", DB_PATH], shell=True)
+    subprocess.run(["sqlite3", DB_PATH])
 
 
 def cmd_stats():

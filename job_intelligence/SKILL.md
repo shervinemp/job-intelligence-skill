@@ -125,7 +125,7 @@ Stale entries auto-pruned.
 |--------|------|
 | `invalid_grant` | `gmail-cli auth add email` |
 | TIMEOUT / RATE_LIMIT | `tailor.py retry` |
-| Chrome crash | Windows: `Start-Process chrome '--user-data-dir="~/.ji/chrome-profile"','--remote-debugging-port=9222'` | Linux/macOS: `google-chrome --user-data-dir=~/.ji/chrome-profile --remote-debugging-port=9222` |
+| Chrome crash | Auto-restarted by `chrome_manager.py` — no manual action needed |
 | DB crash | `extract.py reset` |
 | Auth wall stuck | `fetch.py open` + `fetch.py --refresh` |
 
