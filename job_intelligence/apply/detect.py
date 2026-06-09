@@ -29,7 +29,8 @@ def _merge_state(new):
     os.replace(tmp, STATE_PATH)
 
 def _has_pdf(jid):
-    rd = os.path.join(os.path.expanduser("~"), ".openclaw", "results", jid)
+    from lib.config import RESULTS_DIR as _RD
+    rd = os.path.join(_RD, jid)
     if not os.path.isdir(rd): return False
     return any("Resume" in f and f.endswith(".pdf") for f in os.listdir(rd))
 

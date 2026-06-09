@@ -17,8 +17,8 @@ from datetime import datetime
 from pathlib import Path
 
 from apply.common.field_reader import read_fields
+from lib.config import SNAPSHOTS_DIR
 
-SNAPSHOTS_DIR = Path(os.path.expanduser("~")) / ".openclaw" / "learnings" / "probe_failures"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 

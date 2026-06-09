@@ -8,11 +8,7 @@ import sqlite3
 import sys
 from datetime import datetime
 
-LIB_DIR = os.path.dirname(os.path.abspath(__file__))
-SKILL_DIR = os.path.dirname(LIB_DIR)
-WORKSPACE_ROOT = os.path.abspath(os.path.join(SKILL_DIR, "..", ".."))
-DB_DIR = os.path.join(WORKSPACE_ROOT, "state")
-DB_PATH = os.path.join(DB_DIR, "jobs.db")
+from .config import DB_PATH, STATE_DIR as DB_DIR, AUTH_WALLS_PATH
 
 STAGES = ["extracted", "described", "tailored", "applied", "skipped", "failed"]
 
@@ -32,7 +28,7 @@ def get_conn():
 
 
 def _import_legacy_auth_walls():
-    old_path = os.path.join(os.path.expanduser("~"), ".openclaw", "needs_auth.json")
+    old_path = AUTH_WALLS_PATH
     if not os.path.exists(old_path):
         return
     try:

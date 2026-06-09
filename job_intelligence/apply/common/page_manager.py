@@ -3,7 +3,7 @@ Finds the right page for a job, detects what happened after actions."""
 import json, os, time
 from urllib.parse import urlparse
 
-REGISTRY_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "page_registry.json")
+from lib.config import REGISTRY_PATH
 
 def _load():
     try:
