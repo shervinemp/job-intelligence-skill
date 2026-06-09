@@ -834,8 +834,6 @@ def cmd_back(jid):
     ps = read_page(page)
     state["page"] = ps
     save_state(state)
-    if _VERBOSE:
-        print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
     emit_next("act --fill")
 
 def cmd_submit(jid, confirm=False, candidate=None):

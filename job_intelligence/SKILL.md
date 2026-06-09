@@ -63,7 +63,7 @@
 - **Radios** — `radio.click()` via Playwright `.check()`.
 - **Resume** — `set_input_files()` on `input[type="file"][required]`. Skips optional.
 - **Unfollow** — auto-unchecks "Follow X" on every page.
-- **Multi-page** — `act --auto` loops. Manual: fill → next → fill → ... → submit.
+- **Multi-page** — fill → next → fill → ... → submit. Repeat until Submit button appears or verification succeeds.
 - **Pre-flight** — `detect` first. Checks stage, PDF, page type.
 - **Button priority** — Submit > Review > Next > Continue > Done. Never Back/Cancel/Save.
 - **Common answers** — `--answers` exact → common_answers (exact for optional, prefix for required) → profile.
