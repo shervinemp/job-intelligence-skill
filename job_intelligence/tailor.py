@@ -410,31 +410,11 @@ def cmd_done(*job_ids):
             continue
 
         app_dir = os.path.join(RESULTS_DIR, job_id)
-        script_path = os.path.join(app_dir, "script.py")
         pdfs = [f for f in os.listdir(app_dir) if f.endswith(".pdf")] if os.path.isdir(app_dir) else []
 
-        # Run script.py if no PDF yet (agent route: script wasn't run)
-        if not pdfs and os.path.exists(script_path):
-            try:
-                result = subprocess.run(
-                    [sys.executable, script_path],
-                    capture_output=True, text=True, timeout=120,
-                    cwd=app_dir
-                )
-                if result.returncode != 0:
-                    print(f"SCRIPT_FAILED: {job_id} — {result.stderr.strip()[:200]}", file=sys.stderr)
-                    continue
-                pdfs = [f for f in os.listdir(app_dir) if f.endswith(".pdf")]
-                if not pdfs:
-                    print(f"SCRIPT_NO_PDF: {job_id} — script ran but no PDF produced", file=sys.stderr)
-                    continue
-                print(f"SCRIPT_OK: {job_id}", file=sys.stderr)
-            except subprocess.TimeoutExpired:
-                print(f"SCRIPT_TIMEOUT: {job_id}", file=sys.stderr)
-                continue
-            except Exception as e:
-                print(f"SCRIPT_ERROR: {job_id} — {e}", file=sys.stderr)
-                continue
+        if not pdfs:
+            print(f"NO_PDF: {job_id} — tailor the job first, then run done", file=sys.stderr)
+            continue
 
         advance(state["jobs"][job_id], "applied", applied_at=datetime.now().isoformat())
 
