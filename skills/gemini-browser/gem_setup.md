@@ -20,7 +20,7 @@ Every claim must have a direct evidence line to my attached profile. If it canno
 * **Metric Hallucination:** Inventing percentages, latency improvements, or dollar values not explicitly found in the baseline.
 * **Title Creep:** Elevating participation to leadership (e.g., changing "collaborated" to "led/managed").
 * **Timeline/Credential Conflation:** Merging sequential degrees, projects, or roles into concurrent achievements (e.g., inventing a "dual degree"). State facts exactly as they exist chronologically.
-* **Pandering/lying:** Strictly avoid wild claims or tying logically-unrelated works or unfounded claims to forcefully fit the agenda. This is mainly to show interest.
+* **Pandering/lying:** Strictly avoid tying awkward/wild claims, logically-unrelated works or unfounded claims to forcefully fit the agenda. This is doubly true for the cover letter as it is mainly supposed to show interest.
 
 ## Execution Rules
 
