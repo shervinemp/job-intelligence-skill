@@ -199,26 +199,17 @@ def cmd_craft(count=1):
             success, result = generate_tailored_docs(entry)
             mode = os.environ.get("JI_TAILOR", "agent")
             if success and mode == "agent":
-                print(f"  PROMPT_READY {jid} — write script.py then run 'done {jid}'", file=sys.stderr)
+                print(f"  PROMPT_READY {jid} — write script.py then run 'done {jid} --pdf <path>'", file=sys.stderr)
                 processed += 1
-            elif success:  # gem route
-                advance(
-                    entry,
-                    "tailored",
-                    response_path=result.get("response_path"),
-                    scripts=result.get("scripts", []),
-                )
+            elif success:  # gem route — PDF auto-generated
                 if count == 1:
-                    print(f"  COMPLETE {jid}", file=sys.stderr)
+                    print(f"  COMPLETE {jid} — run 'done {jid}' to confirm", file=sys.stderr)
                     text = result.get("text", "")
                     if text:
                         print(f"\n---RESPONSE---\n{text}\n---", file=sys.stderr)
                 else:
-                    scripts_str = ", ".join(result.get("scripts", [])) if result.get("scripts") else "no scripts"
-                    print(f"  Complete -> {scripts_str}", file=sys.stderr)
+                    print(f"  Complete -> run 'done <jid>' for each job", file=sys.stderr)
                 processed += 1
-                if count == 1:
-                    print(f"NEXT: done {jid}", file=sys.stderr)
             else:
                 err_str = str(result)[:120]
                 if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
@@ -413,7 +404,7 @@ def cmd_done(*job_ids, pdf_path=None):
             print(f"PDF_NOT_FOUND: {job_id} — {pdf_path}", file=sys.stderr)
             continue
 
-        advance(state["jobs"][job_id], "applied", applied_at=datetime.now().isoformat())
+        advance(state["jobs"][job_id], "tailored", applied_at=datetime.now().isoformat())
 
         job_url = state["jobs"][job_id].get("url", "")
         if job_url and sys.platform == "win32":
