@@ -203,6 +203,8 @@ def cmd_craft(count=1):
                     scripts_str = ", ".join(result.get("scripts", [])) if result.get("scripts") else "no scripts"
                     print(f"  Complete -> {scripts_str}", file=sys.stderr)
                 processed += 1
+                if count == 1:
+                    print(f"NEXT: done {jid}", file=sys.stderr)
             else:
                 err_str = str(result)[:120]
                 if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
