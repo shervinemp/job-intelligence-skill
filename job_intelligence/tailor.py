@@ -397,7 +397,7 @@ def cmd_skip(*job_ids):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_done(*job_ids):
+def cmd_done(*job_ids, pdf_path=None):
     if not job_ids:
         print("Usage: python3 tailor.py done <jid1> [jid2 ...]", file=sys.stderr)
         return
@@ -409,11 +409,8 @@ def cmd_done(*job_ids):
             print(f"Job not found: {job_id}", file=sys.stderr)
             continue
 
-        app_dir = os.path.join(RESULTS_DIR, job_id)
-        pdfs = [f for f in os.listdir(app_dir) if f.endswith(".pdf")] if os.path.isdir(app_dir) else []
-
-        if not pdfs:
-            print(f"NO_PDF: {job_id} — tailor the job first, then run done", file=sys.stderr)
+        if pdf_path and not os.path.exists(pdf_path):
+            print(f"PDF_NOT_FOUND: {job_id} — {pdf_path}", file=sys.stderr)
             continue
 
         advance(state["jobs"][job_id], "applied", applied_at=datetime.now().isoformat())
@@ -569,7 +566,9 @@ def main():
     parser.add_argument("--jid", help="Tailor a specific job by JID")
     
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("done", help="Mark job as applied").add_argument("jids", nargs="+")
+    done_p = sub.add_parser("done", help="Mark job as applied")
+    done_p.add_argument("jids", nargs="+")
+    done_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists before marking applied)")
     sub.add_parser("skip", help="Skip job").add_argument("jids", nargs="+")
     redo_p = sub.add_parser("redo", help="Re-tailor from described")
     redo_p.add_argument("jid", nargs="?")
@@ -587,7 +586,7 @@ def main():
     args = parser.parse_args()
     
     if args.command == "done":
-        cmd_done(*args.jids)
+        cmd_done(*args.jids, pdf_path=args.pdf)
     elif args.command == "skip":
         cmd_skip(*args.jids)
     elif args.command == "redo":
