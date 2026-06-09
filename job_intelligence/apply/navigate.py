@@ -8,8 +8,6 @@ from apply.common.page_helpers import read_page, save_state
 from apply.common.platforms import detect_platform
 from apply.common.output import emit_next, emit_error
 
-STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
-
 def run(jid):
     c = get_conn()
     r = c.execute("SELECT url, title, company FROM jobs WHERE id=?", (jid,)).fetchone()

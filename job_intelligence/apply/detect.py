@@ -6,12 +6,10 @@ import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn, desc_exists
-from apply.common.page_helpers import read_page, check_captcha
+from apply.common.page_helpers import read_page, check_captcha, STATE_PATH
 from apply.common.output import emit_next, emit_status, emit_type, emit_error
 from apply.common.registry import resolve as resolve_registry
 from apply.common.platforms import check_page, detect_platform, ALREADY_APPLIED, LOGIN_WALL, GUEST_APPLY
-
-STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
 
 
 def _merge_state(new):
@@ -29,7 +27,7 @@ def _merge_state(new):
         json.dump(existing, f, indent=2)
 
 def _has_pdf(jid):
-    rd = os.path.expanduser(f"~/.openclaw/results/{jid}")
+    rd = os.path.join(os.path.expanduser("~"), ".openclaw", "results", jid)
     if not os.path.isdir(rd): return False
     return any("Resume" in f and f.endswith(".pdf") for f in os.listdir(rd))
 

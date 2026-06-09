@@ -278,7 +278,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         prev_filled = filled
         if f["type"] == "radio": continue
         if f["tag"] == "INPUT" and f["type"] == "file":
-            results_dir = os.path.expanduser(f"~/.openclaw/results/{jid}")
+            results_dir = os.path.join(os.path.expanduser("~"), ".openclaw", "results", jid)
             lbl_lower = (f.get("label", "") or "").lower()
             # Skip optional uploads after the first file is placed (unless it's a distinct field like Cover Letter)
             if file_uploaded and not f.get("required", False):

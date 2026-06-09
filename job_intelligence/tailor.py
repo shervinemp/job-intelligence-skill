@@ -287,7 +287,12 @@ def _cmd_ready(job_id):
             with open(fpath, "w", encoding="utf-8") as fh:
                 fh.write(content)
     if os.path.exists(tmp_dir):
-        subprocess.run(["explorer", tmp_dir], shell=True)
+        if sys.platform == "win32":
+            subprocess.run(["explorer", tmp_dir], shell=True)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", tmp_dir])
+        else:
+            subprocess.run(["xdg-open", tmp_dir])
         print(f"Folder: {tmp_dir}", file=sys.stderr)
     print(f"\nReady: {entry.get('title')} @ {entry.get('company')}", file=sys.stderr)
 
@@ -376,7 +381,7 @@ def cmd_done(*job_ids):
         advance(state["jobs"][job_id], "applied", applied_at=datetime.now().isoformat())
 
         job_url = state["jobs"][job_id].get("url", "")
-        if job_url:
+        if job_url and sys.platform == "win32":
             url_path = os.path.join(RESULTS_DIR, job_id, f"{job_id}.url")
             try:
                 os.makedirs(os.path.dirname(url_path), exist_ok=True)
