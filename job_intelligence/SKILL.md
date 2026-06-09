@@ -12,7 +12,7 @@
 | **extract** | `extract.py` — find URLs in staged emails | SLM: admit/reject. Many non-job URLs leak through. |
 | **linkedin** | `linkedin.py [--url <url>] [--max N]` — scrape LinkedIn jobs | SLM: admit/reject |
 | **fetch** | `fetch.py` — visit URL, scrape description | SLM: admit/reject/flag. Second gate — real JD vs garbage. |
-| **tailor** | `tailor.py [--count N]` — crafts tailored CV. `JI_TAILOR=gem` (default): sends to Gemini Web gem. `JI_TAILOR=agent`: emits PROMPT:, SLM writes script.py, then `done <jid>` runs it. | SLM: done/skip/redo |
+| **tailor** | `tailor.py [--count N]` — crafts tailored CV. `JI_TAILOR=gem` (default): sends to Gemini Web gem. `JI_TAILOR=agent`: SLM reads the prompt instructions and writes `script.py` to the results dir, then `done <jid>` executes it. | SLM: done/skip/redo |
 
 ## Commands
 
@@ -143,7 +143,7 @@ Stale entries auto-pruned.
 
 ## Technical notes
 
-- **JI_TAILOR**: set to `"gem"` (default) to use Gemini Web gem for CV generation. Set to `"agent"` for SLM-in-the-loop: tailor emits `PROMPT:`, SLM writes `script.py`, `done` runs it.
+- **JI_TAILOR**: set to `"gem"` (default) to use Gemini Web gem for CV generation. Set to `"agent"` for SLM-in-the-loop: tailor embeds instructions in the prompt, SLM writes `script.py`, `done` runs it. The prompt does not include the default resume — the SLM should fill in CV content based on the candidate profile.
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain). `browser.close()` not awaited — handled internally.
 - **LinkedIn title dedup**: Cards repeat title (visible + verification text). `linkedin.py` deduplicates: finds where second half starts matching first half.
 - **Common_answers**: `--answers` exact → common_answers (exact for optional, prefix for required) → profile resolver. Never pre-populate guessed values — only save what user explicitly provides.

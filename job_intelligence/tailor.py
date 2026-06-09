@@ -101,11 +101,25 @@ def generate_tailored_docs(job_entry):
     tailor_mode = os.environ.get("JI_TAILOR", "agent")
 
     if tailor_mode == "agent":
+        agent_instructions = f"""
+Your task: write a Python script that generates a tailored CV PDF for this job.
+Save the script to the results directory as script.py.
+
+The script should:
+- Use reportlab or fpdf2 to generate a PDF (install if needed)
+- Include the candidate's profile from results/job_id/profile.md if it exists
+- Tailor the content to the job description above
+- Output the PDF to the same results directory with a descriptive filename
+- Be self-contained and runnable with: python script.py
+
+Note: this is a template — you are responsible for filling in the actual CV
+content based on the candidate's profile and the job requirements above.
+"""
+        prompt += agent_instructions
         from lib.config import RESULTS_DIR
         script_dir = os.path.join(RESULTS_DIR, job_id)
-        prompt_dir = os.path.dirname(os.path.abspath(__file__))
-        print(f"PROMPT: read {prompt_dir}/tailor_prompt.md")
-        print(f"  Write script.py to {script_dir}, then run: python3 tailor.py done {job_id}", file=sys.stderr)
+        print(f"PROMPT: generate script.py at {script_dir}/")
+        print(f"  Instructions: read the full prompt above, write script.py, then run: python3 tailor.py done {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
     from lib.config import RESULTS_DIR
@@ -397,9 +411,10 @@ def cmd_done(*job_ids):
 
         app_dir = os.path.join(RESULTS_DIR, job_id)
         script_path = os.path.join(app_dir, "script.py")
+        pdfs = [f for f in os.listdir(app_dir) if f.endswith(".pdf")] if os.path.isdir(app_dir) else []
 
-        # Agent route: run script.py if present
-        if os.path.exists(script_path):
+        # Run script.py if no PDF yet (agent route: script wasn't run)
+        if not pdfs and os.path.exists(script_path):
             try:
                 result = subprocess.run(
                     [sys.executable, script_path],
@@ -408,6 +423,10 @@ def cmd_done(*job_ids):
                 )
                 if result.returncode != 0:
                     print(f"SCRIPT_FAILED: {job_id} — {result.stderr.strip()[:200]}", file=sys.stderr)
+                    continue
+                pdfs = [f for f in os.listdir(app_dir) if f.endswith(".pdf")]
+                if not pdfs:
+                    print(f"SCRIPT_NO_PDF: {job_id} — script ran but no PDF produced", file=sys.stderr)
                     continue
                 print(f"SCRIPT_OK: {job_id}", file=sys.stderr)
             except subprocess.TimeoutExpired:
