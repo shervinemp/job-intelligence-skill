@@ -14,7 +14,7 @@
 - **Flow:** `stage_emails.py` → `extract.py` → `fetch.py` → `tailor.py`. See `SKILL.md` for full commands.
 - **LinkedIn:** `linkedin.py [--max N]` as alt entry point.
 - **Recovery:** auth → `gmail-cli auth add` | Chrome crash → `Start-Process ... --remote-debugging-port=9222` | FAILED → `retry` | SKIPPED → `retry-skipped`
-- **Output:** `~/.openclaw/results/{jid}/`
+- **Output:** `~/.ji/results/{jid}/`
 
 ## Tools & Automation
 - **Skills:** `SKILL.md`. Setup: `TOOLS.md`.

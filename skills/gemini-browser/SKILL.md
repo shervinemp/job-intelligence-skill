@@ -10,7 +10,7 @@ Controls Gemini custom gems via real Chrome session (no API key). Playwright con
 ## Usage
 ### Prerequisite
 ```
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="C:\Users\sherv\.openclaw\chrome-profile" --remote-debugging-port=9222 --no-first-run
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="C:\Users\sherv\.ji\chrome-profile" --remote-debugging-port=9222 --no-first-run
 ```
 
 ### Commands
@@ -37,7 +37,7 @@ Controls Gemini custom gems via real Chrome session (no API key). Playwright con
 8. Cross-checks conversation title → deletes the chat (won't delete if conversation changed)
 
 ## Notes
-- Chrome profile at `~/.openclaw/chrome-profile/` — persists, won't get wiped
+- Chrome profile at `~/.ji/chrome-profile/` — persists, won't get wiped
 - Session cookies last ~6 months  
 - Chrome must run with `--remote-debugging-port=9222`
 - Gem ID loaded from `.env` in this directory (`GEM_ID`)
