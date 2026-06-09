@@ -59,6 +59,7 @@
 | Act (back) | `python3 apply.py act --back <jid>` | Click Back button. |
 | Act (submit) | `python3 apply.py act --submit <jid> [--confirm]` | Click Submit on review page. Dry-run without --confirm. Checks result. |
 | Act (auto) | `python3 apply.py act --auto <jid>` | Full loop: fill → next → fill → ... → submit. Stops on unfilled fields, waits for --answers. |
+| Act (inspect) | `python3 apply.py act --inspect <jid> [--candidate N]` | Full page analysis: fields, buttons, probe results + screenshot. Use when stuck or for visual context. |
 | Verify | `python3 apply.py verify <jid>` | Check submission: DB stage, LinkedIn "you have applied" text. Updates DB if confirmed. |
 
 ### Apply notes
@@ -142,6 +143,7 @@ Stale entries auto-pruned.
 | `NEXT:` | Any step | Recommended next command |
 | `QUIRKS:` | Detect or fill | Platform-specific notes from registry YAML — printed once per platform per session |
 | `GUEST_AVAILABLE:` | Detect | Guest apply button found on login wall — pipeline will auto-click it on `act --fill` |
+| `IMG:` | Inspect | Screenshot file path — read this file for visual page context if your model supports images |
 
 ## Technical notes
 
