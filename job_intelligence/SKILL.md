@@ -1,97 +1,122 @@
 # Job Intelligence Pipeline
 
-> All commands prefixed with `python3` on Windows.
+> Windows: prefix all commands with `python3`. Bare `extract.py` opens in VSCode.
 
-## Flow
+## What you do at each stage
 
-```
-stage_emails → extract (admit/reject) → fetch (admit/reject/flag) → tailor (done/skip/redo) → apply
-```
+**Stage emails** — `stage_emails.py [--days N]`. Searches Gmail for job keywords. Auto-runs, you don't need to do anything.
 
-| Step | Your call |
-|------|-----------|
-| `stage_emails.py [--days N]` | Auto — skip non-job keywords |
-| `extract.py` | `admit --category <name> <jid>` / reject |
-| `linkedin.py [--url <url>] [--max N]` | admit/reject |
-| `fetch.py [--count N]` | admit/reject/flag |
-| `tailor.py [--count N]` | done/skip/redo |
-| `apply.py detect/act n --inspect/verify <jid>` | See below |
+**Extract** — `extract.py`. Finds job URLs in your emails. You decide:  
+`admit --category tech <jid>` or `admit --category general <jid>` or just `reject <jid>`.
 
-JI_TAILOR=gem (default) = Gemini Web gem. JI_TAILOR=agent = you write script.py, done <jid> checks PDF exists.
+**LinkedIn** — `linkedin.py [--url <url>] [--max N]`. Scrapes LinkedIn saved jobs. Same admit/reject flow.
 
-## Commands quick ref
+**Fetch** — `fetch.py [--count N]`. Visits each URL, scrapes the job description.  
+You: `admit <jid> --category <name>`, `reject <jid>`, or `flag <jid>` (auth wall).
 
-| Command | What you do |
+**Tailor** — `tailor.py [--count N]`. Generates a tailored CV. Two backends:  
+- `JI_TAILOR=gem` (default): uses Gemini Web gem. Just run it.
+- `JI_TAILOR=agent`: reads the prompt, you write `script.py` in the results dir, then `done <jid> --pdf <path>` checks your PDF exists and marks it applied.
+
+**Apply** — See apply pipeline below.
+
+## Commands
+
+| Command | What it does |
 |---------|-------------|
-| `extract.py admit --category tech/general <jid>` | Admit with category |
-| `extract.py reset <jid>` | Wipe job, re-extract |
-| `extract.py review [--count N]` | Browse staged emails |
-| `fetch.py admit/reject/flag <jid>` | Mark job |
+| `extract.py admit --category tech/general <jid>` | Accept a job with category |
+| `extract.py reject <jid>` | Skip it |
+| `extract.py review [--count N]` | Browse staged emails manually |
+| `extract.py reset <jid>` | Delete and re-extract |
+| `fetch.py admit/reject/flag <jid>` | Accept, skip, or flag as auth wall |
 | `fetch.py retry` | Retry failed fetches |
-| `fetch.py open [<jid>]` | Open in Chrome |
-| `tailor.py done/skip/redo <jid>` | After tailoring |
-| `tailor.py retry` | Retry failed |
-| `tailor.py reset --from failed,skipped` | Reset to described |
-| `tailor.py ready [<jid>]` | Open files folder |
-| `extract.py reset` | Wipe DB, fresh start |
-| `status` | Next step hint |
+| `fetch.py open [<jid>]` | Open in Chrome to check manually |
+| `tailor.py [--count N]` | Start tailoring (default 1 job) |
+| `tailor.py done <jid> [--pdf <path>]` | Mark as applied. If --pdf given, verifies file exists |
+| `tailor.py skip <jid>` | Skip this job |
+| `tailor.py redo <jid>` | Re-tailor from scratch |
+| `tailor.py retry` | Retry failed tailoring |
+| `tailor.py reset --from failed,skipped` | Reset failed/skipped back to described |
+| `tailor.py ready [<jid>]` | Open the results folder |
+| `extract.py reset` | Wipe the entire DB, start over |
+| `status` | Shows current pipeline state and next step |
 
 ## Apply pipeline
 
+The pipeline for actually submitting applications. Run these in order:
+
 ```
-detect <jid> → navigate <jid> (if external) → act --fill/--next/--submit <jid> → verify <jid>
+detect → [navigate] → act --fill → act --next (repeat) → act --submit → verify
 ```
 
-| Command | Does |
-|---------|------|
-| `detect <jid>` | Checks stage, PDF, classify type (easy_apply / external / ats_direct / already_applied / login_wall) |
-| `navigate <jid>` | LinkedIn → external ATS (click button, decode redirect) |
-| `act --fill <jid> [--answers '{}']` | Fill all fields |
-| `act --next <jid>` | Click Next/Review/Submit |
-| `act --back <jid>` | Click Back |
-| `act --submit <jid> [--confirm]` | Submit (--confirm required) |
-| `act --inspect <jid> [--candidate N]` | Screenshot + HTML + probe dump. Use when stuck |
-| `verify <jid>` | Check if submitted (text match, DB stage) |
+**detect <jid>** — Pre-flight check. Opens the job page, classifies the type:  
+`TYPE: easy_apply` (LinkedIn modal), `external` (goes to another site), `ats_direct` (form right there), `already_applied`, or `login_wall`.  
+Tells you what to do next.
 
-**Flags:** `--candidate N` picks from CANDIDATES list. `--inspect` outputs IMG: and HTML: paths.
+**navigate <jid>** — Only for LinkedIn External jobs. Clicks the "Apply on company website" button, decodes LinkedIn's safety redirect, lands on the actual ATS page.
+
+**act --fill <jid> [--answers '{}']** — Fills every field it can find on the form. Uses --answers first, then common_answers, then your profile.  
+Prints `STATUS: filled X/Y fields` and `NEXT:` telling you what to do next.
+
+**act --next <jid>** — Clicks the forward button. Tries Submit > Review > Next > Continue > Done. Never clicks Back/Cancel/Save.  
+Detects when the form has been submitted (success text) and tells you to verify.
+
+**act --back <jid>** — Clicks the Back button.
+
+**act --submit <jid> [--confirm]** — Clicks the Submit button. Requires `--confirm` to actually send (dry-run otherwise).  
+Checks for validation errors, CAPTCHA, or success. Updates `_last_submit` with the outcome.
+
+**act --inspect <jid> [--candidate N]** — Full page analysis. Always takes a screenshot (`IMG:` path) and dumps the DOM (`HTML:` path). Shows all fields, buttons, probe results, dialog state.  
+Use this when you're stuck and need to see what the page looks like.
+
+**verify <jid>** — Checks if the submission went through. Scans open pages for "thank you" / "submitted" text. Updates the DB stage to "applied" if confirmed.
 
 ### Tips
 
-- `--answers` exact match → common_answers → profile. Provide full field labels.
-- Button priority: Submit > Review > Next > Continue > Done. Never Back/Cancel/Save.
-- Multi-page: fill → next → fill → ... until Submit appears.
-- Guest apply auto-clicks "continue without signing in" when available.
-- Pipeline cannot create accounts or handle 2FA.
-- `inspect` screenshot at `~/.ji/screenshots/inspect_{jid}.png` (overwrites). Read if your model supports images.
+- **--answers**: JSON with exact field labels as keys. Normalized match (case/punctuation insensitive). Example: `--answers '{"Country":"Canada"}'`
+- **--candidate N**: When you see a CANDIDATES list, pick one with this flag. Works on --fill, --next, --submit, --inspect.
+- **Multi-page forms**: Run `--fill` then `--next` repeatedly. Each page may show new fields. Stop when Submit button appears.
+- **Guest apply**: The pipeline auto-clicks "continue without signing in" when it finds one. 
+- **Screenshots**: `act --inspect` saves to `~/.ji/screenshots/inspect_{jid}.png`. Read this file if your model supports images.
+- **Pipeline can't**: create accounts, remember passwords, or handle 2FA. Login walls need manual help.
+- **3x guard**: If the same page state repeats 3 fills in a row, the pipeline warns you to break the loop.
 
-## Platform quirks
+### Platform-specific things to watch for
 
-| Platform | Watch out for |
-|----------|--------------|
-| Ashby | Recaptcha textarea at bottom — ignore. Radios by `name` attr. |
-| Greenhouse | No `<select>` — all autocomplete. Country is `<input>`. "Submit application" bottom, not "Apply". |
-| Lever | 0 fields → follow apply-link → `/apply`. Labels nest `<label><div>Text</div><div><input></div></label>`. |
-| Workday | 7-step SPA. DROPDOWN=`button[aria-haspopup]`. Phone: strip +1. Skills: type+Enter. Per-company login. |
-| LinkedIn | Easy Apply (modal) vs External (`<a>` tag, safety redirect). detect checks `<a>` not just `<button>`. |
+| Platform | Note |
+|----------|------|
+| Ashby | Standard one-page HTML. Recaptcha textarea at the bottom — ignore it. |
+| Greenhouse | No `<select>` elements — all dropdowns are custom autocomplete. Country is an `<input>` not a `<select>`. "Submit application" is the real button, not "Apply". |
+| Lever | 0 fields on the job page → follow the "apply for this job" link → `/apply` URL has the form. Labels use `<label><div>Text</div><div><input></div></label>` structure. |
+| Workday | 7-step SPA: Info → Experience → Questions → Disclosures → Review. Dropdowns use `button[aria-haspopup]`. Phone numbers: strip the +1 prefix when a separate country code field exists. Skills: type the skill then press Enter. Each company has its own login. |
+| LinkedIn | Two modes: Easy Apply (modal with Next/Review/Submit) and External (`<a>` tag with "on company website", safety redirect URL). |
 
-## Output signals
+## What the pipeline tells you
 
-| Signal | Meaning |
-|--------|---------|
-| `STATUS:` | filled count, captcha, guest_available, submitted, etc |
-| `TYPE:` | easy_apply / ats_direct / external / already_applied / login_wall / unknown |
-| `NEXT:` | What to run next |
-| `QUIRKS:` | Platform notes from YAML — once per session |
-| `GUEST_AVAILABLE:` | Guest button found — auto-clicked on fill |
-| `IMG:` | Screenshot path. Read for visual context |
-| `HTML:` | Full DOM dump path. Last-resort debug |
+| Signal | When | What it means |
+|--------|------|---------------|
+| `STATUS:` | Any step | Something happened — filled count, captcha detected, guest apply clicked, submitted, etc |
+| `TYPE:` | detect | What kind of job page this is |
+| `NEXT:` | Any step | What you should run next |
+| `QUIRKS:` | detect or fill | Platform-specific notes from the YAML configs — printed once per platform per session |
+| `GUEST_AVAILABLE:` | detect | Found a "continue without signing in" button — will auto-click on fill |
+| `IMG:` | inspect | Path to a screenshot. Read this file if your model supports images |
+| `HTML:` | inspect | Path to the full page DOM. Read for last-resort debugging |
 
-## Recovery
+## Output directory
 
-| Problem | Fix |
-|---------|-----|
-| `invalid_grant` | `gmail-cli auth add email` |
+`~/.ji/results/{jid}/`:
+- `gemini_response.txt` — Raw Gemini output (gem route only)
+- `script.py` — The PDF generation script
+- `*.pdf` — The generated CV/cover letter
+- `{jid}.url` — Windows shortcut to the job
+
+## When things go wrong
+
+| Problem | Try this |
+|---------|----------|
+| `invalid_grant` | `gmail-cli auth add email` — re-authenticate |
 | TIMEOUT / RATE_LIMIT | `tailor.py retry` |
-| Chrome crash | Auto-restarted — do nothing |
-| DB crash | `extract.py reset` |
-| Auth wall stuck | `fetch.py open` + `--refresh` |
+| Chrome crash | Auto-restarted by the pipeline — just wait |
+| DB issue | `extract.py reset` — wipes and starts fresh |
+| Auth wall | `fetch.py open` + `fetch.py --refresh` to re-fetch |
