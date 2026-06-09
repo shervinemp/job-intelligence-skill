@@ -8,7 +8,8 @@ Usage:
   python3 apply.py act --next <jid>
   python3 apply.py act --back <jid>
   python3 apply.py act --submit <jid> [--confirm]
-  python3 apply.py inspect <jid> [--html] [--candidate N]
+  python3 apply.py act --inspect <jid> [--candidate N]
+  python3 apply.py inspect <jid> [--candidate N]
   python3 apply.py verify <jid>
 """
 import os, sys
@@ -32,16 +33,14 @@ def main():
     act_p.add_argument("--next", action="store_true", help="Click forward (Next/Review/Submit)")
     act_p.add_argument("--back", action="store_true", help="Click Back")
     act_p.add_argument("--submit", action="store_true", help="Click Submit (dry-run w/o --confirm)")
-    act_p.add_argument("--inspect", action="store_true", help="Analyze page: fields, buttons, probe, screenshot")
+    act_p.add_argument("--inspect", action="store_true", help="Full page analysis: screenshot, HTML, probes, fields")
     act_p.add_argument("--answers", help="JSON field->value mapping for --fill")
     act_p.add_argument("--candidate", type=int, default=None, help="Pick Nth from CANDIDATES")
     act_p.add_argument("--confirm", action="store_true", help="Confirm submit (required to actually send)")
-    act_p.add_argument("--verbose", action="store_true", help="Extra text output (PAGE JSON, probe details)")
 
-    inspect_p = sub.add_parser("inspect", help="Full page analysis: fields, buttons, probes, screenshot")
+    inspect_p = sub.add_parser("inspect", help="Full page analysis: screenshot, HTML, fields, buttons, probes")
     inspect_p.add_argument("jid", help="Job ID")
     inspect_p.add_argument("--candidate", type=int, default=None, help="Pick Nth page if multiple open")
-    inspect_p.add_argument("--html", action="store_true", help="Also dump full page DOM to file")
 
     verify_p = sub.add_parser("verify", help="Check submission result")
     verify_p.add_argument("jid", help="Job ID")
@@ -59,7 +58,7 @@ def main():
         run(args)
     elif args.command == "inspect":
         from apply.inspect import run
-        run(args.jid, args.candidate, args.html)
+        run(args.jid, args.candidate)
     elif args.command == "verify":
         from apply.verify import run
         run(args.jid)

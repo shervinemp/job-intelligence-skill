@@ -9,7 +9,7 @@ from lib.chrome_manager import connect
 from lib.db import get_conn
 from apply.common.page_helpers import load_state, save_state, read_page, handle_captcha, scan_actions, read_and_save, DEFAULT_EXCLUDED_BUTTONS as _EXCLUDED_BUTTONS
 from apply.common.registry import resolve as resolve_registry
-from apply.common.inspector import probe as probe_page, probe_all
+from apply.common.inspector import probe as probe_page
 from apply.common.learner import ButtonIntentClassifier
 from apply.common.output import emit_next, emit_status, emit_warn, emit_fill_report, emit_candidates
 from apply.common.page_manager import PageManager
@@ -17,38 +17,6 @@ from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 
-def _dump_html(page, jid, label):
-    """Save full page DOM HTML to file and print HTML: path. Returns path or None."""
-    try:
-        from lib.config import JI_HOME
-        import pathlib
-        html_dir = pathlib.Path(JI_HOME) / "screenshots"
-        html_dir.mkdir(parents=True, exist_ok=True)
-        html = page.evaluate("() => document.documentElement.outerHTML")
-        path = str(html_dir / f"{label}_{jid}_{int(time.time())}.html")
-        pathlib.Path(path).write_text(html, encoding="utf-8")
-        print(f"HTML: {path}")
-        return path
-    except Exception as e:
-        print(f"HTML_FAILED: {e}", file=sys.stderr)
-        return None
-
-def _screenshot(page, jid, label):
-    """Save page screenshot and print IMG: path. Returns path or None."""
-    try:
-        from lib.config import JI_HOME
-        import pathlib
-        ss_dir = pathlib.Path(JI_HOME) / "screenshots"
-        ss_dir.mkdir(parents=True, exist_ok=True)
-        path = str(ss_dir / f"{label}_{jid}_{int(time.time())}.png")
-        page.screenshot(path=path)
-        print(f"IMG: {path}")
-        return path
-    except Exception as e:
-        print(f"IMG_FAILED: {e}", file=sys.stderr)
-        return None
-# Pipeline mode
-_VERBOSE = False  # set via --verbose; extra text + PAGE JSON
 
 def _domain(url):
     try:
@@ -219,8 +187,6 @@ def _handle_post_click(state, ps, page):
         state["result"] = "validation_error"
         save_state(state)
         return True
-    if _VERBOSE:
-        print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
     return False
 
 def _fill_radios(page, fields, answers, ca, profile, jid):
@@ -1022,10 +988,11 @@ def cmd_submit(jid, confirm=False, candidate=None):
         emit_next("verify")
 
 def run(args):
-    global _VERBOSE
-    _VERBOSE = getattr(args, 'verbose', False)
-    if args.fill: cmd_fill(args.jid, args.answers, args.candidate)
+    if args.inspect:
+        from apply.inspect import run as inspect_run
+        inspect_run(args.jid, args.candidate)
+    elif args.fill: cmd_fill(args.jid, args.answers, args.candidate)
     elif args.next: cmd_next(args.jid, args.candidate)
     elif args.back: cmd_back(args.jid)
     elif args.submit: cmd_submit(args.jid, args.confirm, args.candidate)
-    else: print("ERROR: specify --fill, --next, --back, or --submit", file=sys.stderr)
+    else: print("ERROR: specify --fill, --next, --back, --submit, or --inspect", file=sys.stderr)
