@@ -102,14 +102,10 @@ def generate_tailored_docs(job_entry):
 
     if tailor_mode == "agent":
         from lib.config import RESULTS_DIR
-        app_dir = os.path.join(RESULTS_DIR, job_id)
-        os.makedirs(app_dir, exist_ok=True)
-        prompt_path = os.path.join(app_dir, "prompt.txt")
-        with open(prompt_path, "w", encoding="utf-8") as f:
-            f.write(prompt)
-        print(f"PROMPT: {prompt_path}")
-        print(f"  Read the prompt file, write {app_dir}/script.py, then run:", file=sys.stderr)
-        print(f"  python3 tailor.py done {job_id}", file=sys.stderr)
+        script_dir = os.path.join(RESULTS_DIR, job_id)
+        prompt_dir = os.path.dirname(os.path.abspath(__file__))
+        print(f"PROMPT: read {prompt_dir}/tailor_prompt.md")
+        print(f"  Write script.py to {script_dir}, then run: python3 tailor.py done {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
     from lib.config import RESULTS_DIR
