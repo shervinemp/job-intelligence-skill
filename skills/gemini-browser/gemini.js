@@ -53,7 +53,7 @@ function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function args() {
   const a = process.argv.slice(2);
-  let prompt = null, gem = null, action = 'prompt', outputFile = null, appDir = null, promptFile = null, gemName = null;
+  let prompt = null, gem = null, action = 'prompt', outputFile = null, appDir = null, promptFile = null, gemName = null, gemId = null;
   for (let i = 0; i < a.length; i++) {
     const v = a[i];
     if (v === '--help') {
@@ -79,9 +79,10 @@ function args() {
     else if (v === '--app-dir' && i + 1 < a.length) appDir = a[++i];
     else if (v === '--prompt-file' && i + 1 < a.length) promptFile = a[++i];
     else if (v === '--gem' && i + 1 < a.length) gemName = a[++i];
+    else if (v === '--gem-id' && i + 1 < a.length) gemId = a[++i];
     else if (!prompt) prompt = v;
   }
-  return { prompt, gem, action, outputFile, appDir, promptFile, gemName };
+  return { prompt, gem, action, outputFile, appDir, promptFile, gemName, gemId };
 }
 
 // ─── Connect ─────────────────────────────────────────────
@@ -466,7 +467,9 @@ async function dump(page) {
 (async () => {
   const opts = args();
   GEM_ID = null; // no --gem = main page
-  if (opts.gemName) {
+  if (opts.gemId) {
+    GEM_ID = opts.gemId;
+  } else if (opts.gemName) {
     const gemsPath = path.join(__dirname, 'gems.json');
     let gems;
     try {
