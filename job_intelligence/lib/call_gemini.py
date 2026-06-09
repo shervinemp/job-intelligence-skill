@@ -13,6 +13,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 _SKILL_DIR = os.path.dirname(_LIB_DIR)
 _WORKSPACE_ROOT = os.path.abspath(os.path.join(_SKILL_DIR, "..", ".."))
 GEMINI_JS = os.path.join(_WORKSPACE_ROOT, "skills", "gemini-browser", "gemini.js")
+_GEMS_PATH = os.path.join(_SKILL_DIR, "gems.json")
 
 _NODE_BIN = shutil.which("node")
 if not _NODE_BIN:
@@ -46,7 +47,15 @@ def call_gemini_node(*args, timeout_seconds=600, gem=None, **kwargs):
         arg_list = list(args)
     cmd = [_NODE_BIN, GEMINI_JS] + arg_list
     if gem:
-        cmd += ["--gem", gem]
+        # Resolve alias to raw ID via gems.json before passing to gemini.js
+        try:
+            with open(_GEMS_PATH) as f:
+                gems = json.load(f)
+            if gem in gems:
+                gem = gems[gem]
+        except Exception:
+            pass
+        cmd += ["--gem-id", gem]
     cmd += [s for k, v in kwargs.items() for s in (f"--{k}", v)]
     gemini_dir = os.path.dirname(GEMINI_JS)
     try:
