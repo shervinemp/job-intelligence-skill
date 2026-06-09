@@ -16,6 +16,21 @@ from apply.common.page_manager import PageManager
 from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
+
+def _screenshot(page, jid, label):
+    """Save page screenshot and print IMG: path. Returns path or None."""
+    try:
+        from lib.config import JI_HOME
+        import pathlib
+        ss_dir = pathlib.Path(JI_HOME) / "screenshots"
+        ss_dir.mkdir(parents=True, exist_ok=True)
+        path = str(ss_dir / f"{label}_{jid}_{int(time.time())}.png")
+        page.screenshot(path=path)
+        print(f"IMG: {path}")
+        return path
+    except Exception as e:
+        print(f"IMG_FAILED: {e}", file=sys.stderr)
+        return None
 # Pipeline mode
 _DEBUG = False    # set via --debug; controls verbose output like PAGE full JSON
 
@@ -992,7 +1007,8 @@ def cmd_submit(jid, confirm=False, candidate=None):
 
 def cmd_inspect(jid, candidate=None):
     """Analyze the job page: dump fields, buttons, probe result, screenshot.
-    No fill, no submit — pure analysis. Use when stuck with NEXT: act --inspect."""
+    No fill, no submit — pure analysis. Use when stuck with NEXT: act --inspect.
+    Always captures a screenshot and emits IMG: path."""
     state = load_state()
     if state.get("jid") != jid:
         emit_error(f"state is for job {state.get('jid','?')}, not {jid}")
@@ -1024,13 +1040,7 @@ def cmd_inspect(jid, candidate=None):
                 emit_next("none")
             return
 
-    if _DEBUG:
-        import pathlib
-        from lib.config import JI_HOME
-        ss_dir = pathlib.Path(JI_HOME)
-        ss_dir.mkdir(exist_ok=True)
-        ss = page.screenshot(path=str(ss_dir / f"inspect_{jid}_{int(time.time())}.png"))
-        print(f"Screenshot: {ss}", file=sys.stderr)
+    _screenshot(page, jid, "inspect")
 
     # Page info
     print(f"URL: {page.url}", file=sys.stderr)
