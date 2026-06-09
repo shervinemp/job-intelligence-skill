@@ -278,7 +278,8 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         prev_filled = filled
         if f["type"] == "radio": continue
         if f["tag"] == "INPUT" and f["type"] == "file":
-            results_dir = os.path.join(os.path.expanduser("~"), ".openclaw", "results", jid)
+            from lib.config import RESULTS_DIR as _RD
+            results_dir = os.path.join(_RD, jid)
             lbl_lower = (f.get("label", "") or "").lower()
             # Skip optional uploads after the first file is placed (unless it's a distinct field like Cover Letter)
             if file_uploaded and not f.get("required", False):
@@ -1025,7 +1026,8 @@ def cmd_inspect(jid, candidate=None):
 
     if _DEBUG:
         import pathlib
-        ss_dir = pathlib.Path.home() / ".openclaw"
+        from lib.config import JI_HOME
+        ss_dir = pathlib.Path(JI_HOME)
         ss_dir.mkdir(exist_ok=True)
         ss = page.screenshot(path=str(ss_dir / f"inspect_{jid}_{int(time.time())}.png"))
         print(f"Screenshot: {ss}", file=sys.stderr)

@@ -98,7 +98,7 @@ def generate_tailored_docs(job_entry):
 
     prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
 
-    RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
+    from lib.config import RESULTS_DIR
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
     # Clear stale response file so a rate-limited exit doesn't reuse old content
@@ -168,7 +168,7 @@ def cmd_craft(count=1):
         else:
             print(f"\nJOB {jid} {title} @ {company}", file=sys.stderr)
             print(f"URL: {url}")
-            RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
+            from lib.config import RESULTS_DIR
             print(f"DIR: {os.path.join(RESULTS_DIR, jid)}")
 
         try:
@@ -276,7 +276,7 @@ def _cmd_ready(job_id):
     if url:
         webbrowser.open(url)
         print(f"Opening: {url}", file=sys.stderr)
-    RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
+    from lib.config import RESULTS_DIR
     tmp_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(tmp_dir, exist_ok=True)
     files = app_list(job_id)
@@ -373,7 +373,7 @@ def cmd_done(*job_ids):
         return
     state = load()
     count = 0
-    RESULTS_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "results")
+    from lib.config import RESULTS_DIR
     for job_id in job_ids:
         if job_id not in state.get("jobs", {}):
             print(f"Job not found: {job_id}", file=sys.stderr)

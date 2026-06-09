@@ -3,7 +3,7 @@
 All components (fetch, tailor, apply, gemini.js) use this module instead of
 managing their own profile paths and CDP connections.
 
-On import, writes ~/.openclaw/chrome-config.json so Node.js tools (gemini.js)
+On import, writes {JI_HOME}/chrome-config.json so Node.js tools (gemini.js)
 can read the same paths.
 """
 
@@ -19,7 +19,9 @@ import threading
 import time
 from pathlib import Path
 
-_LOCK_PATH = Path(os.path.expanduser("~")) / ".openclaw" / "pipeline.lock"
+from .config import JI_HOME, CHROME_PROFILE, CHROME_CONFIG
+
+_LOCK_PATH = Path(JI_HOME) / "pipeline.lock"
 
 
 def _acquire_lock():
@@ -61,9 +63,6 @@ _acquire_lock()
 CHROME_PATH = os.environ.get("CHROME_PATH") or (
     shutil.which("google-chrome") or shutil.which("chromium-browser")
     or shutil.which("chrome") or "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-)
-CHROME_PROFILE = os.path.join(
-    os.path.expanduser("~"), ".openclaw", "chrome-profile"
 )
 CDP_PORT = int(os.environ.get("CDP_PORT", "9222"))
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
@@ -218,9 +217,8 @@ def session_ok(url, check_text="Sign in", timeout=15):
 
 
 # On import, write a JSON config that Node tools (gemini.js) can read
-_CONFIG_PATH = os.path.join(os.path.dirname(CHROME_PROFILE), "chrome-config.json")
 try:
-    with open(_CONFIG_PATH, "w") as f:
+    with open(CHROME_CONFIG, "w") as f:
         json.dump({
             "CHROME_PATH": CHROME_PATH,
             "CHROME_PROFILE": CHROME_PROFILE,

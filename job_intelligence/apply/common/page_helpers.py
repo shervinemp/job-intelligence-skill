@@ -2,8 +2,7 @@
 import json, os, random, re, time
 import webbrowser
 
-SKILL_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-STATE_PATH = os.path.join(os.path.expanduser("~"), ".openclaw", "apply_state.json")
+from lib.config import STATE_PATH
 
 # Aggregator domains — always trusted, no learning needed
 _SKIP_DOMAINS = {"linkedin.com", "linkedin.com/jobs", "indeed.com",
