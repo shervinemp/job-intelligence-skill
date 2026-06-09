@@ -9,7 +9,6 @@ Usage:
   python3 apply.py act --back <jid>
   python3 apply.py act --submit <jid> [--confirm]
   python3 apply.py act --inspect <jid> [--candidate N]
-  python3 apply.py inspect <jid> [--candidate N]
   python3 apply.py verify <jid>
 """
 import os, sys
@@ -38,10 +37,6 @@ def main():
     act_p.add_argument("--candidate", type=int, default=None, help="Pick Nth from CANDIDATES")
     act_p.add_argument("--confirm", action="store_true", help="Confirm submit (required to actually send)")
 
-    inspect_p = sub.add_parser("inspect", help="Full page analysis: screenshot, HTML, fields, buttons, probes")
-    inspect_p.add_argument("jid", help="Job ID")
-    inspect_p.add_argument("--candidate", type=int, default=None, help="Pick Nth page if multiple open")
-
     verify_p = sub.add_parser("verify", help="Check submission result")
     verify_p.add_argument("jid", help="Job ID")
 
@@ -56,9 +51,6 @@ def main():
     elif args.command == "act":
         from apply.act import run
         run(args)
-    elif args.command == "inspect":
-        from apply.inspect import run
-        run(args.jid, args.candidate)
     elif args.command == "verify":
         from apply.verify import run
         run(args.jid)

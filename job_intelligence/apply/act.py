@@ -987,10 +987,53 @@ def cmd_submit(jid, confirm=False, candidate=None):
         emit_status("unknown", "page unchanged or not submitted")
         emit_next("verify")
 
+
+def cmd_inspect(jid, candidate=None):
+    """Full page analysis: screenshot, HTML, probes, fields, buttons.
+    Uses inspect_lib for core logic; adds job context from state."""
+    state = load_state()
+    if state.get("jid") != jid:
+        emit_error(f"state is for job {state.get('jid','?')}, not {jid}")
+        print("  Run detect first.", file=sys.stderr); return
+
+    from apply.common.inspect_lib import capture, probe_state
+    b, ctx = connect()
+    pm = PageManager(ctx, jid)
+    ext = state.get("external_url", "")
+    page, score, candidates = pm.find(fallback_url=ext)
+
+    print(f"Open pages ({len(ctx.pages)}):", file=sys.stderr)
+    for i, p in enumerate(ctx.pages):
+        url = p.url[:100]
+        match = " [MATCH]" if p == page else ""
+        print(f"  [{i}] {url}{match}", file=sys.stderr)
+
+    if not page:
+        if candidate is not None and candidate < len(ctx.pages):
+            page = ctx.pages[candidate]
+            print(f"Picked page [{candidate}]: {page.url[:100]}", file=sys.stderr)
+        else:
+            emit_warn(f"no page matches job {jid}")
+            print(f"  Wanted: {ext[:100] if ext else '?'}", file=sys.stderr)
+            if ctx.pages:
+                emit_next("model_choice")
+            else:
+                emit_next("none")
+            return
+
+    print(f"URL: {page.url}", file=sys.stderr)
+    print(f"Title: {page.title() or '?'}", file=sys.stderr)
+    print(f"Platform: {state.get('platform', '?')}", file=sys.stderr)
+    print(f"Filled: {state.get('filled', 0)} fields", file=sys.stderr)
+
+    capture(page, jid)
+    fc, _, _, _ = probe_state(page)
+
+    emit_next("act --fill" if fc > 0 else "none")
+
+
 def run(args):
-    if args.inspect:
-        from apply.inspect import run as inspect_run
-        inspect_run(args.jid, args.candidate)
+    if args.inspect: cmd_inspect(args.jid, args.candidate)
     elif args.fill: cmd_fill(args.jid, args.answers, args.candidate)
     elif args.next: cmd_next(args.jid, args.candidate)
     elif args.back: cmd_back(args.jid)
