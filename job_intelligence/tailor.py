@@ -25,7 +25,10 @@ from datetime import datetime
 
 from lib.db import load, advance, get_failed, pipeline_status
 from lib.db import (
-    desc_get, app_save, app_get, app_list,
+    desc_get,
+    app_save,
+    app_get,
+    app_list,
 )
 from lib.call_gemini import (
     call_gemini_node,
@@ -55,8 +58,13 @@ def generate_tailored_docs(job_entry):
 
     cat = job.get("category")
     if not cat:
-        return False, f"No category for job {job_id} — fetch.py admit --category <name> first"
-    cat_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "categories.json")
+        return (
+            False,
+            f"No category for job {job_id} — fetch.py admit --category <name> first",
+        )
+    cat_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "categories.json"
+    )
     try:
         with open(cat_path) as f:
             cat_info = json.load(f).get(cat)
@@ -83,8 +91,8 @@ def generate_tailored_docs(job_entry):
     ]:
         desc_clean = desc_clean.replace(bad, good)
 
-    desc_clean = re.sub(r'https?://\S+', '', desc_clean)
-    desc_clean = re.sub(r'\n{2,}', '\n', desc_clean).strip()
+    desc_clean = re.sub(r"https?://\S+", "", desc_clean)
+    desc_clean = re.sub(r"\n{2,}", "\n", desc_clean).strip()
 
     prompt = JOB_PROMPT_TEMPLATE.format(
         title=title_clean,
@@ -117,12 +125,17 @@ content based on the candidate's profile and the job requirements above.
 """
         prompt += agent_instructions
         from lib.config import RESULTS_DIR
+
         script_dir = os.path.join(RESULTS_DIR, job_id)
         print(f"PROMPT: generate script.py at {script_dir}/")
-        print(f"  Instructions: read the full prompt above, write script.py, then run: python3 tailor.py done {job_id}", file=sys.stderr)
+        print(
+            f"  Instructions: read the full prompt above, write script.py, then run: python3 tailor.py done {job_id}",
+            file=sys.stderr,
+        )
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
     from lib.config import RESULTS_DIR
+
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
     # Clear stale response file so a rate-limited exit doesn't reuse old content
@@ -193,26 +206,38 @@ def cmd_craft(count=1):
             print(f"\nJOB {jid} {title} @ {company}", file=sys.stderr)
             print(f"URL: {url}")
             from lib.config import RESULTS_DIR
+
             print(f"DIR: {os.path.join(RESULTS_DIR, jid)}")
 
         try:
             success, result = generate_tailored_docs(entry)
             mode = os.environ.get("JI_TAILOR", "agent")
             if success and mode == "agent":
-                print(f"  PROMPT_READY {jid} — write script.py then run 'done {jid} --pdf <path>'", file=sys.stderr)
+                print(
+                    f"  PROMPT_READY {jid} — write script.py then run 'done {jid} --pdf <path>'",
+                    file=sys.stderr,
+                )
                 processed += 1
             elif success:  # gem route — PDF auto-generated
                 if count == 1:
-                    print(f"  COMPLETE {jid} — run 'done {jid}' to confirm", file=sys.stderr)
+                    print(
+                        f"  COMPLETE {jid} — run 'done {jid}' to confirm",
+                        file=sys.stderr,
+                    )
                     text = result.get("text", "")
                     if text:
                         print(f"\n---RESPONSE---\n{text}\n---", file=sys.stderr)
                 else:
-                    print(f"  Complete -> run 'done <jid>' for each job", file=sys.stderr)
+                    print(
+                        f"  Complete -> run 'done <jid>' for each job", file=sys.stderr
+                    )
                 processed += 1
             else:
                 err_str = str(result)[:120]
-                if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
+                if any(
+                    x in err_str
+                    for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]
+                ):
                     print(f"  TRANSIENT {jid} — {err_str}", file=sys.stderr)
                     # Leave at described, stop batch — transient error
                     failed_count += 1
@@ -244,24 +269,41 @@ def craft_jid(jid):
             advance(entry, "described")
             print(f"  {jid}: extracted -> described", file=sys.stderr)
         else:
-            print(f"ERROR: job {jid} has no description \u2014 run fetch.py first", file=sys.stderr)
+            print(
+                f"ERROR: job {jid} has no description \u2014 run fetch.py first",
+                file=sys.stderr,
+            )
             return
 
     if entry.get("stage") not in ("described",):
-        print(f"ERROR: job {jid} is in stage '{entry.get('stage')}', can't tailor", file=sys.stderr)
+        print(
+            f"ERROR: job {jid} is in stage '{entry.get('stage')}', can't tailor",
+            file=sys.stderr,
+        )
         return
 
     if not entry.get("category"):
-        print(f"ERROR: job {jid} has no category — fetch.py admit --category <name> first", file=sys.stderr)
+        print(
+            f"ERROR: job {jid} has no category — fetch.py admit --category <name> first",
+            file=sys.stderr,
+        )
         return
 
     success, result = generate_tailored_docs(entry)
     if success:
-        advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
-        print(f"  COMPLETE {jid}", file=sys.stderr)
+        mode = os.environ.get("JI_TAILOR", "agent")
+        if mode == "agent":
+            print(
+                f"  PROMPT_READY {jid} — write script.py then run 'done {jid} --pdf <path>'",
+                file=sys.stderr,
+            )
+        else:
+            print(f"  COMPLETE {jid} — run 'done {jid}' to confirm", file=sys.stderr)
     else:
         err_str = str(result)[:120]
-        if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
+        if any(
+            x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]
+        ):
             print(f"  TRANSIENT {jid} \u2014 {err_str}", file=sys.stderr)
         else:
             advance(entry, "failed", error=str(result)[:200])
@@ -279,7 +321,9 @@ def cmd_status():
         if c:
             print(f"  {stage}: {c}", file=sys.stderr)
     if s["staged"]["pending"]:
-        print(f"  staged (pending extraction): {s['staged']['pending']}", file=sys.stderr)
+        print(
+            f"  staged (pending extraction): {s['staged']['pending']}", file=sys.stderr
+        )
     if s["auth_walls"]["count"]:
         domains = " ".join(s["auth_walls"]["domains"])
         print(f"  auth walls: {s['auth_walls']['count']} ({domains})", file=sys.stderr)
@@ -298,6 +342,7 @@ def _cmd_ready(job_id):
         webbrowser.open(url)
         print(f"Opening: {url}", file=sys.stderr)
     from lib.config import RESULTS_DIR
+
     tmp_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(tmp_dir, exist_ok=True)
     files = app_list(job_id)
@@ -395,6 +440,7 @@ def cmd_done(*job_ids, pdf_path=None):
     state = load()
     count = 0
     from lib.config import RESULTS_DIR
+
     for job_id in job_ids:
         if job_id not in state.get("jobs", {}):
             print(f"Job not found: {job_id}", file=sys.stderr)
@@ -404,7 +450,9 @@ def cmd_done(*job_ids, pdf_path=None):
             print(f"PDF_NOT_FOUND: {job_id} — {pdf_path}", file=sys.stderr)
             continue
 
-        advance(state["jobs"][job_id], "tailored", applied_at=datetime.now().isoformat())
+        advance(
+            state["jobs"][job_id], "tailored", applied_at=datetime.now().isoformat()
+        )
 
         job_url = state["jobs"][job_id].get("url", "")
         if job_url and sys.platform == "win32":
@@ -443,15 +491,21 @@ def cmd_relentless(count):
                     return
             except ValueError:
                 continue
-        print(f"Rate limit — unknown reset '{target_str}', sleeping 120s", file=sys.stderr)
+        print(
+            f"Rate limit — unknown reset '{target_str}', sleeping 120s", file=sys.stderr
+        )
         _time.sleep(120)
 
-    tailor_script = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "tailor.py")
+    tailor_script = _os.path.join(
+        _os.path.dirname(_os.path.abspath(__file__)), "tailor.py"
+    )
 
     while True:
         r = _sp.run(
             [_sys.executable, tailor_script, f"--count={count}"],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         output = (r.stdout or "") + (r.stderr or "")
 
@@ -470,7 +524,7 @@ def cmd_relentless(count):
         if s.get("stages", {}).get("described", 0) == 0:
             print(f"DONE: {s['stages'].get('tailored',0)} tailored")
             break
-        
+
         if count != -1:
             # Non-infinite: we processed what was asked
             break
@@ -478,24 +532,61 @@ def cmd_relentless(count):
 
 def cmd_help():
     print("Usage:", file=sys.stderr)
-    print("  [--count N] [--open]                         Craft CVs (default 1, no browser)", file=sys.stderr)
-    print("  [--count N] --relentless                     Craft all, idle on rate limits", file=sys.stderr)
-    print("  done <jid> [jid...]                          Mark applied, create .url shortcut", file=sys.stderr)
+    print(
+        "  [--count N] [--open]                         Craft CVs (default 1, no browser)",
+        file=sys.stderr,
+    )
+    print(
+        "  [--count N] --relentless                     Craft all, idle on rate limits",
+        file=sys.stderr,
+    )
+    print(
+        "  done <jid> [jid...]                          Mark applied, create .url shortcut",
+        file=sys.stderr,
+    )
     print("  skip <jid> [jid...]                          Skip", file=sys.stderr)
-    print("  redo <jid>                                   Re-tailor from described", file=sys.stderr)
-    print("  redo --from tailored,applied,failed          Batch redo by stage", file=sys.stderr)
-    print("  retry                                        Retry failed", file=sys.stderr)
-    print("  reset <jid> [--hard]                         Reset to described or extracted", file=sys.stderr)
+    print(
+        "  redo <jid>                                   Re-tailor from described",
+        file=sys.stderr,
+    )
+    print(
+        "  redo --from tailored,applied,failed          Batch redo by stage",
+        file=sys.stderr,
+    )
+    print(
+        "  retry                                        Retry failed", file=sys.stderr
+    )
+    print(
+        "  reset <jid> [--hard]                         Reset to described or extracted",
+        file=sys.stderr,
+    )
     print("  reset --all [--hard]                         Mass reset", file=sys.stderr)
-    print("  reset --from failed,skipped [--hard]         Reset by stage", file=sys.stderr)
-    print("  ready [<jid>]                                Open URL + files folder", file=sys.stderr)
-    print("  resume <jid>                                 Show application files", file=sys.stderr)
-    print("  status                                       Pipeline state", file=sys.stderr)
-    print("  list-gems                                    List Gemini gems", file=sys.stderr)
-    print("  help                                         This message", file=sys.stderr)
+    print(
+        "  reset --from failed,skipped [--hard]         Reset by stage", file=sys.stderr
+    )
+    print(
+        "  ready [<jid>]                                Open URL + files folder",
+        file=sys.stderr,
+    )
+    print(
+        "  resume <jid>                                 Show application files",
+        file=sys.stderr,
+    )
+    print(
+        "  status                                       Pipeline state", file=sys.stderr
+    )
+    print(
+        "  list-gems                                    List Gemini gems",
+        file=sys.stderr,
+    )
+    print(
+        "  help                                         This message", file=sys.stderr
+    )
     print("", file=sys.stderr)
     print("  --count -1: process all described jobs", file=sys.stderr)
-    print("  --relentless: on rate limit, parse reset time, sleep, retry", file=sys.stderr)
+    print(
+        "  --relentless: on rate limit, parse reset time, sleep, retry", file=sys.stderr
+    )
 
 
 def cmd_redo(job_id):
@@ -525,7 +616,11 @@ def cmd_reset(job_id=None, hard=False, from_stages=None):
         print("No jobs.", file=sys.stderr)
         return
     if from_stages:
-        targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in from_stages]
+        targets = [
+            (jid, e)
+            for jid, e in state["jobs"].items()
+            if e.get("stage") in from_stages
+        ]
         if not targets:
             print(f"No jobs with stage in {from_stages}.", file=sys.stderr)
             return
@@ -537,7 +632,10 @@ def cmd_reset(job_id=None, hard=False, from_stages=None):
             return
         targets = [(job_id, state["jobs"][job_id])]
     else:
-        print("Usage: python3 tailor.py reset <jid> [--hard] | --all [--hard]", file=sys.stderr)
+        print(
+            "Usage: python3 tailor.py reset <jid> [--hard] | --all [--hard]",
+            file=sys.stderr,
+        )
         return
     to_stage = "extracted" if hard else "described"
     for jid, entry in targets:
@@ -548,43 +646,62 @@ def cmd_reset(job_id=None, hard=False, from_stages=None):
     print(f"Reset {len(targets)} jobs ({mode}).", file=sys.stderr)
 
 
-
 def main():
     import argparse
-    parser = argparse.ArgumentParser(prog="tailor.py", description="Tailor CVs via Gemini Web")
-    parser.add_argument("--count", type=int, default=1, help="Jobs to process (default 1, -1 = all)")
-    parser.add_argument("--relentless", action="store_true", help="Retry on rate limit with idle loop")
+
+    parser = argparse.ArgumentParser(
+        prog="tailor.py", description="Tailor CVs via Gemini Web"
+    )
+    parser.add_argument(
+        "--count", type=int, default=1, help="Jobs to process (default 1, -1 = all)"
+    )
+    parser.add_argument(
+        "--relentless", action="store_true", help="Retry on rate limit with idle loop"
+    )
     parser.add_argument("--jid", help="Tailor a specific job by JID")
-    
+
     sub = parser.add_subparsers(dest="command")
     done_p = sub.add_parser("done", help="Mark job as applied")
     done_p.add_argument("jids", nargs="+")
-    done_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists before marking applied)")
+    done_p.add_argument(
+        "--pdf",
+        help="Path to generated PDF (verifies file exists before marking applied)",
+    )
     sub.add_parser("skip", help="Skip job").add_argument("jids", nargs="+")
     redo_p = sub.add_parser("redo", help="Re-tailor from described")
     redo_p.add_argument("jid", nargs="?")
-    redo_p.add_argument("--from", dest="from_stages", help="Batch redo by stage (comma-separated)")
+    redo_p.add_argument(
+        "--from", dest="from_stages", help="Batch redo by stage (comma-separated)"
+    )
     sub.add_parser("retry", help="Retry failed jobs")
     reset_p = sub.add_parser("reset", help="Reset job stage")
     reset_p.add_argument("target", nargs="?", help="jid or --all")
-    reset_p.add_argument("--hard", action="store_true", help="Reset to extracted instead of described")
-    reset_p.add_argument("--from", dest="from_stages", help="Reset by stage (comma-separated)")
+    reset_p.add_argument(
+        "--hard", action="store_true", help="Reset to extracted instead of described"
+    )
+    reset_p.add_argument(
+        "--from", dest="from_stages", help="Reset by stage (comma-separated)"
+    )
     sub.add_parser("status", help="Pipeline state")
-    sub.add_parser("resume", help="Show application files").add_argument("jid", nargs="?")
+    sub.add_parser("resume", help="Show application files").add_argument(
+        "jid", nargs="?"
+    )
     sub.add_parser("ready", help="Open URL + files").add_argument("jid", nargs="?")
     sub.add_parser("list-gems", help="List Gemini gems")
-    
+
     args = parser.parse_args()
-    
+
     if args.command == "done":
         cmd_done(*args.jids, pdf_path=args.pdf)
     elif args.command == "skip":
         cmd_skip(*args.jids)
     elif args.command == "redo":
-        if getattr(args, 'from_stages', None):
+        if getattr(args, "from_stages", None):
             state = load()
             stages = [s.strip() for s in args.from_stages.split(",")]
-            targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in stages]
+            targets = [
+                (jid, e) for jid, e in state["jobs"].items() if e.get("stage") in stages
+            ]
             count = 0
             for jid, entry in targets:
                 advance(entry, "described", error=None)
@@ -598,7 +715,7 @@ def main():
     elif args.command == "reset":
         target = args.target
         hard = args.hard
-        from_stages = getattr(args, 'from_stages', None)
+        from_stages = getattr(args, "from_stages", None)
         if from_stages:
             from_stages = [s.strip() for s in from_stages.split(",")]
             cmd_reset(from_stages=from_stages, hard=hard)

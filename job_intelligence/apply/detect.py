@@ -3,13 +3,20 @@
 One command tells you if a job is ready for the apply pipeline.
 """
 import json, os, sys, time
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn, desc_exists
 from apply.common.page_helpers import read_page, check_captcha, STATE_PATH
 from apply.common.output import emit_next, emit_status, emit_type, emit_error
 from apply.common.registry import resolve as resolve_registry
-from apply.common.platforms import check_page, detect_platform, ALREADY_APPLIED, LOGIN_WALL, GUEST_APPLY
+from apply.common.platforms import (
+    check_page,
+    detect_platform,
+    ALREADY_APPLIED,
+    LOGIN_WALL,
+    GUEST_APPLY,
+)
 
 
 def _merge_state(new):
@@ -28,17 +35,24 @@ def _merge_state(new):
         json.dump(existing, f, indent=2)
     os.replace(tmp, STATE_PATH)
 
+
 def _has_pdf(jid):
     from lib.config import RESULTS_DIR as _RD
+
     rd = os.path.join(_RD, jid)
-    if not os.path.isdir(rd): return False
+    if not os.path.isdir(rd):
+        return False
     return any("Resume" in f and f.endswith(".pdf") for f in os.listdir(rd))
+
 
 def run(jid):
     c = get_conn()
-    r = c.execute("SELECT url, title, company, stage FROM jobs WHERE id=?", (jid,)).fetchone()
+    r = c.execute(
+        "SELECT url, title, company, stage FROM jobs WHERE id=?", (jid,)
+    ).fetchone()
     if not r:
-        emit_error(f"job {jid} not found"); sys.exit(1)
+        emit_error(f"job {jid} not found")
+        sys.exit(1)
     url, title, company, stage = r["url"], r["title"], r["company"], r["stage"]
 
     print(f"JOB: {title or '?'} @ {company or '?'}", file=sys.stderr)
@@ -46,10 +60,14 @@ def run(jid):
     # Stage check
     if stage == "applied":
         emit_type("already_applied")
-        emit_next("none"); _merge_state({"jid": jid}); sys.exit(0)
+        emit_next("none")
+        _merge_state({"jid": jid})
+        sys.exit(0)
     if stage == "failed":
         emit_status("failed", "run tailor.py retry first")
-        emit_next("tailor.py retry"); _merge_state({"jid": jid}); sys.exit(0)
+        emit_next("tailor.py retry")
+        _merge_state({"jid": jid})
+        sys.exit(0)
     if stage in ("extracted", "described"):
         if not _has_pdf(jid):
             if desc_exists(jid):
@@ -58,7 +76,8 @@ def run(jid):
             else:
                 emit_status(f"needs description (stage={stage}, no desc, no PDF)")
                 emit_next(f"fetch.py  then  tailor.py --jid {jid}")
-            _merge_state({"jid": jid}); sys.exit(0)
+            _merge_state({"jid": jid})
+            sys.exit(0)
 
     # Classify type
     b, ctx = connect()
@@ -69,22 +88,32 @@ def run(jid):
 
         # Intercept LinkedIn GraphQL response for Easy Apply field detection
         apply_fields = []
+
         def _handle_response(response):
             nonlocal apply_fields
             if "jobPostingApplyFlowByJobId" in response.url and response.ok:
                 try:
                     body = response.json()
-                    fields = body.get("data", {}).get("jobPostingApplyFlowByJobId", {}).get("questions", [])
+                    fields = (
+                        body.get("data", {})
+                        .get("jobPostingApplyFlowByJobId", {})
+                        .get("questions", [])
+                    )
                     for q in fields:
                         if isinstance(q, dict):
-                            label = q.get("title", {}).get("text", q.get("body", {}).get("text", ""))
-                            apply_fields.append({
-                                "label": label[:80],
-                                "type": q.get("type", "unknown"),
-                                "required": q.get("required", False),
-                            })
+                            label = q.get("title", {}).get(
+                                "text", q.get("body", {}).get("text", "")
+                            )
+                            apply_fields.append(
+                                {
+                                    "label": label[:80],
+                                    "type": q.get("type", "unknown"),
+                                    "required": q.get("required", False),
+                                }
+                            )
                 except Exception:
                     pass
+
         p.on("response", _handle_response)
 
         # First check the regular job page for external apply button
@@ -95,15 +124,18 @@ def run(jid):
             pass
         time.sleep(2)
         from apply.common.page_manager import PageManager
+
         PageManager(ctx, jid).register(p)
-        buttons = p.evaluate("""() => {
+        buttons = p.evaluate(
+            """() => {
             const all = document.querySelectorAll('button, a');
             return Array.from(all).filter(el => el.offsetParent !== null).map(el => ({
                 text: (el.textContent || '').trim().slice(0, 25),
                 aria: (el.getAttribute('aria-label') || '').slice(0, 40),
                 tag: el.tagName
             }));
-        }""")
+        }"""
+        )
 
         if any(b["text"] == "Applied" for b in buttons):
             emit_type("already_applied")
@@ -111,16 +143,24 @@ def run(jid):
             _merge_state({"jid": jid})
             sys.exit(0)
         if any("on company website" in (b.get("aria") or "").lower() for b in buttons):
-            buttons_detail = json.dumps([b for b in buttons if 'company website' in b['aria']])
+            buttons_detail = json.dumps(
+                [b for b in buttons if "company website" in b["aria"]]
+            )
             emit_type("external", f"BUTTONS: {buttons_detail}")
             emit_next("navigate")
             _merge_state({"jid": jid, "url": url, "title": title, "company": company})
             sys.exit(0)
 
         # Not external — try opening Easy Apply modal
-        p.goto(f"https://www.linkedin.com/jobs/view/{job_id}/apply/?openSDUIApplyFlow=true", wait_until="domcontentloaded", timeout=30000)
+        p.goto(
+            f"https://www.linkedin.com/jobs/view/{job_id}/apply/?openSDUIApplyFlow=true",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
         try:
-            p.wait_for_selector('[role="dialog"], [data-test-form-builder]', timeout=8000)
+            p.wait_for_selector(
+                '[role="dialog"], [data-test-form-builder]', timeout=8000
+            )
         except:
             pass
         time.sleep(2)
@@ -131,39 +171,46 @@ def run(jid):
             return
 
         page_state = read_page(p)
-        buttons = p.evaluate("""() => {
+        buttons = p.evaluate(
+            """() => {
             const all = document.querySelectorAll('button, a');
             return Array.from(all).filter(el => el.offsetParent !== null).map(el => ({
                 text: (el.textContent || '').trim().slice(0, 25),
                 aria: (el.getAttribute('aria-label') || '').slice(0, 40),
                 tag: el.tagName
             }));
-        }""")
+        }"""
+        )
 
         reg = resolve_registry(url)
         if page_state and page_state["fieldCount"] > 0:
             _merge_state({"jid": jid, "_detect_fields": page_state})
             emit_type("easy_apply")
-            if reg: reg.emit_notes()
+            if reg:
+                reg.emit_notes()
             emit_next("act --fill")
         elif apply_fields:
             fb = {"fieldCount": len(apply_fields), "fields": apply_fields}
             _merge_state({"jid": jid, "_detect_fields": fb})
             emit_type("easy_apply")
-            if reg: reg.emit_notes()
+            if reg:
+                reg.emit_notes()
             emit_next("act --fill")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
             _merge_state({"jid": jid})
             emit_type("easy_apply", "dialog not auto-opened")
-            if reg: reg.emit_notes()
+            if reg:
+                reg.emit_notes()
             emit_next("act --fill")
         else:
             emit_type("unknown")
-            emit_next("none")
+            emit_next("act --inspect")
     else:
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
         try:
-            p.wait_for_selector('form, input, select, textarea, [role="dialog"]', timeout=8000)
+            p.wait_for_selector(
+                'form, input, select, textarea, [role="dialog"]', timeout=8000
+            )
         except:
             pass
         time.sleep(2)
@@ -186,17 +233,28 @@ def run(jid):
             reg = resolve_registry(url)
             plat_name = reg.name if reg else plat
             emit_type("ats_direct", f"EXTERNAL_URL: {url}\nPLATFORM: {plat_name}")
-            if reg: reg.emit_notes()
+            if reg:
+                reg.emit_notes()
             emit_next("act --fill")
-            _merge_state({"jid": jid, "url": url, "title": title, "company": company,
-                         "external_url": url, "platform": plat_name, "page": page_state})
+            _merge_state(
+                {
+                    "jid": jid,
+                    "url": url,
+                    "title": title,
+                    "company": company,
+                    "external_url": url,
+                    "platform": plat_name,
+                    "page": page_state,
+                }
+            )
         else:
             plat = detect_platform(url)
             text = (p.evaluate("() => document.body.innerText") or "").lower()
             if plat and check_page(text, plat, LOGIN_WALL):
                 # Check for guest apply buttons before declaring full login wall
                 guest_patterns = GUEST_APPLY.get(plat, []) + GUEST_APPLY["default"]
-                guest_btn = p.evaluate(f"""() => {{
+                guest_btn = p.evaluate(
+                    f"""() => {{
                     const patterns = {json.dumps(guest_patterns)};
                     const all = document.querySelectorAll('button, a, span, div');
                     for (const el of all) {{
@@ -207,9 +265,12 @@ def run(jid):
                         }}
                     }}
                     return null;
-                }}""")
+                }}"""
+                )
                 if guest_btn:
-                    emit_status("guest_available", f"PLATFORM: {plat}, button: '{guest_btn}'")
+                    emit_status(
+                        "guest_available", f"PLATFORM: {plat}, button: '{guest_btn}'"
+                    )
                     emit_next("act --fill")
                 else:
                     emit_type("login_wall", f"PLATFORM: {plat}")
@@ -217,5 +278,5 @@ def run(jid):
                 _merge_state({"jid": jid})
             else:
                 emit_type("unknown")
-                emit_next("none")
+                emit_next("act --inspect")
                 _merge_state({"jid": jid})
