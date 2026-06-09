@@ -466,9 +466,7 @@ async function dump(page) {
 (async () => {
   const opts = args();
   GEM_ID = null; // no --gem = main page
-  if (opts.gemId) {
-    GEM_ID = opts.gemId;
-  } else if (opts.gemName) {
+  if (opts.gemName) {
     const gemsPath = path.join(__dirname, 'gems.json');
     let gems;
     try {
