@@ -184,7 +184,10 @@ def cmd_craft(count=1):
         try:
             success, result = generate_tailored_docs(entry)
             mode = os.environ.get("JI_TAILOR", "agent")
-            if success and mode != "agent":
+            if success and mode == "agent":
+                print(f"  PROMPT_READY {jid} — write script.py then run 'done {jid}'", file=sys.stderr)
+                processed += 1
+            elif success:  # gem route
                 advance(
                     entry,
                     "tailored",
