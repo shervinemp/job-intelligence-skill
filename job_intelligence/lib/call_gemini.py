@@ -55,7 +55,7 @@ def call_gemini_node(*args, timeout_seconds=600, gem=None, **kwargs):
                 gem = gems[gem]
         except Exception:
             pass
-        cmd += ["--gem-id", gem]
+        cmd += ["--gem", gem]
     cmd += [s for k, v in kwargs.items() for s in (f"--{k}", v)]
     gemini_dir = os.path.dirname(GEMINI_JS)
     try:
