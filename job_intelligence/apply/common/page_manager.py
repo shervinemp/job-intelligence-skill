@@ -14,8 +14,10 @@ def _load():
 
 def _save(r):
     os.makedirs(os.path.dirname(REGISTRY_PATH), exist_ok=True)
-    with open(REGISTRY_PATH, "w") as f:
+    tmp = REGISTRY_PATH + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(r, f, indent=2)
+    os.replace(tmp, REGISTRY_PATH)
 
 from apply.common.page_helpers import _PAGE_JID_MAP as _page_map
 
