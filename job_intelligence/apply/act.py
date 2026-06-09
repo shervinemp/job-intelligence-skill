@@ -17,6 +17,22 @@ from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 
+def _dump_html(page, jid, label):
+    """Save full page DOM HTML to file and print HTML: path. Returns path or None."""
+    try:
+        from lib.config import JI_HOME
+        import pathlib
+        html_dir = pathlib.Path(JI_HOME) / "screenshots"
+        html_dir.mkdir(parents=True, exist_ok=True)
+        html = page.evaluate("() => document.documentElement.outerHTML")
+        path = str(html_dir / f"{label}_{jid}_{int(time.time())}.html")
+        pathlib.Path(path).write_text(html, encoding="utf-8")
+        print(f"HTML: {path}")
+        return path
+    except Exception as e:
+        print(f"HTML_FAILED: {e}", file=sys.stderr)
+        return None
+
 def _screenshot(page, jid, label):
     """Save page screenshot and print IMG: path. Returns path or None."""
     try:
@@ -32,7 +48,7 @@ def _screenshot(page, jid, label):
         print(f"IMG_FAILED: {e}", file=sys.stderr)
         return None
 # Pipeline mode
-_DEBUG = False    # set via --debug; controls verbose output like PAGE full JSON
+_VERBOSE = False  # set via --verbose; extra text + PAGE JSON
 
 def _domain(url):
     try:
@@ -203,7 +219,7 @@ def _handle_post_click(state, ps, page):
         state["result"] = "validation_error"
         save_state(state)
         return True
-    if _DEBUG:
+    if _VERBOSE:
         print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
     return False
 
@@ -852,7 +868,7 @@ def cmd_back(jid):
     ps = read_page(page)
     state["page"] = ps
     save_state(state)
-    if _DEBUG:
+    if _VERBOSE:
         print(f"PAGE: {json.dumps(ps)}", file=sys.stderr)
     emit_next("act --fill")
 
@@ -1005,106 +1021,11 @@ def cmd_submit(jid, confirm=False, candidate=None):
         emit_status("unknown", "page unchanged or not submitted")
         emit_next("verify")
 
-def cmd_inspect(jid, candidate=None):
-    """Analyze the job page: dump fields, buttons, probe result, screenshot.
-    No fill, no submit — pure analysis. Use when stuck with NEXT: act --inspect.
-    Always captures a screenshot and emits IMG: path."""
-    state = load_state()
-    if state.get("jid") != jid:
-        emit_error(f"state is for job {state.get('jid','?')}, not {jid}")
-        print("  Run detect first.", file=sys.stderr); return
-
-    b, ctx = connect()
-    pm = PageManager(ctx, jid)
-    ext = state.get("external_url", "")
-    page, score, candidates = pm.find(fallback_url=ext)
-
-    # Show all open pages for context
-    print(f"Open pages ({len(ctx.pages)}):", file=sys.stderr)
-    for i, p in enumerate(ctx.pages):
-        url = p.url[:100]
-        match = " [MATCH]" if p == page else ""
-        print(f"  [{i}] {url}{match}", file=sys.stderr)
-
-    if not page:
-        if candidate is not None and candidate < len(ctx.pages):
-            page = ctx.pages[candidate]
-            print(f"Picked page [{candidate}]: {page.url[:100]}", file=sys.stderr)
-        else:
-            emit_warn(f"no page matches job {jid}")
-            print(f"  Wanted: {ext[:100] if ext else '?'}", file=sys.stderr)
-            if ctx.pages:
-                print(f"  Use --inspect --candidate N to pick one.", file=sys.stderr)
-                emit_next("model_choice")
-            else:
-                emit_next("none")
-            return
-
-    _screenshot(page, jid, "inspect")
-
-    # Page info
-    print(f"URL: {page.url}", file=sys.stderr)
-    print(f"Title: {page.title() or '?'}", file=sys.stderr)
-    print(f"Platform: {state.get('platform', '?')}", file=sys.stderr)
-    print(f"Filled: {state.get('filled', 0)} fields", file=sys.stderr)
-
-    # Run probe (short-circuits via YAML best_strategy if configured)
-    ps = read_page(page)
-    domain = _domain(page.url)
-    registry = resolve_registry(page.url)
-    best = probe_page(page, domain=domain, registry_config=registry)
-    if best and best.field_count > 0:
-        ps = best.to_dict()
-        print(f"Probe: {best.strategy} ({best.field_count} fields)", file=sys.stderr)
-    else:
-        # Full diagnostic probe_all on failure
-        best, all_results = probe_all(page, domain=domain, registry_config=registry)
-        if best and best.field_count > 0:
-            ps = best.to_dict()
-            print(f"Probe results ({len(all_results)} strategies):", file=sys.stderr)
-            for r in all_results:
-                if r.field_count > 0 or r is best:
-                    marker = " [BEST]" if r is best else ""
-                    print(f"  {r.strategy}: {r.field_count} fields{marker}", file=sys.stderr)
-        else:
-            print("Probe: all strategies failed", file=sys.stderr)
-
-    fc = ps.get("fieldCount", 0)
-    print(f"Fields: {fc}", file=sys.stderr)
-    for f in ps.get("fields", []):
-        opts = f.get("options", [])
-        extra = f" -> {opts[:5]}" if opts else ""
-        print(f"  [{f.get('tag','?')}] {f.get('label','?')} req={f.get('required')}{extra}", file=sys.stderr)
-
-    btns = ps.get("buttons", [])
-    print(f"Buttons: {len(btns)}", file=sys.stderr)
-    for b in btns:
-        d = " [DISABLED]" if b.get("disabled") else ""
-        print(f"  '{b.get('text','?')}'{d}", file=sys.stderr)
-
-    print(f"Page type: {ps.get('pageType', '?')}", file=sys.stderr)
-    print(f"Dialog: {'yes' if page.evaluate('() => !!document.querySelector(\"[role=dialog], dialog\")') else 'no'}", file=sys.stderr)
-
-    if fc > 0:
-        emit_next("act --fill")
-    else:
-        # Show page text so SLM can identify login walls, blank pages, errors, etc.
-        raw = (page.evaluate("() => document.body.innerText") or "")[:500]
-        if raw.strip():
-            print(f"Page text (first 500 chars):", file=sys.stderr)
-            for line in raw.split("\n")[:10]:
-                if line.strip():
-                    print(f"  {line.strip()[:120]}", file=sys.stderr)
-        else:
-            print("Page text: empty — page may be blank or not loaded.", file=sys.stderr)
-        emit_next("none")
-
 def run(args):
-    global _DEBUG
-    _DEBUG = getattr(args, 'debug', False)
+    global _VERBOSE
+    _VERBOSE = getattr(args, 'verbose', False)
     if args.fill: cmd_fill(args.jid, args.answers, args.candidate)
     elif args.next: cmd_next(args.jid, args.candidate)
     elif args.back: cmd_back(args.jid)
     elif args.submit: cmd_submit(args.jid, args.confirm, args.candidate)
-    elif args.inspect: cmd_inspect(args.jid, args.candidate)
-    else: print("ERROR: specify --fill, --next, --back, --submit, or --inspect", file=sys.stderr)
+    else: print("ERROR: specify --fill, --next, --back, or --submit", file=sys.stderr)
