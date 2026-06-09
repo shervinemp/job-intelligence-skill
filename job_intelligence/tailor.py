@@ -98,7 +98,7 @@ def generate_tailored_docs(job_entry):
 
     prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
 
-    tailor_mode = os.environ.get("JI_TAILOR", "gem")
+    tailor_mode = os.environ.get("JI_TAILOR", "agent")
 
     if tailor_mode == "agent":
         from lib.config import RESULTS_DIR
@@ -108,6 +108,8 @@ def generate_tailored_docs(job_entry):
         with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(prompt)
         print(f"PROMPT: {prompt_path}")
+        print(f"  Read the prompt file, write {app_dir}/script.py, then run:", file=sys.stderr)
+        print(f"  python3 tailor.py done {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
     from lib.config import RESULTS_DIR
@@ -185,7 +187,7 @@ def cmd_craft(count=1):
 
         try:
             success, result = generate_tailored_docs(entry)
-            mode = os.environ.get("JI_TAILOR", "gem")
+            mode = os.environ.get("JI_TAILOR", "agent")
             if success and mode != "agent":
                 advance(
                     entry,
