@@ -838,7 +838,7 @@ def pipeline_status():
     elif state["stages"].get("described", 0) > 0:
         next_step = "tailor.py"
     elif state["stages"].get("tailored", 0) > 0:
-        next_step = "tailor.py ready (review then done)"
+        next_step = "apply.py detect <jid>"
     elif state["stages"].get("failed", 0) > 0:
         next_step = "fetch.py retry or tailor.py retry"
     elif auth_n > 0:
