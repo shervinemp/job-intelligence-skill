@@ -40,5 +40,5 @@ Controls Gemini custom gems via real Chrome session (no API key). Playwright con
 - Chrome profile at `~/.openclaw/chrome-profile/` — persists, won't get wiped
 - Session cookies last ~6 months  
 - Chrome must run with `--remote-debugging-port=9222`
-- Gem ID loaded from `skills/job_intelligence/.env` (`GEM_ID`)
+- Gem ID loaded from `.env` in this directory (`GEM_ID`)
 - Cross-check before delete: captures conversation title after response, verifies match
