@@ -85,6 +85,7 @@ job_intelligence/
 ├── SKILL.md              # Full operations manual
 ├── .env.example          # Config template (copy to .env)
 ├── lib/
+│   ├── config.py        # Centralised JI_HOME path configuration
 │   ├── db.py             # SQLite backend
 │   ├── chrome_manager.py # Shared Chrome CDP lifecycle
 │   ├── auth_walls.py     # Auth wall tracking
@@ -103,6 +104,7 @@ job_intelligence/
     ├── common/
     │   ├── output.py      # Standardized formatter (emit_next/status/type/...)
     │   ├── field_reader.py# Canonical DOM field reader (JS, crash-guarded)
+    │   ├── inspect_lib.py # Reusable page capture + probe analysis
     │   ├── inspector.py   # 8-depth probe cascade + DOM snapshot
     │   ├── answer_matcher.py # Exact match + safe word-overlap fallback
     │   ├── learner.py     # ButtonIntentClassifier only
@@ -128,7 +130,7 @@ gmail-cli gmail search "newer_than:7d" --all -j
 gmail-cli gmail get <threadId>
 ```
 
-### gemini-browser/ — Gemini CDP Automation
+### `skills/gemini-browser/` — Gemini CDP Automation
 
 Navigates a real Chrome instance to Gemini Web, submits prompts to a specific gem, reads the response. Uses Gemini 3.5 Flash + Extended thinking — no Pro API key required.
 
