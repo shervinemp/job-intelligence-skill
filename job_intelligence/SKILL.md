@@ -54,12 +54,8 @@
 |------|---------|-------------|
 | Detect | `python3 apply.py detect <jid>` | Pre-flight: checks DB stage, PDF, classify type (Easy Apply / External / Applied / ATS). Prints PAGE state + NEXT. |
 | Navigate | `python3 apply.py navigate <jid>` | LinkedIn → External ATS: clicks external button, decodes redirect, detects platform, reads form. |
-| Act (fill) | `python3 apply.py act --fill <jid> [--answers '{}']` | Fill ALL fields: text, selects, radios, file inputs. Uses --answers (exact normalized match) → common_answers → profile. Unfollow company checkbox. |
-| Act (next) | `python3 apply.py act --next <jid>` | Click forward button (Submit > Review > Next, rightmost fallback). Never Back/Cancel/Save. Detects disabled before click. |
-| Act (back) | `python3 apply.py act --back <jid>` | Click Back button. |
-| Act (submit) | `python3 apply.py act --submit <jid> [--confirm]` | Click Submit on review page. Dry-run without --confirm. Checks result. |
-| Act (auto) | `python3 apply.py act --auto <jid>` | Full loop: fill → next → fill → ... → submit. Stops on unfilled fields, waits for --answers. |
-| Act (inspect) | `python3 apply.py act --inspect <jid> [--candidate N]` | Full page analysis: fields, buttons, probe results + screenshot. Use when stuck or for visual context. |
+| Act (act) | `python3 apply.py act --fill/--next/--back/--submit <jid> [options]` | Fill, advance, go back, or submit. The main action commands. |
+| Inspect | `python3 apply.py inspect <jid> [--html] [--candidate N]` | Full page analysis: fields, buttons, probes, screenshot (IMG:). Add --html for DOM dump (HTML:). Use when stuck. |
 | Verify | `python3 apply.py verify <jid>` | Check submission: DB stage, LinkedIn "you have applied" text. Updates DB if confirmed. |
 
 ### Apply notes
