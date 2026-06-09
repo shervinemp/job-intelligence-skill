@@ -98,6 +98,18 @@ def generate_tailored_docs(job_entry):
 
     prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
 
+    tailor_mode = os.environ.get("JI_TAILOR", "gem")
+
+    if tailor_mode == "agent":
+        from lib.config import RESULTS_DIR
+        app_dir = os.path.join(RESULTS_DIR, job_id)
+        os.makedirs(app_dir, exist_ok=True)
+        prompt_path = os.path.join(app_dir, "prompt.txt")
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            f.write(prompt)
+        print(f"PROMPT: {prompt_path}")
+        return True, {"text": prompt, "response_path": None, "scripts": []}
+
     from lib.config import RESULTS_DIR
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
@@ -173,7 +185,8 @@ def cmd_craft(count=1):
 
         try:
             success, result = generate_tailored_docs(entry)
-            if success:
+            mode = os.environ.get("JI_TAILOR", "gem")
+            if success and mode != "agent":
                 advance(
                     entry,
                     "tailored",
@@ -378,6 +391,29 @@ def cmd_done(*job_ids):
         if job_id not in state.get("jobs", {}):
             print(f"Job not found: {job_id}", file=sys.stderr)
             continue
+
+        app_dir = os.path.join(RESULTS_DIR, job_id)
+        script_path = os.path.join(app_dir, "script.py")
+
+        # Agent route: run script.py if present
+        if os.path.exists(script_path):
+            try:
+                result = subprocess.run(
+                    [sys.executable, script_path],
+                    capture_output=True, text=True, timeout=120,
+                    cwd=app_dir
+                )
+                if result.returncode != 0:
+                    print(f"SCRIPT_FAILED: {job_id} — {result.stderr.strip()[:200]}", file=sys.stderr)
+                    continue
+                print(f"SCRIPT_OK: {job_id}", file=sys.stderr)
+            except subprocess.TimeoutExpired:
+                print(f"SCRIPT_TIMEOUT: {job_id}", file=sys.stderr)
+                continue
+            except Exception as e:
+                print(f"SCRIPT_ERROR: {job_id} — {e}", file=sys.stderr)
+                continue
+
         advance(state["jobs"][job_id], "applied", applied_at=datetime.now().isoformat())
 
         job_url = state["jobs"][job_id].get("url", "")
