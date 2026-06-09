@@ -78,35 +78,39 @@ job_intelligence/
 ├── tailor.py             # CV tailoring via Gemini
 ├── apply.py              # Unified apply entry point
 ├── report.py             # Pipeline data inspection
+├── gems.json             # Gem alias → ID mapping
 ├── categories.json       # Category → gem mapping
-├── profile.json          # User answers for auto-apply (gitignored)
+├── profile.json          # User profile for auto-fill (gitignored)
 ├── decisions.md          # Screening question decision rules
 ├── SKILL.md              # Full operations manual
+├── .env.example          # Config template (copy to .env)
 ├── lib/
 │   ├── db.py             # SQLite backend
 │   ├── chrome_manager.py # Shared Chrome CDP lifecycle
 │   ├── auth_walls.py     # Auth wall tracking
 │   ├── call_gemini.py    # gemini.js subprocess wrapper
 │   ├── extract_pdf.py    # PDF extraction from Gemini output
+│   ├── extract_structured.py # JSON-LD job posting extraction
+│   ├── report.py         # Pipeline data inspection
 │   └── platforms/        # Site-specific description cleaners
 │       ├── linkedin.py   # LinkedIn: click "…more" + strip chrome
 │       └── jobright.py   # Jobright: section-level DOM extraction
-    ├── apply.py              # Unified entry: detect|navigate|act|verify
-    └── apply/
-        ├── act.py             # Fill, next, back, submit actions
-        ├── detect.py          # Job type classification (pre-flight)
-        ├── navigate.py        # LinkedIn → External ATS navigation
-        ├── verify.py          # Post-submit verification (4 strategies)
-        ├── common/
-        │   ├── output.py      # Standardized formatter (emit_next/status/type/...)
-        │   ├── field_reader.py# Canonical DOM field reader (JS, crash-guarded)
-        │   ├── inspector.py   # 8-depth probe cascade + DOM snapshot
-        │   ├── answer_matcher.py # Exact match + safe word-overlap fallback
-        │   ├── learner.py     # ButtonIntentClassifier only
-        │   ├── page_helpers.py# read_page, scan_actions, page finding, trust
-        │   ├── page_manager.py# Page registry (tag → domain → candidates)
-        │   └── platforms.py   # Platform detection + login wall patterns
-        └── registry/          # Platform YAML configs + notes (greenhouse, lever, workday, ashby)
+└── apply/
+    ├── act.py             # Fill, next, back, submit actions
+    ├── detect.py          # Job type classification (pre-flight)
+    ├── navigate.py        # LinkedIn → External ATS navigation
+    ├── verify.py          # Post-submit verification (4 strategies)
+    ├── common/
+    │   ├── output.py      # Standardized formatter (emit_next/status/type/...)
+    │   ├── field_reader.py# Canonical DOM field reader (JS, crash-guarded)
+    │   ├── inspector.py   # 8-depth probe cascade + DOM snapshot
+    │   ├── answer_matcher.py # Exact match + safe word-overlap fallback
+    │   ├── learner.py     # ButtonIntentClassifier only
+    │   ├── page_helpers.py# read_page, scan_actions, page finding
+    │   ├── page_manager.py# Page registry (tag → domain → candidates)
+    │   ├── platforms.py   # Platform detection + login wall patterns
+    │   └── registry.py    # YAML config resolver (domain → RegistryConfig)
+    └── registry/          # Platform YAML configs + notes (greenhouse, lever, workday, ashby)
 ```
 
 ---

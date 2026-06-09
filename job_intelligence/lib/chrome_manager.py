@@ -10,6 +10,7 @@ can read the same paths.
 import atexit
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -57,9 +58,9 @@ def _release_lock():
 
 _acquire_lock()
 
-CHROME_PATH = os.environ.get(
-    "CHROME_PATH",
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+CHROME_PATH = os.environ.get("CHROME_PATH") or (
+    shutil.which("google-chrome") or shutil.which("chromium-browser")
+    or shutil.which("chrome") or "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
 )
 CHROME_PROFILE = os.path.join(
     os.path.expanduser("~"), ".openclaw", "chrome-profile"
