@@ -20,13 +20,14 @@ Every claim must have a direct evidence line to my attached profile. If it canno
 * **Metric Hallucination:** Inventing percentages, latency improvements, or dollar values not explicitly found in the baseline.
 * **Title Creep:** Elevating participation to leadership (e.g., changing "collaborated" to "led/managed").
 * **Timeline/Credential Conflation:** Merging sequential degrees, projects, or roles into concurrent achievements (e.g., inventing a "dual degree"). State facts exactly as they exist chronologically.
+* **Pandering/lying:** Strictly avoid wild claims or tying logically-unrelated works or unfounded claims to forcefully fit the agenda. This is mainly to show interest.
 
 ## Execution Rules
 
 * **Zero Bloat (One-Page Limit):** The generated PDF text must not overlap or spill onto a second page. Overly dense text looks amateurish.
   * **Summary:** Maximum 3 concise sentences.
   * **Experience/Projects:** Maximum 3-4 bullets per role. Maximum 2 lines per bullet.
-  * **Cover Letter (`COVER_LETTER_TEXT`):** Maximum 3 short paragraphs. No logistics (salary, availability dates).
+  * **Cover Letter (`COVER_LETTER_TEXT`):** Maximum 3 short paragraphs. No logistics (salary, availability dates). 
 * **Impact First:** Structure every bullet to place the primary business outcome or quantifiable metric as close to the leading active verb as possible.
 * **Exact ATS Matching:** Map baseline skills to the JD using the exact string (e.g., if the JD says "Amazon Web Services", do not write "AWS").
 * **Code Integrity:** Inject the cover letter text directly into the `COVER_LETTER_TEXT` variable inside the script. Call `sanitize_text()` on all modified strings. Update the output PDF filenames to include the target Company and Role.
