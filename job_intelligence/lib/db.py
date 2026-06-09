@@ -47,7 +47,8 @@ def _import_legacy_auth_walls():
 
 def _create_v3_tables():
     c = get_conn()
-    c.executescript("""
+    c.executescript(
+        """
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS stages (
             id TEXT PRIMARY KEY, content TEXT NOT NULL,
@@ -133,9 +134,15 @@ def _create_v3_tables():
             completed INTEGER DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
-    """)
+    """
+    )
     # Add columns that might be missing on existing DBs
-    for col in ["response_path TEXT", "notes TEXT NOT NULL DEFAULT ''", "category TEXT", "auth_wall INTEGER NOT NULL DEFAULT 0"]:
+    for col in [
+        "response_path TEXT",
+        "notes TEXT NOT NULL DEFAULT ''",
+        "category TEXT",
+        "auth_wall INTEGER NOT NULL DEFAULT 0",
+    ]:
         try:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -163,6 +170,7 @@ def _migrate_schema():
 # =========================================================================
 # Jobs
 # =========================================================================
+
 
 def _row_to_job(r):
     d = dict(r)
@@ -242,21 +250,45 @@ def save_state(state):
             ),
         )
     conn.commit()
+
+
 def _normalize_url(url):
     """Normalize URL for consistent hashing. Strips ad-tracking params only, preserves routing params."""
     if not url:
         return url
     import urllib.parse
+
     try:
         parsed = urllib.parse.urlparse(url)
-        tracked = {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-                   'fbclid', 'gclid', 'ref', 'source', 'trk', 'lipi', 'email_id',
-                   'eid', 'refid', 'pos', 'ao', 's', 'guid', 'src', 'gh_src'}
+        tracked = {
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_term",
+            "utm_content",
+            "fbclid",
+            "gclid",
+            "ref",
+            "source",
+            "trk",
+            "lipi",
+            "email_id",
+            "eid",
+            "refid",
+            "pos",
+            "ao",
+            "s",
+            "guid",
+            "src",
+            "gh_src",
+        }
         qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
         clean_qs = {k: v for k, v in qs.items() if k.lower() not in tracked}
         clean_query = urllib.parse.urlencode(clean_qs, doseq=True) if clean_qs else ""
         clean_path = parsed.path.rstrip("/") or "/"
-        return urllib.parse.urlunparse((parsed.scheme, parsed.netloc.lower(), clean_path, "", clean_query, ""))
+        return urllib.parse.urlunparse(
+            (parsed.scheme, parsed.netloc.lower(), clean_path, "", clean_query, "")
+        )
     except Exception:
         return url.strip("/")
 
@@ -270,7 +302,10 @@ def add_job(job_data):
         return None
     if conn.execute("SELECT 1 FROM jobs WHERE id=?", (jid,)).fetchone():
         if "notes" in job_data:
-            conn.execute("UPDATE jobs SET notes=?, updated_at=? WHERE id=?", (job_data["notes"], datetime.now().isoformat(), jid))
+            conn.execute(
+                "UPDATE jobs SET notes=?, updated_at=? WHERE id=?",
+                (job_data["notes"], datetime.now().isoformat(), jid),
+            )
             conn.commit()
         return jid
     now = datetime.now().isoformat()
@@ -290,7 +325,9 @@ def add_job(job_data):
             _parse_salary_min(job_data.get("salary", "")),
             _parse_salary_max(job_data.get("salary", "")),
             _parse_salary_currency(job_data.get("salary", "")),
-            _parse_remote_status(job_data.get("location", ""), job_data.get("title", "")),
+            _parse_remote_status(
+                job_data.get("location", ""), job_data.get("title", "")
+            ),
             job_data.get("job_type", "Full-Time"),
             job_data.get("department", ""),
             job_data.get("source", ""),
@@ -325,7 +362,7 @@ def record_failure(jid, reason, detail=""):
     now = datetime.now().isoformat()
     conn.execute(
         "UPDATE jobs SET stage='failed', error=?, updated_at=? WHERE id=?",
-        (f"{reason}: {detail}".strip()[:500], now, jid)
+        (f"{reason}: {detail}".strip()[:500], now, jid),
     )
     conn.commit()
     event_add(jid, "failure", f"Failed: {reason}", description=detail)
@@ -333,9 +370,13 @@ def record_failure(jid, reason, detail=""):
 
 def failure_stats():
     """Aggregate failure reasons across failed jobs."""
-    rows = get_conn().execute(
-        "SELECT error, COUNT(*) as cnt FROM jobs WHERE stage='failed' AND error IS NOT NULL AND error != '' GROUP BY error ORDER BY cnt DESC LIMIT 20"
-    ).fetchall()
+    rows = (
+        get_conn()
+        .execute(
+            "SELECT error, COUNT(*) as cnt FROM jobs WHERE stage='failed' AND error IS NOT NULL AND error != '' GROUP BY error ORDER BY cnt DESC LIMIT 20"
+        )
+        .fetchall()
+    )
     return [dict(r) for r in rows]
 
 
@@ -351,6 +392,7 @@ def advance_job(jid, new_stage, **updates):
     vals.append(jid)
     # Retry on SQLite locked with backoff
     import time as _time
+
     for attempt in range(3):
         try:
             conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
@@ -417,60 +459,72 @@ def job_count():
 
 
 def job_count_by_stage():
-    rows = get_conn().execute(
-        "SELECT stage, COUNT(*) as cnt FROM jobs GROUP BY stage ORDER BY stage"
-    ).fetchall()
+    rows = (
+        get_conn()
+        .execute(
+            "SELECT stage, COUNT(*) as cnt FROM jobs GROUP BY stage ORDER BY stage"
+        )
+        .fetchall()
+    )
     return {r["stage"]: r["cnt"] for r in rows}
 
 
 # ── Salary/remote parsing helpers ──
 
+
 def _parse_salary_min(salary_text):
     if not salary_text:
         return None
-    nums = re.findall(r'\$?([\d,]+)', salary_text.replace('K', '000').replace('k', '000'))
+    nums = re.findall(
+        r"\$?([\d,]+)", salary_text.replace("K", "000").replace("k", "000")
+    )
     if nums:
-        return int(nums[0].replace(',', ''))
+        return int(nums[0].replace(",", ""))
     return None
 
 
 def _parse_salary_max(salary_text):
     if not salary_text:
         return None
-    nums = re.findall(r'\$?([\d,]+)', salary_text.replace('K', '000').replace('k', '000'))
+    nums = re.findall(
+        r"\$?([\d,]+)", salary_text.replace("K", "000").replace("k", "000")
+    )
     if len(nums) >= 2:
-        return int(nums[1].replace(',', ''))
+        return int(nums[1].replace(",", ""))
     if len(nums) == 1:
-        return int(nums[0].replace(',', ''))
+        return int(nums[0].replace(",", ""))
     return None
 
 
 def _parse_salary_currency(salary_text):
     if not salary_text:
-        return 'USD'
-    if 'CA$' in salary_text or 'C$' in salary_text:
-        return 'CAD'
-    return 'USD'
+        return "USD"
+    if "CA$" in salary_text or "C$" in salary_text:
+        return "CAD"
+    return "USD"
 
 
 def _parse_remote_status(location, title):
     text = f"{location} {title}".lower()
-    if 'remote' in text:
-        return 'remote'
-    if 'hybrid' in text:
-        return 'hybrid'
-    if 'onsite' in text or 'on-site' in text:
-        return 'onsite'
-    return ''
+    if "remote" in text:
+        return "remote"
+    if "hybrid" in text:
+        return "hybrid"
+    if "onsite" in text or "on-site" in text:
+        return "onsite"
+    return ""
 
 
 # =========================================================================
 # Stages (raw email content)
 # =========================================================================
 
+
 def stage_save(tid, content):
     c = get_conn()
-    c.execute("INSERT OR REPLACE INTO stages (id, content) VALUES (?,?)", (tid, content))
+    c.execute(
+        "INSERT OR REPLACE INTO stages (id, content) VALUES (?,?)", (tid, content)
+    )
     c.commit()
 
 
@@ -480,7 +534,10 @@ def stage_get(tid):
 
 
 def stage_exists(tid):
-    return get_conn().execute("SELECT 1 FROM stages WHERE id=?", (tid,)).fetchone() is not None
+    return (
+        get_conn().execute("SELECT 1 FROM stages WHERE id=?", (tid,)).fetchone()
+        is not None
+    )
 
 
 def stage_list_all():
@@ -502,6 +559,7 @@ def stage_count():
 # Job Documents
 # =========================================================================
 
+
 def doc_save(doc_type, job_id, filename, content):
     c = get_conn()
     existing = c.execute(
@@ -509,7 +567,9 @@ def doc_save(doc_type, job_id, filename, content):
         (doc_type, job_id, filename),
     ).fetchone()
     if existing:
-        c.execute("UPDATE job_documents SET content=? WHERE id=?", (content, existing["id"]))
+        c.execute(
+            "UPDATE job_documents SET content=? WHERE id=?", (content, existing["id"])
+        )
     else:
         c.execute(
             "INSERT INTO job_documents (doc_type, job_id, filename, content) VALUES (?,?,?,?)",
@@ -519,31 +579,50 @@ def doc_save(doc_type, job_id, filename, content):
 
 
 def doc_get(doc_type, job_id, filename="content"):
-    r = get_conn().execute(
-        "SELECT content FROM job_documents WHERE doc_type=? AND job_id=? AND filename=?",
-        (doc_type, job_id, filename),
-    ).fetchone()
+    r = (
+        get_conn()
+        .execute(
+            "SELECT content FROM job_documents WHERE doc_type=? AND job_id=? AND filename=?",
+            (doc_type, job_id, filename),
+        )
+        .fetchone()
+    )
     return r["content"] if r else None
 
 
 def doc_exists(doc_type, job_id):
-    return get_conn().execute(
-        "SELECT 1 FROM job_documents WHERE doc_type=? AND job_id=? LIMIT 1",
-        (doc_type, job_id),
-    ).fetchone() is not None
+    return (
+        get_conn()
+        .execute(
+            "SELECT 1 FROM job_documents WHERE doc_type=? AND job_id=? LIMIT 1",
+            (doc_type, job_id),
+        )
+        .fetchone()
+        is not None
+    )
 
 
 def doc_list_ids(doc_type):
-    return {r["job_id"] for r in get_conn().execute(
-        "SELECT DISTINCT job_id FROM job_documents WHERE doc_type=?", (doc_type,)
-    ).fetchall()}
+    return {
+        r["job_id"]
+        for r in get_conn()
+        .execute(
+            "SELECT DISTINCT job_id FROM job_documents WHERE doc_type=?", (doc_type,)
+        )
+        .fetchall()
+    }
 
 
 def doc_list_files(job_id, doc_type="application"):
-    return [dict(r) for r in get_conn().execute(
-        "SELECT filename, created_at FROM job_documents WHERE job_id=? AND doc_type=? ORDER BY filename",
-        (job_id, doc_type),
-    ).fetchall()]
+    return [
+        dict(r)
+        for r in get_conn()
+        .execute(
+            "SELECT filename, created_at FROM job_documents WHERE job_id=? AND doc_type=? ORDER BY filename",
+            (job_id, doc_type),
+        )
+        .fetchall()
+    ]
 
 
 def doc_delete_all(job_id):
@@ -555,26 +634,34 @@ def doc_delete_all(job_id):
 def desc_save(jid, content):
     doc_save("description", jid, "content", content)
 
+
 def desc_get(jid):
     return doc_get("description", jid, "content")
+
 
 def desc_exists(jid):
     return doc_exists("description", jid)
 
+
 def desc_list_ids():
     return doc_list_ids("description")
+
 
 def app_save(jid, filename, content):
     doc_save("application", jid, filename, content)
 
+
 def app_get(jid, filename):
     return doc_get("application", jid, filename)
+
 
 def app_list(jid):
     return doc_list_files(jid, "application")
 
+
 def app_list_job_ids():
     return doc_list_ids("application")
+
 
 def app_delete_all(jid):
     doc_delete_all(jid)
@@ -583,6 +670,7 @@ def app_delete_all(jid):
 # =========================================================================
 # Companies
 # =========================================================================
+
 
 def company_upsert(name, **kw):
     c = get_conn()
@@ -603,9 +691,19 @@ def company_upsert(name, **kw):
             """INSERT INTO companies (id, name, domain, description, size, industry,
                culture_notes, rating, source_url, created_at, updated_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (cid, name, kw.get("domain", ""), kw.get("description", ""),
-             kw.get("size", ""), kw.get("industry", ""), kw.get("culture_notes", ""),
-             kw.get("rating"), kw.get("source_url", ""), now, now),
+            (
+                cid,
+                name,
+                kw.get("domain", ""),
+                kw.get("description", ""),
+                kw.get("size", ""),
+                kw.get("industry", ""),
+                kw.get("culture_notes", ""),
+                kw.get("rating"),
+                kw.get("source_url", ""),
+                now,
+                now,
+            ),
         )
     c.commit()
     return cid
@@ -613,15 +711,21 @@ def company_upsert(name, **kw):
 
 def company_get(name_or_id):
     c = get_conn()
-    r = c.execute("SELECT * FROM companies WHERE id=? OR name=?", (name_or_id, name_or_id)).fetchone()
+    r = c.execute(
+        "SELECT * FROM companies WHERE id=? OR name=?", (name_or_id, name_or_id)
+    ).fetchone()
     return dict(r) if r else None
 
 
 def company_search(query, limit=20):
-    rows = get_conn().execute(
-        "SELECT * FROM companies WHERE name LIKE ? OR domain LIKE ? OR industry LIKE ? LIMIT ?",
-        (f"%{query}%", f"%{query}%", f"%{query}%", limit),
-    ).fetchall()
+    rows = (
+        get_conn()
+        .execute(
+            "SELECT * FROM companies WHERE name LIKE ? OR domain LIKE ? OR industry LIKE ? LIMIT ?",
+            (f"%{query}%", f"%{query}%", f"%{query}%", limit),
+        )
+        .fetchall()
+    )
     return [dict(r) for r in rows]
 
 
@@ -638,14 +742,22 @@ def company_list_jobs(company_name):
 # Contacts
 # =========================================================================
 
+
 def contact_add(job_id, name, **kw):
     c = get_conn()
     c.execute(
         """INSERT INTO contacts (job_id, company_id, name, role, email, linkedin_url, notes, reached_out)
            VALUES (?,?,?,?,?,?,?,?)""",
-        (job_id, kw.get("company_id"), name, kw.get("role", ""),
-         kw.get("email", ""), kw.get("linkedin_url", ""),
-         kw.get("notes", ""), 1 if kw.get("reached_out") else 0),
+        (
+            job_id,
+            kw.get("company_id"),
+            name,
+            kw.get("role", ""),
+            kw.get("email", ""),
+            kw.get("linkedin_url", ""),
+            kw.get("notes", ""),
+            1 if kw.get("reached_out") else 0,
+        ),
     )
     c.commit()
     return c.lastrowid
@@ -682,13 +794,20 @@ def contact_update(cid, **kw):
 # Events
 # =========================================================================
 
+
 def event_add(job_id, event_type, title, **kw):
     c = get_conn()
     c.execute(
         """INSERT INTO events (job_id, event_type, title, description, event_at, completed)
            VALUES (?,?,?,?,?,?)""",
-        (job_id, event_type, title, kw.get("description", ""),
-         kw.get("event_at"), 1 if kw.get("completed") else 0),
+        (
+            job_id,
+            event_type,
+            title,
+            kw.get("description", ""),
+            kw.get("event_at"),
+            1 if kw.get("completed") else 0,
+        ),
     )
     c.commit()
     return c.lastrowid
@@ -698,7 +817,8 @@ def event_list(job_id=None, upcoming=False):
     c = get_conn()
     if job_id:
         rows = c.execute(
-            "SELECT * FROM events WHERE job_id=? ORDER BY event_at, created_at", (job_id,)
+            "SELECT * FROM events WHERE job_id=? ORDER BY event_at, created_at",
+            (job_id,),
         ).fetchall()
     elif upcoming:
         rows = c.execute(
@@ -724,6 +844,7 @@ def event_complete(eid):
 # Settings
 # =========================================================================
 
+
 def setting_get(key, default=None):
     r = get_conn().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     if r:
@@ -746,6 +867,7 @@ def setting_set(key, value):
 # Search Threads
 # =========================================================================
 
+
 def search_threads_save(threads):
     c = get_conn()
     for t in threads:
@@ -758,11 +880,18 @@ def search_threads_save(threads):
 
 def search_threads_pending():
     seen = set(setting_get("staged_ids", [])) | set(setting_get("skipped_ids", []))
-    rows = get_conn().execute(
-        "SELECT thread_id, subject, date, from_addr FROM search_threads ORDER BY date"
-    ).fetchall()
-    return [(r["thread_id"], r["subject"], r["date"], r["from_addr"]) for r in rows
-            if r["thread_id"] not in seen]
+    rows = (
+        get_conn()
+        .execute(
+            "SELECT thread_id, subject, date, from_addr FROM search_threads ORDER BY date"
+        )
+        .fetchall()
+    )
+    return [
+        (r["thread_id"], r["subject"], r["date"], r["from_addr"])
+        for r in rows
+        if r["thread_id"] not in seen
+    ]
 
 
 def search_threads_clear():
@@ -771,10 +900,10 @@ def search_threads_clear():
     c.commit()
 
 
-
 # =========================================================================
 # State wrappers (merged from lib.state for SLM simplicity)
 # =========================================================================
+
 
 def load():
     return load_state()
@@ -823,6 +952,7 @@ def get_failed(state):
 
 def pipeline_status():
     from .auth_walls import count as auth_count, domains as auth_domains
+
     state = load_state()
     staged_total = stage_count()
     extracted_ids = setting_get("extracted_ids", [])
