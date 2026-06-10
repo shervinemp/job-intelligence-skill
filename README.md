@@ -82,7 +82,7 @@ job_intelligence/
 ├── gems.json             # Gem alias → ID mapping
 ├── categories.json       # Category → gem mapping
 ├── profile.json          # User profile for auto-fill (gitignored)
-├── decisions.md          # Screening question decision rules
+├── decisions.md          # User preferences — edit for your situation
 ├── SKILL.md              # Full operations manual
 ├── .env.example          # Config template (copy to .env)
 ├── lib/
@@ -248,7 +248,7 @@ All pipeline config in `job_intelligence/`. Copy `.env.example` → `.env`.
 | `categories.json` | Category → gem alias mapping (e.g. `tech` → `optimizer_tech`) |
 | `gems.json` | Gem alias → raw Gemini ID (e.g. `optimizer_tech` → `4203d06f5d81`) |
 | `profile.json` | User profile for auto-apply. Must be filled in before first apply. Not tracked in git |
-| `decisions.md` | Screening question decision rules consumed by `tailor.py` |
+| `decisions.md` | Screening question decision rules — edit to match your preferences (relocation, sponsorship, experience, etc.) |
 
 ---
 
