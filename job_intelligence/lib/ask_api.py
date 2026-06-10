@@ -2,7 +2,7 @@
 """lib/ask_api.py — Send image + prompt to an OpenAI-compatible LLM endpoint.
 
 Usage:
-    python3 -m lib.ask_api --img screenshot.jpg --prompt "Describe this page"
+    python3 lib/ask_api.py --img screenshot.jpg --prompt "Describe this page"
 
 On success prints the model reply. On failure prints the error."""
 

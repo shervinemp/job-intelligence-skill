@@ -47,8 +47,6 @@ def capture(page, jid, prefix=""):
 
     return img
 
-    return img
-
 
 def probe_state(page):
     """Apply-specific: run probes, dump fields/buttons/type. Returns (fieldCount, fields, buttons, pageType)."""
