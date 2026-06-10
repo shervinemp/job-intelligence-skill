@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""ask_image.py — Send image + prompt to an OpenAI-compatible LLM endpoint.
+"""lib/ask_api.py — Send image + prompt to an OpenAI-compatible LLM endpoint.
 
 Usage:
-    python3 ask_image.py --img screenshot.jpg --prompt "Describe this page"
+    python3 -m lib.ask_api --img screenshot.jpg --prompt "Describe this page"
 
 On success prints the model reply. On failure prints the error."""
 
 import argparse, base64, json, os, sys, time, urllib.request, urllib.error
 
-_PING_CACHE = os.path.join(os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), ".ask_image_ping")
-
-_PING_CACHE = os.path.join(os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), ".ask_image_ping")
+_PING_CACHE = os.path.join(os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), ".ask_api_ping")
 
 
 def _load_config():
@@ -96,7 +94,7 @@ def ask(image_path, prompt, temperature=0.3, max_tokens=2048):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog="ask_image.py",
+        prog="lib/ask_api.py",
         description="Send image + prompt to an OpenAI-compatible LLM endpoint.",
     )
     parser.add_argument("--img", help="Path to image file (optional — text-only if omitted)")
