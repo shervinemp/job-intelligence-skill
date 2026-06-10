@@ -36,6 +36,7 @@
 | `tailor.py reset --from failed,skipped` | Reset by stage |
 | `tailor.py ready [<jid>]` | Open results folder |
 | `extract.py reset` | Wipe DB, fresh start |
+| `ask_image.py --img <path> --prompt <text>` | Query vision model (screenshots) |
 | `status` | Pipeline state + next step |
 
 ## Tailoring
@@ -141,6 +142,12 @@ Attach context via `extract.py submit '{"url":"...","notes":"..."}'`.
 | Chrome crash | Auto-restarted — do nothing |
 | DB crash | `extract.py reset` |
 | Auth wall stuck | `enrich.py open` + `--refresh` |
+
+## Ask local model
+
+Set `LLAMA_VISION_URL` in `.env` to an OpenAI-compatible endpoint (e.g. llama.cpp).
+Use via CLI when I need extra analysis:
+- `ask_image.py --img <path> --prompt "<question>"` — sends image + prompt, prints reply
 
 ## Technical notes
 
