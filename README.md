@@ -83,6 +83,7 @@ job_intelligence/
 ├── categories.json       # Category → gem mapping
 ├── profile.json          # User profile for auto-fill (gitignored)
 ├── decisions.md          # User preferences — edit for your situation
+├── tailor_prompt.md      # Agent route prompt template — edit for custom instructions
 ├── SKILL.md              # Full operations manual
 ├── .env.example          # Config template (copy to .env)
 ├── lib/
@@ -248,7 +249,6 @@ All pipeline config in `job_intelligence/`. Copy `.env.example` → `.env`.
 | `categories.json` | Category → gem alias mapping (e.g. `tech` → `optimizer_tech`) |
 | `gems.json` | Gem alias → raw Gemini ID (e.g. `optimizer_tech` → `4203d06f5d81`) |
 | `profile.json` | User profile for auto-apply. Must be filled in before first apply. Not tracked in git |
-| `decisions.md` | Screening question decision rules — edit to match your preferences (relocation, sponsorship, experience, etc.) |
 
 ---
 
@@ -313,6 +313,8 @@ Edit `profile.json`: name, contact info, work history, common answers. Required 
 | `profile.json` | `job_intelligence/` | Name, email, phone, work history, education, skills, `resume_path` (path to PDF), `common_answers` (form fill answers) | Yes |
 | `client_secret.json` | `ji-skill/` root | OAuth 2.0 Desktop credentials from Google Cloud Console (Gmail API) | Yes, for email staging |
 | `gems.json` | `job_intelligence/` | Gemini gem alias → raw ID mapping. Created by `call_gemini.py --refresh` | Only if using `JI_TAILOR=gem` |
+| `decisions.md` | `job_intelligence/` | Screening question decision rules — edit to match your preferences | No |
+| `tailor_prompt.md` | `job_intelligence/` | Agent route prompt template — customize CV generation instructions | No |
 | `.env` vars | `LLM_API_URL`, `LLM_API_MODEL` | OpenAI-compatible endpoint for `lib/ask_api.py` (llama.cpp, etc.) | No |
 
 ### Quick Start
