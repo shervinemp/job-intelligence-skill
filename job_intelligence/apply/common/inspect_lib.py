@@ -2,7 +2,7 @@
 Save screenshot + dump HTML (universal). Run probes + analyze fields (apply-specific).
 All output to stdout for SLM consumption. Filenames overwrite on re-run.
 """
-import json, os
+import json, os, sys
 from urllib.parse import urlparse
 
 from lib.config import JI_HOME
@@ -28,11 +28,11 @@ def _path(jid, ext, prefix=""):
 def capture(page, jid, prefix=""):
     """Universal: save screenshot (JPEG) + HTML dump. Outputs IMG: and HTML: paths.
     Optional prefix (e.g. 'fetch') separates files per pipeline stage. Overwrites on re-run.
-    Safe to call from any pipeline stage (fetch, tailor, apply)."""
-    png = _path(jid, "jpg", prefix)
+    Safe to call from any pipeline stage (fetch, tailor, apply). Returns img path."""
+    img = _path(jid, "jpg", prefix)
     try:
-        page.screenshot(path=png, type="jpeg", quality=80)
-        print(f"IMG: {png}")
+        page.screenshot(path=img, type="jpeg", quality=80)
+        print(f"IMG: {img}")
     except Exception as e:
         print(f"IMG_FAILED: {e}", file=sys.stderr)
 
@@ -44,6 +44,10 @@ def capture(page, jid, prefix=""):
         print(f"HTML: {html}")
     except Exception as e:
         print(f"HTML_FAILED: {e}", file=sys.stderr)
+
+    return img
+
+    return img
 
 
 def probe_state(page):

@@ -313,7 +313,7 @@ Edit `profile.json`: name, contact info, work history, common answers. Required 
 | `profile.json` | `job_intelligence/` | Name, email, phone, work history, education, skills, `resume_path` (path to PDF), `common_answers` (form fill answers) | Yes |
 | `client_secret.json` | `ji-skill/` root | OAuth 2.0 Desktop credentials from Google Cloud Console (Gmail API) | Yes, for email staging |
 | `gems.json` | `job_intelligence/` | Gemini gem alias → raw ID mapping. Created by `call_gemini.py --refresh` | Only if using `JI_TAILOR=gem` |
-| `.env` vars | `LLAMA_VISION_URL`, `LLAMA_VISION_MODEL` | OpenAI-compatible endpoint for `ask_image.py` (llama.cpp, etc.) | No |
+| `.env` vars | `LLM_API_URL`, `LLM_API_MODEL` | OpenAI-compatible endpoint for `lib/ask_api.py` (llama.cpp, etc.) | No |
 
 ### Quick Start
 

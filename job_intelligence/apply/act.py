@@ -1398,6 +1398,7 @@ def cmd_inspect(jid, candidate=None):
         print("  Run detect first.", file=sys.stderr); return
 
     from apply.common.inspect_lib import capture, probe_state
+    from lib.ask_api import available as _vision_available
     b, ctx = connect()
     pm = PageManager(ctx, jid)
     pm.close_stale(target_url=state.get("external_url", ""))
@@ -1428,7 +1429,9 @@ def cmd_inspect(jid, candidate=None):
     print(f"Platform: {state.get('platform', '?')}", file=sys.stderr)
     print(f"Filled: {state.get('filled', 0)} fields", file=sys.stderr)
 
-    capture(page, jid)
+    img_path = capture(page, jid)
+    if _vision_available():
+        print(f"  ask: lib/ask_api.py --img <path> --prompt '?'", file=sys.stderr)
     fc, _, _, _ = probe_state(page)
 
     emit_next("act --fill" if fc > 0 else "none")
