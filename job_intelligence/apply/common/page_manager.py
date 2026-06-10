@@ -1,9 +1,13 @@
 """Page registry — DOM tagging + URL tracking.
-Finds the right page for a job, detects what happened after actions."""
+Finds the right page for a job, detects what happened after actions.
+Uses persistent DOM attribute (data-opencode-jid) for cross-process page identity."""
+
 import json, os, time
 from urllib.parse import urlparse
 
 from lib.config import REGISTRY_PATH
+from apply.common.page_helpers import tag_page, read_page_tag
+
 
 def _load():
     try:
@@ -12,6 +16,7 @@ def _load():
     except:
         return {}
 
+
 def _save(r):
     os.makedirs(os.path.dirname(REGISTRY_PATH), exist_ok=True)
     tmp = REGISTRY_PATH + ".tmp"
@@ -19,13 +24,13 @@ def _save(r):
         json.dump(r, f, indent=2)
     os.replace(tmp, REGISTRY_PATH)
 
-from apply.common.page_helpers import _PAGE_JID_MAP as _page_map
 
 def _fingerprint(page):
     try:
         return (page.evaluate("() => (document.body.innerText || '').trim().slice(0, 100)") or "")
     except:
         return ""
+
 
 class PageManager:
     def __init__(self, ctx, jid):
@@ -36,10 +41,9 @@ class PageManager:
             self.reg[jid] = {"urls": [], "fp": ""}
 
     def register(self, page):
-        """Track the page and record its URL + fingerprint."""
         fp = _fingerprint(page)
         url = page.url
-        _page_map[id(page)] = self.jid
+        tag_page(page, self.jid)
         entry = self.reg.setdefault(self.jid, {"urls": [], "fp": ""})
         if not entry["urls"] or entry["urls"][-1] != url:
             entry["urls"].append(url)
@@ -49,8 +53,7 @@ class PageManager:
         _save(self.reg)
 
     def find(self, fallback_url=""):
-        """Find page for this JID. Returns (page, candidates, confidence).
-        confidence: 'tagged', 'domain', 'multiple', or None."""
+        from urllib.parse import urlparse
         fallback_domain = urlparse(fallback_url).netloc.lower() if fallback_url else ""
 
         tagged = None
@@ -61,7 +64,7 @@ class PageManager:
             if "about:blank" in url or "chrome-error" in url:
                 continue
 
-            if _page_map.get(id(p)) == self.jid:
+            if read_page_tag(p) == self.jid:
                 tagged = p
                 break
 
@@ -81,13 +84,10 @@ class PageManager:
             return domain_matches[0], [], "domain"
 
         if domain_matches:
-            # Multiple candidates — pick the one with the longest matching URL path
             if fallback_url:
-                from urllib.parse import urlparse
                 fb_path = urlparse(fallback_url).path.rstrip("/")
                 def path_score(p):
                     pp = urlparse(p.url).path.rstrip("/")
-                    # Count matching path segments from the start
                     score = 0
                     for a, b in zip(fb_path.split("/"), pp.split("/")):
                         if a == b:
@@ -103,27 +103,27 @@ class PageManager:
         return None, [], None
 
     def snapshot(self, page):
-        return {"url": page.url, "fp": _fingerprint(page), "tag": _page_map.get(id(page), "")}
+        return {"url": page.url, "fp": _fingerprint(page), "tag": read_page_tag(page)}
 
     def diff(self, before, after=None, page=None):
         if after is None and page is not None:
-            after = {"url": page.url, "fp": _fingerprint(page), "tag": _page_map.get(id(page), "")}
+            after = {"url": page.url, "fp": _fingerprint(page), "tag": read_page_tag(page)}
         elif after is None:
             return {}
         changes = []
         if before["url"] != after["url"]:
-            changes.append(f"URL: {before['url'][:60]} → {after['url'][:60]}")
+            changes.append(f"URL: {before['url'][:60]} -> {after['url'][:60]}")
         if before["fp"] != after["fp"] and before["url"] == after["url"]:
             changes.append("Content changed (SPA update or reload)")
         if before["tag"] != after["tag"]:
-            changes.append(f"Tag: {before['tag']} → {after['tag']}")
+            changes.append(f"Tag: {before['tag']} -> {after['tag']}")
         if after.get("tag") == self.jid and before.get("tag") != self.jid:
             changes.append("Page newly tagged (was untagged or different job)")
         return {"changes": changes, "after_url": after["url"][:80], "after_fp": after["fp"][:50]}
 
     def find_new_tab(self, url_pattern=None):
         for p in self.ctx.pages:
-            if not _page_map.get(id(p)):
+            if not read_page_tag(p):
                 url = p.url.lower()
                 if "about:blank" in url or "chrome-error" in url:
                     continue
@@ -133,15 +133,27 @@ class PageManager:
 
     def cleanup_all(self):
         for p in self.ctx.pages:
-            if not _page_map.get(id(p)):
+            if not read_page_tag(p):
                 url = p.url.lower()
                 if "about:blank" in url or "chrome-error" in url or "newtab" in url:
                     try: p.close()
                     except: pass
 
     def close_others(self, keep_page):
-        keep_url = keep_page.url.rstrip("/")
+        keep = read_page_tag(keep_page)
         for p in self.ctx.pages:
-            if p != keep_page and _page_map.get(id(p)) == self.jid:
+            if p != keep_page and read_page_tag(p) == keep:
+                try: p.close()
+                except: pass
+
+    def close_stale(self, target_url=""):
+        for p in self.ctx.pages:
+            url = p.url.lower()
+            if "about:blank" in url or "chrome-error" in url or "newtab" in url:
+                try: p.close()
+                except: pass
+                continue
+            jid = read_page_tag(p)
+            if jid and jid != self.jid:
                 try: p.close()
                 except: pass

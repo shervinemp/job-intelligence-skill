@@ -4,6 +4,7 @@
 - **Sequential:** One session/agent. No parallelism.
 - **Red Lines:** No private data exfiltration. No destructive commands (trash > rm). Ask when in doubt.
 - **Safe:** read files, search web/calendar, workspace. **Ask First:** emails/tweets/posts, anything leaving machine.
+- **No assumptions:** use profile/common_answers data before deciding. If data doesn't cover it, ask.
 
 ## Session & Memory
 - Startup: runtime context (AGENTS.md, SOUL.md, USER.md). Don't reread.

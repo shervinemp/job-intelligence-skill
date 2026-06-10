@@ -10,10 +10,10 @@ Usage:
   enrich.py retry-skipped       Reset all skipped jobs back to extracted
   enrich.py status
 """
-import html, os, subprocess, sys, time, re
+import html, json, os, subprocess, sys, time, re
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from lib.db import load, advance, pipeline_status, get_conn
-from lib.db import desc_save, desc_exists
+from lib.db import desc_save, desc_exists, desc_get
 from lib.chrome_manager import CHROME_PROFILE as BROWSER_PROFILE, connect
 from lib import auth_walls
 from lib.platforms import fetch_description
@@ -95,8 +95,7 @@ def _retry_fetch(url, use_playwright):
     import random, time
     for attempt in range(2):
         if use_playwright:
-            ok, text, page_title = _pw_fetch(url)
-            raw_html = None
+            ok, text, page_title, raw_html = _pw_fetch(url)
         else:
             ok, text, page_title, raw_html = _curl_fetch(url)
         if ok:

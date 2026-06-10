@@ -13,6 +13,8 @@
 | `tailor.py [--count N]` | done/skip/redo. See tailoring section |
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
 
+> Use default batch sizes: `enrich.py --count 3`, `tailor.py --count 1`. Larger counts confuse state tracking.
+
 ## Commands
 
 | Command | Action |
