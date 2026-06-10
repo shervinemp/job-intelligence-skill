@@ -305,6 +305,15 @@ gmail-cli auth add you@gmail.com
 
 Edit `profile.json`: name, contact info, work history, common answers. Required before first apply.
 
+### Configuration files
+
+| File | Location | What goes in it | Required? |
+|------|----------|-----------------|-----------|
+| `.env` | `job_intelligence/` | `JI_HOME` (default `~/.ji/`), `JI_TAILOR` (`"agent"` or `"gem"`), `GMAIL_SEARCH_QUERY` | No (sensible defaults) |
+| `profile.json` | `job_intelligence/` | Name, email, phone, work history, education, skills, `resume_path` (path to PDF), `common_answers` (form fill answers) | Yes |
+| `client_secret.json` | `ji-skill/` root | OAuth 2.0 Desktop credentials from Google Cloud Console (Gmail API) | Yes, for email staging |
+| `gems.json` | `job_intelligence/` | Gemini gem alias → raw ID mapping. Created by `call_gemini.py --refresh` | Only if using `JI_TAILOR=gem` |
+
 ### Quick Start
 
 ```powershell

@@ -1,5 +1,5 @@
 {
-  "resume_path": "",
+  "resume_path": "C:\\\\Users\\\\sherv\\\\Downloads\\\\Shervin_Naseri_Resume.pdf",
   "first_name": "Shervin",
   "last_name": "Naseri",
   "email": "shervin.naseri@gmail.com",
@@ -30,7 +30,7 @@
     "portfolio_url": "https://shervinemp.github.io/portfolio",
     "github_url": "https://github.com/shervinemp",
     "website_url": "https://shervinemp.github.io/portfolio",
-    "work_authorization": "Yes",
+    "work_authorization": "No, I do not require work permit sponsorship to work in Canada",
     "years_of_experience": "5",
     "gender": "Prefer not to say",
     "veteran_status": "I am not a protected veteran",
@@ -50,6 +50,15 @@
     "full_name": "Shervin Naseri",
     "linkedin_profile_link": "https://www.linkedin.com/in/shervin-naseri-b3a016b0",
     "will_require_sponsorship": "Yes",
-    "sponsorship": "Yes"
+    "sponsorship": "Yes",
+    "yes_consent_receiving_text": "No - I do not consent to receiving text messages",
+    "office_preference": "Yes, in the Toronto office",
+    "communicationconsent": "notGiven",
+    "visa_sponsorship": "No, I do not require work permit sponsorship to work in Canada",
+    "office": "Yes, in the Toronto office",
+    "yes": "No - I do not consent to receiving text messages",
+    "no": "No, I do not require work permit sponsorship to work in Canada",
+    "yes_the_san_francisco": "Yes, in the Toronto office",
+    "not_require_visa_sponsorship": "Yes, I require work permit sponsorship to work in Canada"
   }
 }

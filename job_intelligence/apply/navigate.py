@@ -106,6 +106,21 @@ def run(jid):
             except:
                 pass
 
+    # Close LinkedIn page
+    try:
+        p.close()
+    except:
+        pass
+
+    # Close existing page on same external URL (avoid duplicate tabs)
+    for pg in ctx.pages:
+        if pg.url.rstrip("/") == external_url.rstrip("/"):
+            try:
+                pg.close()
+            except:
+                pass
+            break
+
     # Navigate to external URL and read form
     ep = ctx.new_page()
     ep.goto(external_url, wait_until="domcontentloaded", timeout=30000)

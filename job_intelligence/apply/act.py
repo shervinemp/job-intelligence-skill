@@ -29,6 +29,7 @@ from apply.common.output import (
 )
 from apply.common.page_manager import PageManager
 from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
+from apply.common.answer_matcher import match_answer
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 
@@ -726,28 +727,37 @@ def cmd_fill(jid, answers_json=None, candidate=None):
         return
     b, ctx = connect()
     pm = PageManager(ctx, jid)
+    pm.close_stale(target_url=state.get("external_url", ""))
     ext = state.get("external_url", "")
     page, _, _ = pm.find(fallback_url=ext)
     if not page:
-        if ctx.pages:
-            print("NO_MATCH: no page matches. Open pages:", file=sys.stderr)
-            for i, p in enumerate(ctx.pages):
-                print(f"  [{i}] {p.url[:100]}", file=sys.stderr)
-            if ext:
-                print(f"WANTED: {ext[:100]}", file=sys.stderr)
-            print(
-                "TIP: open the job URL in Chrome to check, then retry", file=sys.stderr
-            )
-            emit_next("act --inspect")
-            return
-        elif ext:
-            page = ctx.new_page()
-            page.goto(ext, wait_until="domcontentloaded", timeout=30000)
-            time.sleep(5)
-            pm.register(page)
-        else:
-            print("ERROR: no page found and no external URL", file=sys.stderr)
-            return
+        # Reuse existing page matching external URL
+        if ext:
+            for pg in ctx.pages:
+                if ext.rstrip("/") in pg.url.rstrip("/") or pg.url.rstrip("/") in ext.rstrip("/"):
+                    page = pg
+                    pm.register(page)
+                    break
+        if not page:
+            if ctx.pages:
+                print("NO_MATCH: no page matches. Open pages:", file=sys.stderr)
+                for i, p in enumerate(ctx.pages):
+                    print(f"  [{i}] {p.url[:100]}", file=sys.stderr)
+                if ext:
+                    print(f"WANTED: {ext[:100]}", file=sys.stderr)
+                print(
+                    "TIP: open the job URL in Chrome to check, then retry", file=sys.stderr
+                )
+                emit_next("act --inspect")
+                return
+            elif ext:
+                page = ctx.new_page()
+                page.goto(ext, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(5)
+                pm.register(page)
+            else:
+                print("ERROR: no page found and no external URL", file=sys.stderr)
+                return
     if handle_captcha(page, state):
         emit_next("retry after solving CAPTCHA")
         return
@@ -1050,6 +1060,7 @@ def cmd_next(jid, candidate=None):
         return
     b, ctx = connect()
     pm = PageManager(ctx, jid)
+    pm.close_stale(target_url=state.get("external_url", ""))
     ext = state.get("external_url", "")
     page, _, _ = pm.find(fallback_url=ext)
     if not page:
@@ -1142,7 +1153,9 @@ def cmd_back(jid):
     if _check_already_submitted(state, jid):
         return
     b, ctx = connect()
-    page = PageManager(ctx, jid).find(fallback_url=state.get("external_url", ""))[0]
+    pm = PageManager(ctx, jid)
+    pm.close_stale(target_url=state.get("external_url", ""))
+    page = pm.find(fallback_url=state.get("external_url", ""))[0]
     if not page:
         print("ERROR: no page found", file=sys.stderr)
         return
@@ -1170,6 +1183,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
 
     b, ctx = connect()
     pm = PageManager(ctx, jid)
+    pm.close_stale(target_url=state.get("external_url", ""))
     ext = state.get("external_url", "")
     page, _, _ = pm.find(fallback_url=ext)
     if not page:
@@ -1386,6 +1400,7 @@ def cmd_inspect(jid, candidate=None):
     from apply.common.inspect_lib import capture, probe_state
     b, ctx = connect()
     pm = PageManager(ctx, jid)
+    pm.close_stale(target_url=state.get("external_url", ""))
     ext = state.get("external_url", "")
     page, score, candidates = pm.find(fallback_url=ext)
 

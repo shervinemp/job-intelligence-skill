@@ -125,7 +125,9 @@ def run(jid):
         time.sleep(2)
         from apply.common.page_manager import PageManager
 
-        PageManager(ctx, jid).register(p)
+        pm = PageManager(ctx, jid)
+        pm.close_stale(target_url=url)
+        pm.register(p)
         buttons = p.evaluate(
             """() => {
             const all = document.querySelectorAll('button, a');

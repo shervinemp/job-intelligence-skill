@@ -1,5 +1,5 @@
 """apply/common/page_helpers.py — Shared page reading, state persistence, page finding."""
-import json, os, random, re, time
+import json, os, random, re, sys, time
 import webbrowser
 
 from lib.config import STATE_PATH
@@ -18,13 +18,29 @@ def is_aggregator(domain):
     return False
 
 
-_PAGE_JID_MAP = {}  # page object id -> jid mapping (no DOM mutation)
+_PAGE_JID_MAP = {}  # page object id -> jid mapping (in-memory cache, not persistent)
+_DOM_ATTR = "data-opencode-jid"
+
+
+def tag_page(page, jid):
+    """Persistently tag a page with a JID via DOM attribute (survives process restarts)."""
+    try:
+        page.evaluate(f"document.documentElement.setAttribute('{_DOM_ATTR}', {json.dumps(jid)})")
+    except:
+        pass
+    _PAGE_JID_MAP[id(page)] = jid  # cache for current process
+
+
+def read_page_tag(page):
+    """Read persistent JID tag from DOM."""
+    try:
+        return page.evaluate(f"document.documentElement.getAttribute('{_DOM_ATTR}') or ''")
+    except:
+        return ""
 
 _CAPTCHA_SIGNALS = [
-    "recaptcha", "hcaptcha", "cf-turnstile", "turnstile",
-    "cloudflare", "challenge-platform", "g-recaptcha",
-    "data-sitekey", "data-callback",
-    "cf-browser-verification", "challenge-running", "challenge-stage",
+    "challenge-platform", "cf-browser-verification",
+    "challenge-running", "challenge-stage",
 ]
 
 
@@ -38,15 +54,9 @@ def check_captcha(page):
             for (const kw of keywords) {{ if (text.includes(kw)) return true; }}
             const html = (document.documentElement.innerHTML || '').toLowerCase();
             for (const sig of signals) {{ if (html.includes(sig)) return true; }}
-            const iframes = document.querySelectorAll('iframe');
-            for (const f of iframes) {{
-                const src = (f.src || '').toLowerCase();
-                if (src.includes('recaptcha') || src.includes('hcaptcha') ||
-                    src.includes('turnstile') || src.includes('challenge')) return true;
-            }}
             return false;
         }})""", [_CAPTCHA_SIGNALS,
-               ["verify you are human", "security check", "captcha",
+               ["verify you are human", "security check",
                 "i'm not a robot", "complete the security check"]])
         return result
     except Exception:
@@ -103,11 +113,14 @@ def read_page(p):
     return result
 
 def find_page(ctx, state):
-    """Find the best matching page by JID mapping, then URL score."""
+    """Find the best matching page by JID mapping (DOM tag + cache), then URL score."""
     jid = state.get("jid", "")
     ext = state.get("external_url", "").rstrip("/")
 
-    # First pass: find by JID mapping (no DOM mutation)
+    # First pass: find by JID tag (DOM attribute survives process restarts)
+    for p in ctx.pages:
+        if read_page_tag(p) == jid:
+            return p
     for p in ctx.pages:
         if _PAGE_JID_MAP.get(id(p)) == jid:
             return p
@@ -145,9 +158,6 @@ def find_page(ctx, state):
 
     return None
 
-def tag_page(page, jid):
-    """Tag a page with a job ID for reliable find_page lookups. No DOM mutation."""
-    _PAGE_JID_MAP[id(page)] = jid
 
 def read_and_save(p, state):
     """Read page state, save to state file, return page dict."""
