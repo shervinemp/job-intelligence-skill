@@ -5,12 +5,35 @@ import json
 import os
 import re
 import sys
+import shutil
 
+from lib.config import RESULTS_DIR, SNAPSHOTS_DIR, STATE_PATH, REGISTRY_PATH
 from lib.db import stage_list_all, stage_count, setting_get, setting_set
 from lib.db import add_job, pipeline_status, get_conn
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 EXTRACTED_IDS_KEY = "extracted_ids"
+
+
+def _clean_state_entry(path, jids):
+    """Remove state/registry entries for given JIDs from a JSON file."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    changed = False
+    for jid in jids:
+        if jid in data:
+            del data[jid]
+            changed = True
+    if changed:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
 
 _SKIP_DOMAINS = {
     "linkedin.com/comm", "linkedin.com/feed", "linkedin.com/notifications",
@@ -185,9 +208,12 @@ def cmd_submit(tid, jobs_json=None):
     print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_reset(*jids):
+def cmd_reset(*jids, confirm=False):
     conn = get_conn()
     if not jids:
+        if not confirm:
+            print("ERROR: mass reset requires --confirm. This deletes ALL jobs, results, and pipeline state.", file=sys.stderr)
+            sys.exit(1)
         c = conn
         c.execute("PRAGMA foreign_keys=OFF")
         c.execute("DELETE FROM events")
@@ -201,10 +227,12 @@ def cmd_reset(*jids):
         setting_set(EXTRACTED_IDS_KEY, [])
         setting_set("staged_ids", [])
         setting_set("skipped_ids", [])
-        import shutil
-        res_dir = os.path.join(SKILL_DIR, "results")
-        if os.path.exists(res_dir):
-            shutil.rmtree(res_dir)
+        if os.path.exists(RESULTS_DIR):
+            shutil.rmtree(RESULTS_DIR)
+        # Clean state and registry files entirely on mass reset
+        for p in (STATE_PATH, REGISTRY_PATH):
+            if os.path.exists(p):
+                os.remove(p)
         print("Reset complete. Staged emails ready for fresh extraction.", file=sys.stderr)
     else:
         email_ids_to_remove = set()
@@ -223,11 +251,22 @@ def cmd_reset(*jids):
             conn.execute("DELETE FROM jobs WHERE id=?", (jid,))
             if email_id:
                 email_ids_to_remove.add(email_id)
+            # Clean up files: results dir, screenshots, state/registry entries
+            jid_dir = os.path.join(RESULTS_DIR, jid)
+            if os.path.exists(jid_dir):
+                shutil.rmtree(jid_dir)
+            for ext in (".png", ".html"):
+                screenshot = str(SNAPSHOTS_DIR.parent / "screenshots" / f"inspect_{jid}{ext}")
+                if os.path.exists(screenshot):
+                    os.remove(screenshot)
         conn.commit()
         if email_ids_to_remove:
             extracted_ids = set(setting_get(EXTRACTED_IDS_KEY, []))
             extracted_ids -= email_ids_to_remove
             setting_set(EXTRACTED_IDS_KEY, list(extracted_ids))
+        # Remove from state and registry
+        _clean_state_entry(STATE_PATH, set(jids))
+        _clean_state_entry(REGISTRY_PATH, set(jids))
         print(f"RESET:{len(jids)}", file=sys.stderr)
         s = pipeline_status()
         if s["next_step"]:
@@ -265,8 +304,8 @@ def cmd_help():
     print("  submit [<tid>] '<json>'                    JSON must include 'category'", file=sys.stderr)
     print("  review [--count N]                         Show emails for manual picking", file=sys.stderr)
     print("  status                                     Pipeline state", file=sys.stderr)
-    print("  reset                                      Wipe all data", file=sys.stderr)
     print("  reset <jid> [jid...]                       Delete specific job, re-extract on next run", file=sys.stderr)
+    print("  reset (no args, requires --confirm)         DANGER: deletes ALL jobs, results, and pipeline state", file=sys.stderr)
     print("  help                                       This message", file=sys.stderr)
     print("", file=sys.stderr)
     print("Categories:", file=sys.stderr)
@@ -275,7 +314,7 @@ def cmd_help():
         desc = info.get("desc", "")
         print(f"  {name} → {gem}" + (f" ({desc})" if desc else ""), file=sys.stderr)
     print("", file=sys.stderr)
-    print("Note: --category required on first admit. Use fetch.py admit --category to override after seeing JD.", file=sys.stderr)
+    print("Note: --category required on first admit. Use enrich.py admit --category to override after seeing JD.", file=sys.stderr)
 
 
 def main():
@@ -288,7 +327,9 @@ def main():
     submit_p = sub.add_parser("submit", help="Submit a job entry")
     submit_p.add_argument("tid", nargs="?")
     submit_p.add_argument("json_data", nargs="?")
-    sub.add_parser("reset", help="Reset extraction state").add_argument("args", nargs="*")
+    reset_p = sub.add_parser("reset", help="Reset extraction state")
+    reset_p.add_argument("args", nargs="*")
+    reset_p.add_argument("--confirm", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("status", help="Pipeline state")
     admit_p = sub.add_parser("admit", help="Admit an extracted job")
     admit_p.add_argument("jids", nargs="+")
@@ -309,7 +350,7 @@ def main():
         else:
             parser.print_help()
     elif args.command == "reset":
-        cmd_reset(*args.args)
+        cmd_reset(*args.args, confirm=getattr(args, "confirm", False))
     elif args.command == "status":
         cmd_status()
     elif args.command == "admit":

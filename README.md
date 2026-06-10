@@ -30,7 +30,7 @@ Automated job discovery, description fetching, CV tailoring, and auto-apply — 
                                      └────────┬─────────┘
                                               │
                                      ┌────────▼─────────┐
-                                     │    fetch.py      │
+                                     │    enrich.py      │
                                      │ admit/reject/flag│
                                      └────────┬─────────┘
                                               │
@@ -74,10 +74,11 @@ job_intelligence/
 ├── stage_emails.py       # Stage Gmail threads → DB
 ├── extract.py            # URL extraction + admit/reject
 ├── linkedin.py           # LinkedIn job scraper (alt entry)
-├── fetch.py              # Job description fetching
+├── enrich.py             # Job description fetch + field enrichment
 ├── tailor.py             # CV tailoring via Gemini
 ├── apply.py              # Unified apply entry point
 ├── report.py             # Pipeline data inspection
+├── requirements.txt      # Python dependencies (pip install -r)
 ├── gems.json             # Gem alias → ID mapping
 ├── categories.json       # Category → gem mapping
 ├── profile.json          # User profile for auto-fill (gitignored)
@@ -153,7 +154,7 @@ Features:
 | 1 | Email staging | `stage_emails.py` | Auto |
 | 2 | URL extraction | `extract.py` | `admit --category <name> <jid>` or `reject` |
 | 3 | LinkedIn scrape | `linkedin.py` | admit/reject |
-| 4 | Fetch description | `fetch.py` | `admit` / `reject` / `flag` |
+| 4 | Fetch description | `enrich.py` | `admit` / `reject` / `flag` |
 | 5 | CV tailoring | `tailor.py` | `done` / `skip` / `redo` |
 | 6 | Classify type | `apply.py detect <jid>` | Follow TYPE hint (easy_apply / external / applied) |
 | 7 | Navigate ATS | `apply.py navigate <jid>` | Auto (finds external Apply button) |
@@ -212,8 +213,8 @@ extract.py submit '{"url":"...","notes":"John can refer at Google"}'
 Auto-detected during fetch. Flagged jobs can be opened in Chrome's persistent profile.
 
 ```
-fetch.py flag <jid>
-fetch.py open [<jid>]
+enrich.py flag <jid>
+enrich.py open [<jid>]
 ```
 
 ### Per-Job Reset
@@ -230,41 +231,87 @@ report.py stats           # pipeline statistics
 report.py inspect <jid>   # full job details
 report.py search "Google" # search jobs
 report.py export json     # export all jobs
+report.py archive          # archive state/registry entries for reset jobs
 ```
 
 ---
 
 ## Configuration
 
-| File | Purpose |
-|------|---------|
-| `.env` | Gmail search query override |
-| `categories.json` | Category → gem alias mapping |
-| `gems.json` | Gem alias → raw Gemini ID |
-| `profile.json` | User profile for auto-apply (local only, not tracked) |
+All pipeline config in `job_intelligence/`. Copy `.env.example` → `.env`.
+
+| File / Env Var | Purpose |
+|----------------|---------|
+| `.env` | Pipeline env vars (`JI_HOME`, `JI_TAILOR`, `GMAIL_SEARCH_QUERY`). Auto-loaded by `lib/config.py` |
+| `JI_HOME` | Root data directory (`~/.ji/` by default). Holds state DB, results, snapshots, Chrome profile |
+| `JI_TAILOR` | CV backend: `"agent"` (SLM writes script.py, default) or `"gem"` (Gemini Web gem) |
+| `categories.json` | Category → gem alias mapping (e.g. `tech` → `optimizer_tech`) |
+| `gems.json` | Gem alias → raw Gemini ID (e.g. `optimizer_tech` → `4203d06f5d81`) |
+| `profile.json` | User profile for auto-apply. Must be filled in before first apply. Not tracked in git |
+| `decisions.md` | Screening question decision rules consumed by `tailor.py` |
 
 ---
 
-## Quick Start
+## Setup
+
+### Prerequisites
+
+| Dependency | Version | Notes |
+|------------|---------|-------|
+| Python | 3.12+ | Core runtime |
+| Node.js | 20+ | Gemini browser automation |
+| Google Chrome | Latest | CDP target for Playwright + Puppeteer |
+| Google Cloud Project | — | Enable Gmail API, download `client_secret.json` |
+| Playwright (Python) | — | `pip install -r requirements.txt` |
+| puppeteer-core (Node) | — | `npm install -g puppeteer-core` |
+
+### Step-by-Step
+
+**1. Gmail API setup**
+
+Create Google Cloud Project → enable Gmail API → create OAuth 2.0 Desktop credentials → download `client_secret.json` to repo root (`ji-skill/`).
+
+**2. Install dependencies**
 
 ```powershell
-# 1. Start Chrome with persistent profile
+pip install -r job_intelligence\requirements.txt
+npm install -g puppeteer-core
+```
+
+**3. Configure environment**
+
+```powershell
+cd job_intelligence
+copy .env.example .env
+# Edit .env if you need custom JI_HOME, JI_TAILOR, or GMAIL_SEARCH_QUERY
+```
+
+**4. Start Chrome with persistent profile**
+
+```powershell
 & "C:\Program Files\Google\Chrome\Application\chrome.exe" `
     --user-data-dir="$env:USERPROFILE\.ji\chrome-profile" `
     --remote-debugging-port=9222 --no-first-run
+```
 
-# 2. Authenticate Gmail
+**5. Authenticate Gmail**
+
+```powershell
 gmail-cli auth credentials client_secret.json
 gmail-cli auth add you@gmail.com
+```
 
-# 3. Run the pipeline
-python3 stage_emails.py
-python3 extract.py
-# → SLM admits/rejects URLs
-python3 fetch.py
-# → SLM admits/rejects descriptions
-python3 tailor.py
-# → SLM reviews CV, runs done/skip
+**6. Fill in your profile**
+
+Edit `profile.json`: name, contact info, work history, common answers. Required before first apply.
+
+### Quick Start
+
+```powershell
+python stage_emails.py   # Stage Gmail threads → DB
+python extract.py        # SLM admits/rejects URLs
+python enrich.py          # SLM admits/rejects descriptions
+python tailor.py         # SLM reviews CV, runs done/skip
 ```
 
 ---
@@ -274,7 +321,7 @@ python3 tailor.py
 Tailored CVs and application files are written to `~/.ji/results/{jid}/`:
 
 ```
-📁 ~/.ji/results/{jid}/
+~/.ji/results/{jid}/
 ├── gemini_response.txt    # Full Gemini output
 ├── script.py              # Extracted Python script for PDF
 ├── {jid}.url              # Browser shortcut to job posting
@@ -289,25 +336,12 @@ Tailored CVs and application files are written to `~/.ji/results/{jid}/`:
 |---------|-------|-----|
 | `invalid_grant` | Stale OAuth token | `gmail-cli auth add <email>` |
 | `TIMEOUT` / `RATE_LIMIT` | Gemini throttling | `python3 tailor.py retry` |
-| Chrome crash | Process died | Restart Chrome (see Quick Start) |
+| Chrome crash | Process died | Restart Chrome (see Setup step 4) |
 | DB corruption | Bad reset / crash | `python3 extract.py reset` |
-| Auth wall stuck | Blocked page | `fetch.py open` then `fetch.py --refresh` |
-
+| Auth wall stuck | Blocked page | `enrich.py open` then `enrich.py --refresh` |
 ---
 
-## Requirements
 
-| Dependency | Version | Notes |
-|------------|---------|-------|
-| Python | 3.12+ | Core runtime |
-| Node.js | 20+ | Gemini automation |
-| Google Chrome | Latest | CDP target for playwright + puppeteer |
-| Playwright (Python) | — | `pip install playwright` |
-| puppeteer-core (Node) | — | `npm install -g puppeteer-core` |
-| Google Cloud Project | — | Enable Gmail API |
-| Gmail API credentials | — | `client_secret.json` from Google Cloud Console |
-
----
 
 <p align="center">
   <b>Detailed operations manual</b>: <code>job_intelligence/SKILL.md</code>

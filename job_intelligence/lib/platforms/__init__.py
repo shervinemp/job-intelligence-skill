@@ -8,7 +8,7 @@ Shared helpers in _shared.py are applied universally to all results
 (collapse_blank_lines, strip). Platform modules should NOT import _shared.
 
 Upper modules should use:
-  - fetch_description(url, page): full pipeline for fetch.py
+  - fetch_description(url, page): full pipeline for enrich.py
   - clean(url, text): text + universal cleaning for tailor.py
 """
 

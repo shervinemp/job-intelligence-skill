@@ -964,15 +964,15 @@ def pipeline_status():
     if pending_staged > 0:
         next_step = f"extract.py --count {min(3, pending_staged)}"
     elif state["stages"].get("extracted", 0) > 0:
-        next_step = "fetch.py --count 3"
+        next_step = "enrich.py --count 3"
     elif state["stages"].get("described", 0) > 0:
         next_step = "tailor.py"
     elif state["stages"].get("tailored", 0) > 0:
         next_step = "apply.py detect <jid>"
     elif state["stages"].get("failed", 0) > 0:
-        next_step = "fetch.py retry or tailor.py retry"
+        next_step = "enrich.py retry or tailor.py retry"
     elif auth_n > 0:
-        next_step = "fetch.py open"
+        next_step = "enrich.py open"
     else:
         next_step = "all done — run gmail search"
 

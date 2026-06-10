@@ -75,7 +75,7 @@ def run(jid):
                 emit_next(f"tailor.py --jid {jid}")
             else:
                 emit_status(f"needs description (stage={stage}, no desc, no PDF)")
-                emit_next(f"fetch.py  then  tailor.py --jid {jid}")
+                emit_next(f"enrich.py  then  tailor.py --jid {jid}")
             _merge_state({"jid": jid})
             sys.exit(0)
 

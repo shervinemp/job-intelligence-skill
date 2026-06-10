@@ -5,7 +5,7 @@ Usage:
   python3 linkedin.py [--url <url>] [--max N] [--max-pages N] [--list]
 
 Scrapes job cards, clicks each for full description, paginates for more.
-Adds to DB as 'extracted' with description pre-saved (skips fetch.py).
+Adds to DB as 'extracted' with description pre-saved (skips enrich.py).
 """
 
 import hashlib

@@ -54,13 +54,13 @@ def generate_tailored_docs(job_entry):
     description = clean_desc(url, description)
 
     if not description:
-        return False, "No job description found — run fetch.py first"
+        return False, "No job description found — run enrich.py first"
 
     cat = job.get("category")
     if not cat:
         return (
             False,
-            f"No category for job {job_id} — fetch.py admit --category <name> first",
+            f"No category for job {job_id} — enrich.py admit --category <name> first",
         )
     cat_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "categories.json"
@@ -270,7 +270,7 @@ def craft_jid(jid):
             print(f"  {jid}: extracted -> described", file=sys.stderr)
         else:
             print(
-                f"ERROR: job {jid} has no description \u2014 run fetch.py first",
+                f"ERROR: job {jid} has no description \u2014 run enrich.py first",
                 file=sys.stderr,
             )
             return
@@ -284,7 +284,7 @@ def craft_jid(jid):
 
     if not entry.get("category"):
         print(
-            f"ERROR: job {jid} has no category — fetch.py admit --category <name> first",
+            f"ERROR: job {jid} has no category — enrich.py admit --category <name> first",
             file=sys.stderr,
         )
         return
