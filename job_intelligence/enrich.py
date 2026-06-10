@@ -1,14 +1,14 @@
-"""fetch.py — Fetch job descriptions. SLM reviews DESC lines, admits or rejects.
+"""enrich.py — Fetch job descriptions + enrich fields (title, company, location, salary, category). SLM reviews DESC lines, admits or rejects.
 
 Usage:
-  fetch.py [--count N] [--curl] [--force] [--refresh]   (default --count 3)
-  fetch.py admit <jid> [jid...]
-  fetch.py reject <jid> [jid...]
-  fetch.py flag <jid> [jid...]
-  fetch.py open [<jid>]
-  fetch.py retry               Retry failed fetches
-  fetch.py retry-skipped       Reset all skipped jobs back to extracted
-  fetch.py status
+  enrich.py [--count N] [--curl] [--force] [--refresh]   (default --count 3)
+  enrich.py admit <jid> [jid...]
+  enrich.py reject <jid> [jid...]
+  enrich.py flag <jid> [jid...]
+  enrich.py open [<jid>]
+  enrich.py retry               Retry failed fetches
+  enrich.py retry-skipped       Reset all skipped jobs back to extracted
+  enrich.py status
 """
 import html, os, subprocess, sys, time, re
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -237,7 +237,7 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
 
 def cmd_flag(*jids):
     if not jids:
-        print("Usage: python3 fetch.py flag <jid> [jid...]", file=sys.stderr)
+        print("Usage: python3 enrich.py flag <jid> [jid...]", file=sys.stderr)
         return
     state = load()
     count = 0
@@ -281,7 +281,7 @@ def cmd_admit(*jids, **fields):
                 snippet = re.sub(r'\s+', ' ', desc[:limit].replace('\r', '')).strip()
                 print(f"DESC:{jid}:{snippet}")
             print(f"ERROR: --category required (no category set). Options: {', '.join(cats)}", file=sys.stderr)
-            print(f"  Usage: fetch.py admit {jid} --category <name>", file=sys.stderr)
+            print(f"  Usage: enrich.py admit {jid} --category <name>", file=sys.stderr)
             continue
         updates = {k: v for k, v in fields.items() if v is not None}
         advance(entry, "described", **updates)
@@ -409,7 +409,7 @@ def cmd_open(*jids):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(prog="fetch.py", description="Fetch job descriptions")
+    parser = argparse.ArgumentParser(prog="enrich.py", description="Fetch descriptions + enrich job fields (title, company, location, salary, category)")
     parser.add_argument("--count", type=int, default=3, help="Jobs to fetch (default 3)")
     parser.add_argument("--curl", action="store_true", help="Use curl instead of Playwright")
     parser.add_argument("--force", action="store_true", help="Re-fetch even if description exists")

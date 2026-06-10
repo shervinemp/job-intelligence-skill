@@ -29,7 +29,7 @@ Controls Gemini custom gems via real Chrome session (no API key). Playwright con
 ## How It Works
 1. `connectOverCDP` → attaches to running Chrome via websocket
 2. Tries port 9222 first (your main Chrome), falls back to launching own
-3. Navigates `https://gemini.google.com/gem/{id}` (reads from .env)
+3. Navigates `https://gemini.google.com/gem/{id}` (id passed via `--gem` CLI arg, resolved from `gems.json`)
 4. Opens mode picker → selects 3.5 Flash → expands thinking level → selects Extended
 5. Types prompt into `[contenteditable="true"]` → clicks send button
 6. Polls for generation complete (waits for copy button to appear + stop button gone)
@@ -40,5 +40,5 @@ Controls Gemini custom gems via real Chrome session (no API key). Playwright con
 - Chrome profile at `~/.ji/chrome-profile/` — persists, won't get wiped
 - Session cookies last ~6 months  
 - Chrome must run with `--remote-debugging-port=9222`
-- Gem ID loaded from `.env` in this directory (`GEM_ID`)
+- Gem ID passed via `--gem <id>` CLI arg (resolved from `gems.json` by `call_gemini.py`)
 - Cross-check before delete: captures conversation title after response, verifies match

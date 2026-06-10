@@ -11,11 +11,13 @@ Usage:
   python3 report.py companies [query]         List/search companies
   python3 report.py events [--upcoming]       List events
   python3 report.py contacts <jid>            Contacts for a job
+  python3 report.py archive                   Archive state/registry entries for reset jobs
 """
 
 import csv
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -28,6 +30,7 @@ from .db import (
     desc_get, app_list, app_get,
     setting_get,
 )
+from .config import STATE_PATH, REGISTRY_PATH
 
 
 def cmd_shell():
@@ -198,6 +201,48 @@ def cmd_contacts(jid=None):
         print(f"  {reached} {c['name']:20s} {c.get('role','') or '':25s} {c.get('email','') or ''}")
 
 
+def cmd_archive():
+    """Move state/registry entries for reset jobs to archive files (preserves history)."""
+    conn = get_conn()
+    existing = {r["id"] for r in conn.execute("SELECT id FROM jobs").fetchall()}
+    total = 0
+    for path, label in [(STATE_PATH, "apply_state.json"), (REGISTRY_PATH, "page_registry.json")]:
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        stale = {jid: data[jid] for jid in data if jid not in existing}
+        if not stale:
+            continue
+        archive_path = path.replace(".json", "_archive.json")
+        archive = {}
+        try:
+            with open(archive_path) as f:
+                archive = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        archive.update(stale)
+        tmp = archive_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(archive, f)
+        os.replace(tmp, archive_path)
+        for jid in stale:
+            del data[jid]
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+        print(f"  {label}: archived {len(stale)} entries ({len(data)} remain)", file=sys.stderr)
+        total += len(stale)
+    if total:
+        print(f"Archived {total} stale entries.", file=sys.stderr)
+    else:
+        print("No stale entries.", file=sys.stderr)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -241,6 +286,8 @@ def main():
         cmd_events(upcoming="--upcoming" in args)
     elif cmd == "contacts":
         cmd_contacts(args[0] if args else None)
+    elif cmd == "archive":
+        cmd_archive()
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         print(__doc__)

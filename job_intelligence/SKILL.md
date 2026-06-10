@@ -9,7 +9,7 @@
 | `stage_emails.py [--days N]` | Auto |
 | `extract.py` | `admit --category <name> <jid>` / reject |
 | `linkedin.py [--url] [--max N]` | admit/reject |
-| `fetch.py [--count N]` | admit/reject/flag |
+| `enrich.py [--count N]` | admit/reject/flag |
 | `tailor.py [--count N]` | done/skip/redo. See tailoring section |
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
 
@@ -22,10 +22,10 @@
 | `extract.py reset <jid>` | Delete + re-extract |
 | `extract.py review [--count N]` | Browse staged emails |
 | `extract.py submit <tid> '<json>'` | Manually add URLs |
-| `fetch.py admit/reject/flag <jid>` | Accept / skip / auth wall |
-| `fetch.py retry` | Retry failed |
-| `fetch.py retry-skipped` | Reset skipped → extracted |
-| `fetch.py open [<jid>]` | Open in Chrome |
+| `enrich.py admit/reject/flag <jid>` | Accept / skip / auth wall |
+| `enrich.py retry` | Retry failed |
+| `enrich.py retry-skipped` | Reset skipped → extracted |
+| `enrich.py open [<jid>]` | Open in Chrome |
 | `tailor.py [--count N]` | Start tailoring (default 1, -1 = all) |
 | `tailor.py done <jid> [--pdf <path>]` | Confirm PDF → stage = tailored |
 | `tailor.py skip <jid>` | Skip |
@@ -123,9 +123,9 @@ detect <jid> → [navigate] → act --fill → act --next (repeat) → act --sub
 ## Auth walls
 
 Detected during fetch (sign-in keywords).  
-`fetch.py flag <jid>` — manual flag.  
-`fetch.py open [<jid>]` — open in Chrome (persistent session).  
-Stale entries auto-pruned.
+`enrich.py flag <jid>` — manual flag.  
+`enrich.py open [<jid>]` — open in Chrome (persistent session).  
+`report.py archive` — archive state/registry entries for reset jobs.
 
 Attach context via `extract.py submit '{"url":"...","notes":"..."}'`.  
 `tailor.py` appends `Context: {notes}` to gem prompt. Re-run w/ `"notes":""` to clear.
@@ -138,7 +138,7 @@ Attach context via `extract.py submit '{"url":"...","notes":"..."}'`.
 | TIMEOUT / RATE_LIMIT | `tailor.py retry` |
 | Chrome crash | Auto-restarted — do nothing |
 | DB crash | `extract.py reset` |
-| Auth wall stuck | `fetch.py open` + `--refresh` |
+| Auth wall stuck | `enrich.py open` + `--refresh` |
 
 ## Technical notes
 
