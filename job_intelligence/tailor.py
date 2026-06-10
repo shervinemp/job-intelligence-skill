@@ -109,21 +109,13 @@ def generate_tailored_docs(job_entry):
     tailor_mode = os.environ.get("JI_TAILOR", "agent")
 
     if tailor_mode == "agent":
-        agent_instructions = f"""
-Your task: write a Python script that generates a tailored CV PDF for this job.
-Save the script to the results directory as script.py.
-
-The script should:
-- Use reportlab or fpdf2 to generate a PDF (install if needed)
-- Include the candidate's profile from results/job_id/profile.md if it exists
-- Tailor the content to the job description above
-- Output the PDF to the same results directory with a descriptive filename
-- Be self-contained and runnable with: python script.py
-
-Note: this is a template — you are responsible for filling in the actual CV
-content based on the candidate's profile and the job requirements above.
-"""
-        prompt += agent_instructions
+        prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
+        try:
+            with open(prompt_path) as f:
+                agent_instructions = f.read()
+        except FileNotFoundError:
+            agent_instructions = "Write a Python script that generates a tailored CV PDF for this job."
+        prompt += "\n\n" + agent_instructions
         from lib.config import RESULTS_DIR
 
         script_dir = os.path.join(RESULTS_DIR, job_id)
