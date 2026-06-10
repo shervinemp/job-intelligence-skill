@@ -43,8 +43,8 @@
 
 Two backends via `JI_TAILOR` env var:
 
-- **`JI_TAILOR=gem`** (default): Uses Gemini Web gem. Gem generates `script.py`, pipeline runs it inline, PDF appears. Run `done <jid>` to confirm + advance stage.
-- **`JI_TAILOR=agent`**: Prompt printed to stdout. Write `script.py` based on instructions, run it to produce PDF, `done <jid> --pdf <path>` verifies file + advances stage.
+- **`JI_TAILOR=agent`** (default): Prompt printed to stdout. Write `script.py` based on instructions, run it to produce PDF, `done <jid> --pdf <path>` verifies file + advances stage.
+- **`JI_TAILOR=gem`**: Uses Gemini Web gem. Gem generates `script.py`, pipeline runs it inline, PDF appears. Run `done <jid>` to confirm + advance stage.
 
 Both routes converge on `done` — gem route skips `--pdf` (PDF auto-generated), agent route should provide it. `done` advances DB stage to "tailored" (CV ready). Apply pipeline advances to "applied" (form submitted).
 
@@ -145,8 +145,8 @@ Attach context via `extract.py submit '{"url":"...","notes":"..."}'`.
 
 ## Technical notes
 
-- **JI_TAILOR**: `"gem"` (default) = Gemini Web gem. `"agent"` = SLM writes `script.py`, `done` confirms.
+- **JI_TAILOR**: `"agent"` (default) = SLM writes `script.py`, `done` confirms. `"gem"` = Gemini Web gem.
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
 - **LinkedIn title dedup**: Cards repeat title — `linkedin.py` deduplicates by matching repeated half.
 - **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
-- **Gems**: `gems.json` → `categories.json` → `gemini.js` resolution chain.
+- **Gems**: `categories.json` → `gems.json` → `gemini.js` resolution chain.

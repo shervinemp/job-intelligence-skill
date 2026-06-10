@@ -87,6 +87,7 @@ job_intelligence/
 ├── SKILL.md              # Full operations manual
 ├── .env.example          # Config template (copy to .env)
 ├── lib/
+│   ├── ask_api.py        # Query LLM API (text/image, via LLM_API_URL)
 │   ├── config.py        # Centralised JI_HOME path configuration
 │   ├── db.py             # SQLite backend
 │   ├── chrome_manager.py # Shared Chrome CDP lifecycle
