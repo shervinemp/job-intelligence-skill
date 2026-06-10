@@ -26,12 +26,12 @@ def _path(jid, ext, prefix=""):
 
 
 def capture(page, jid, prefix=""):
-    """Universal: save screenshot + HTML dump. Outputs IMG: and HTML: paths.
+    """Universal: save screenshot (JPEG) + HTML dump. Outputs IMG: and HTML: paths.
     Optional prefix (e.g. 'fetch') separates files per pipeline stage. Overwrites on re-run.
     Safe to call from any pipeline stage (fetch, tailor, apply)."""
-    png = _path(jid, "png", prefix)
+    png = _path(jid, "jpg", prefix)
     try:
-        page.screenshot(path=png)
+        page.screenshot(path=png, type="jpeg", quality=80)
         print(f"IMG: {png}")
     except Exception as e:
         print(f"IMG_FAILED: {e}", file=sys.stderr)
