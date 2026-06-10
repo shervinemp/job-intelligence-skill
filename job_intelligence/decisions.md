@@ -1,8 +1,8 @@
-## Core
+# Decisions
 
 **Don't self-reject.** Screening filters are meant to cull you. Answer to pass through, let company reject post-resume.
 
-Only exception: true non-fit (wrong profession, Quebec on-site = legal block). Not "I prefer remote" — they decide.
+Only exception: true non-fit (wrong profession, Quebec/Montreal any = legal block). Not "I prefer remote" — they decide.
 
 ## Relocation
 
@@ -10,7 +10,7 @@ Only exception: true non-fit (wrong profession, Quebec on-site = legal block). N
 |---|----|-----|
 | Relocate Canada-wide? | Yes | This market — anywhere |
 | Relocate US? | Yes + visa | Need sponsorship but willing |
-| Quebec on-site? | No | Extra legal paperwork |
+| Quebec / Montreal (any) | No | Legal block — skip all |
 | Remote vs hybrid vs on-site | Remote > hybrid > on-site | Preference, but all fine for Ontario |
 
 ## Sponsorship
@@ -40,6 +40,17 @@ Don't lie. But estimate generously from total years (5).
 | Available start? | Immediately / 2 weeks | Current job abusive, can leave fast |
 | OT / weekends? | Yes | Market conditions |
 | Criminal record? | No | Truthful |
+
+## Location admission
+
+| Location | Decision |
+|----------|----------|
+| Ontario (Toronto, Ottawa, Oakville, Mississauga, Waterloo...) | Yes — preferred |
+| Other Canada (Vancouver, Calgary... on-site/hybrid) | Yes |
+| Remote / work-from-home (any country) | Yes |
+| Quebec / Montreal (any) | No |
+| US on-site only | No |
+| Unclear | Fetch description first, then decide |
 
 ## How to decide
 

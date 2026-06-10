@@ -1,6 +1,11 @@
 # Job Intelligence Pipeline
 
-> Windows: prefix commands w/ `python3`. Bare `.py` opens in VSCode.
+## Read First
+
+Before running pipeline, read these:
+- `decisions.md` — accept/reject rules per job
+- `profile.json` — common form answers
+- `categories.json` — job categories
 
 ## Pipeline stages
 
