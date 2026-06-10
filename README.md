@@ -237,21 +237,6 @@ report.py archive          # archive state/registry entries for reset jobs
 
 ---
 
-## Configuration
-
-All pipeline config in `job_intelligence/`. Copy `.env.example` → `.env`.
-
-| File / Env Var | Purpose |
-|----------------|---------|
-| `.env` | Pipeline env vars (`JI_HOME`, `JI_TAILOR`, `GMAIL_SEARCH_QUERY`). Auto-loaded by `lib/config.py` |
-| `JI_HOME` | Root data directory (`~/.ji/` by default). Holds state DB, results, snapshots, Chrome profile |
-| `JI_TAILOR` | CV backend: `"agent"` (SLM writes script.py, default) or `"gem"` (Gemini Web gem) |
-| `categories.json` | Category → gem alias mapping (e.g. `tech` → `optimizer_tech`) |
-| `gems.json` | Gem alias → raw Gemini ID (e.g. `optimizer_tech` → `4203d06f5d81`) |
-| `profile.json` | User profile for auto-apply. Must be filled in before first apply. Not tracked in git |
-
----
-
 ## Setup
 
 ### Prerequisites
@@ -313,6 +298,7 @@ Edit `profile.json`: name, contact info, work history, common answers. Required 
 | `profile.json` | `job_intelligence/` | Name, email, phone, work history, education, skills, `resume_path` (path to PDF), `common_answers` (form fill answers) | Yes |
 | `client_secret.json` | `ji-skill/` root | OAuth 2.0 Desktop credentials from Google Cloud Console (Gmail API) | Yes, for email staging |
 | `gems.json` | `job_intelligence/` | Gemini gem alias → raw ID mapping. Created by `call_gemini.py --refresh` | Only if using `JI_TAILOR=gem` |
+| `categories.json` | `job_intelligence/` | Category → gem alias mapping (e.g. `tech` → `optimizer_tech`) | Only if using `JI_TAILOR=gem` |
 | `decisions.md` | `job_intelligence/` | Screening question decision rules — edit to match your preferences | No |
 | `tailor_prompt.md` | `job_intelligence/` | Agent route prompt template — customize CV generation instructions | No |
 | `.env` vars | `LLM_API_URL`, `LLM_API_MODEL` | OpenAI-compatible endpoint for `lib/ask_api.py` (llama.cpp, etc.) | No |
