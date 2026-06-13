@@ -45,9 +45,14 @@ function gemUrl() {
   return GEM_ID ? `https://gemini.google.com/gem/${GEM_ID}` : 'https://gemini.google.com/';
 }
 
+let _outputFile = null;
 function log(m) { console.error(`[gemini] ${m}`); }
 function die(m) { console.error(m); process.exit(1); }
 function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+function writeOutput(data) {
+  if (!_outputFile) return;
+  try { fs.writeFileSync(_outputFile, JSON.stringify(data), 'utf8'); } catch (e) { log(`writeOutput: ${e.message}`); }
+}
 
 // ─── Args ────────────────────────────────────────────────
 
@@ -75,7 +80,7 @@ function args() {
     else if (v === '--dump') action = 'dump';
     else if (v === '--login') action = 'login';
     else if (v === '--gem-url' && i + 1 < a.length) gem = a[++i];
-    else if (v === '--output' && i + 1 < a.length) outputFile = a[++i];
+    else if (v === '--output' && i + 1 < a.length) { outputFile = a[++i]; _outputFile = outputFile; }
     else if (v === '--app-dir' && i + 1 < a.length) appDir = a[++i];
     else if (v === '--prompt-file' && i + 1 < a.length) promptFile = a[++i];
     else if (v === '--gem' && i + 1 < a.length) gemName = a[++i];
@@ -384,6 +389,18 @@ async function read(page, timeout = 360000) {
   return '(empty)';
 }
 
+async function ensureSidebar(page, open = true) {
+  const btn = page.locator('[data-test-id="side-nav-sparkle-button"]');
+  const visible = await btn.isVisible().catch(() => false);
+  if (!visible) return; // sidebar not togglable
+  const label = await btn.getAttribute('aria-label').catch(() => '');
+  const want = open ? 'open' : 'close';
+  if (label && label.toLowerCase().includes(want + ' sidebar')) {
+    await btn.click();
+    await wait(1000);
+  }
+}
+
 // ─── Delete last conversation ──────────────────────────
 
 async function deleteChat(page) {
@@ -403,6 +420,9 @@ async function deleteChat(page) {
     // Navigate to home to ensure sidebar is current
     await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
     await wait(3000);
+
+    // Ensure sidebar is expanded so conversation elements are interactive
+    await ensureSidebar(page, true);
 
     // Find conversation by convId and click its actions menu
     let clicked = 'not_found';
@@ -479,8 +499,13 @@ async function dump(page) {
         die(`Can't read gems.json: ${e.message}`);
       }
     }
-    if (gems && gems[opts.gemName]) GEM_ID = gems[opts.gemName];
-    else if (gems) GEM_ID = opts.gemName;
+    if (gems) {
+      if (gems[opts.gemName]) GEM_ID = gems[opts.gemName];
+      else {
+        log(`Warning: '${opts.gemName}' not in gems.json, using as raw ID`);
+        GEM_ID = opts.gemName;
+      }
+    }
   }
 
   if (opts.promptFile) {
@@ -530,15 +555,14 @@ async function dump(page) {
 
     let og = await openGem(page, opts.gem);
     if (og.timedOut) {
-      const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: og.resetsAt || 'unknown' });
-      console.error(out); try { await page.close(); } catch (e) {} await new Promise(r => setTimeout(r, 500)); process.exit(2);
+      const data = { status: 'rate_limit', resetsAt: og.resetsAt || 'unknown' };
+      writeOutput(data); console.error(JSON.stringify(data)); try { await page.close(); } catch (e) {} process.exit(2);
     }
 
     const modeSet = await ensureMode(page);
     if (modeSet.status === 'timedOut') {
-      const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: modeSet.resetsAt || 'unknown' });
-      console.error(out);
-      try { await page.close(); } catch (e) {} await new Promise(r => setTimeout(r, 500)); process.exit(2);
+      const data = { status: 'rate_limit', resetsAt: modeSet.resetsAt || 'unknown' };
+      writeOutput(data); console.error(JSON.stringify(data)); try { await page.close(); } catch (e) {} process.exit(2);
     }
     if (modeSet.status !== 'ok') {
       die('Could not set Flash + Extended mode.');
@@ -551,13 +575,13 @@ async function dump(page) {
         log(`Retry ${attempt + 1}...`);
         og = await openGem(page, opts.gem);
         if (og.timedOut) {
-          const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: og.resetsAt || 'unknown' });
-          console.error(out); try { await page.close(); } catch (e) {} process.exit(2);
+          const data = { status: 'rate_limit', resetsAt: og.resetsAt || 'unknown' };
+          writeOutput(data); console.error(JSON.stringify(data)); try { await page.close(); } catch (e) {} process.exit(2);
         }
         const retrySet = await ensureMode(page);
         if (retrySet.status === 'timedOut') {
-          const out = JSON.stringify({ error: 'RATE_LIMIT', resetsAt: retrySet.resetsAt || 'unknown' });
-          console.error(out); try { await page.close(); } catch (e) {} process.exit(2);
+          const data = { status: 'rate_limit', resetsAt: retrySet.resetsAt || 'unknown' };
+          writeOutput(data); console.error(JSON.stringify(data)); try { await page.close(); } catch (e) {} process.exit(2);
         }
         if (retrySet.status !== 'ok') { die('Could not set mode on retry.'); }
       }
@@ -567,15 +591,13 @@ async function dump(page) {
     }
 
     if (!resp || resp === '(timeout)' || resp === '(timeout - no change)' || resp.length < 20) {
+      writeOutput({ status: 'error', message: resp || 'empty response' });
       console.error(`Gemini error: ${resp || 'empty response'}`);
       process.exit(1);
     }
 
-    if (opts.outputFile) {
-      try { fs.writeFileSync(opts.outputFile, resp, 'utf8'); } catch (e) { log(`write failed: ${e.message}`); }
-    } else {
-      console.log(resp);
-    }
+    writeOutput({ status: 'ok', response: resp });
+    if (!opts.outputFile) console.log(resp);
     if (opts.appDir) {
       try {
         fs.mkdirSync(opts.appDir, { recursive: true });
@@ -587,6 +609,7 @@ async function dump(page) {
     try { await page.close(); } catch (e) { }
     process.exit(0);
   } catch (e) {
+    writeOutput({ status: 'error', message: e.message });
     console.error(e.message);
     try { await page.close(); } catch (e) { }
     process.exit(1);
