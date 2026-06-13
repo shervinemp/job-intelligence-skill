@@ -338,7 +338,6 @@ def main():
     reject_p = sub.add_parser("reject", help="Reject an extracted job")
     reject_p.add_argument("jids", nargs="+")
     sub.add_parser("review", help="Review extracted jobs for admit/reject")
-    sub.add_parser("undo", help="Delete job and re-queue for extraction").add_argument("jid")
     sub.add_parser("help", help="This message")
 
     args = parser.parse_args()
@@ -360,8 +359,6 @@ def main():
         cmd_reject(*args.jids)
     elif args.command == "review":
         cmd_review(args.count)
-    elif args.command == "undo":
-        cmd_reset(args.jid)
     elif args.command == "auto" or args.command is None:
         cmd_auto()
     elif args.command == "help":
