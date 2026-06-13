@@ -397,6 +397,9 @@ def cmd_retry(job_id=None, feedback=None, from_stages=None):
         state = load()
         stages = [s.strip() for s in from_stages.split(",")]
         targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in stages]
+        if not targets:
+            print(f"No jobs in stage(s): {from_stages}", file=sys.stderr)
+            return
         from lib.config import RESULTS_DIR
         processed = 0
         for jid, entry in targets:
