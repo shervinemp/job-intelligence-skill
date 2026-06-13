@@ -397,10 +397,24 @@ def cmd_retry(job_id=None, feedback=None, from_stages=None):
         state = load()
         stages = [s.strip() for s in from_stages.split(",")]
         targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in stages]
+        from lib.config import RESULTS_DIR
+        processed = 0
         for jid, entry in targets:
             advance(entry, "described", error=None)
-            print(f"  {jid}: -> described", file=sys.stderr)
-        print(f"Redo: {len(targets)} jobs", file=sys.stderr)
+            resp_path = os.path.join(RESULTS_DIR, jid, "gemini_response.txt")
+            prev = ""
+            if os.path.exists(resp_path):
+                with open(resp_path, encoding="utf-8") as f:
+                    prev = f.read()
+            success, result = generate_tailored_docs(entry, feedback=None, prev_response=prev)
+            if success:
+                advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
+                processed += 1
+                print(f"  {jid}: re-tailored", file=sys.stderr)
+            else:
+                advance(entry, "failed", error=str(result))
+                print(f"  {jid}: re-tailor failed - {result}", file=sys.stderr)
+        print(f"Retry from {from_stages}: {processed}/{len(targets)} succeeded", file=sys.stderr)
         return
     if job_id:
         state = load()
