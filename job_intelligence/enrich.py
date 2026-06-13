@@ -330,6 +330,22 @@ def cmd_retry_skipped():
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
+def cmd_undo(jid):
+    state = load()
+    entry = state.get("jobs", {}).get(jid)
+    if not entry:
+        print(f"Job not found: {jid}", file=sys.stderr)
+        return
+    if entry.get("stage") not in ("described",):
+        print(f"Job is {entry.get('stage')} - can't undo from here", file=sys.stderr)
+        return
+    advance(entry, "extracted", error=None)
+    conn = get_conn()
+    conn.execute("DELETE FROM job_documents WHERE doc_type='description' AND job_id=?", (jid,))
+    conn.commit()
+    print(f"  {jid}: described -> extracted (description cleared)", file=sys.stderr)
+
+
 def cmd_help():
     print("Usage:", file=sys.stderr)
     print("  [--count N] [--curl] [--force] [--refresh] [--verbose]   Fetch descriptions (default 3)", file=sys.stderr)
@@ -431,6 +447,7 @@ def main():
     sub.add_parser("open", help="Open job in Chrome").add_argument("jid", nargs="?")
     sub.add_parser("retry", help="Retry failed fetches")
     sub.add_parser("retry-skipped", help="Reset skipped back to extracted")
+    sub.add_parser("undo", help="Move described job back to extracted").add_argument("jid")
     sub.add_parser("status", help="Pipeline state")
     sub.add_parser("help", help="This message")
 
@@ -448,6 +465,8 @@ def main():
         cmd_retry(use_playwright=not args.curl)
     elif args.command == "retry-skipped":
         cmd_retry_skipped()
+    elif args.command == "undo":
+        cmd_undo(args.jid)
     elif args.command == "status":
         cmd_status()
     elif args.command == "help":
