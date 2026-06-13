@@ -5,8 +5,8 @@ Usage:
   tailor.py done <jid> [jid...]       Mark job(s) as applied
   tailor.py skip <jid> [jid...]       Skip job(s)
   tailor.py retry                     Retry all failed (batch)
-  tailor.py retry <jid>               Move job back to described (re-queue)
-  tailor.py retry <jid> --feedback "x" One-shot re-tailor with feedback
+  tailor.py retry <jid>               Re-tailor a specific job
+  tailor.py retry <jid> --feedback "x" Re-tailor with feedback
   tailor.py retry --from <stage>      Batch move stage to described
   tailor.py undo <jid>                Move job back to described (re-queue)
   tailor.py redo <jid>                Alias for undo
@@ -409,22 +409,20 @@ def cmd_retry(job_id=None, feedback=None, from_stages=None):
             print(f"Job not found: {job_id}", file=sys.stderr)
             return
         advance(entry, "described", error=None)
-        if feedback:
-            from lib.config import RESULTS_DIR
-            resp_path = os.path.join(RESULTS_DIR, job_id, "gemini_response.txt")
-            prev = ""
-            if os.path.exists(resp_path):
-                with open(resp_path, encoding="utf-8") as f:
-                    prev = f.read()
-            success, result = generate_tailored_docs(entry, feedback=feedback, prev_response=prev)
-            if success:
-                advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
-                print(f"  {job_id}: re-tailored with feedback", file=sys.stderr)
-            else:
-                advance(entry, "failed", error=str(result))
-                print(f"  {job_id}: re-tailor failed - {result}", file=sys.stderr)
+        from lib.config import RESULTS_DIR
+        resp_path = os.path.join(RESULTS_DIR, job_id, "gemini_response.txt")
+        prev = ""
+        if os.path.exists(resp_path):
+            with open(resp_path, encoding="utf-8") as f:
+                prev = f.read()
+        success, result = generate_tailored_docs(entry, feedback=feedback, prev_response=prev)
+        if success:
+            advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
+            msg = f"re-tailored with feedback" if feedback else "re-tailored"
+            print(f"  {job_id}: {msg}", file=sys.stderr)
         else:
-            print(f"  {job_id}: -> described", file=sys.stderr)
+            advance(entry, "failed", error=str(result))
+            print(f"  {job_id}: re-tailor failed - {result}", file=sys.stderr)
         return
     state = load()
     failed = get_failed(state)
@@ -575,17 +573,12 @@ def cmd_help():
         file=sys.stderr,
     )
     print("  skip <jid> [jid...]                          Skip", file=sys.stderr)
-    print(
-        "  redo <jid>                                   Re-tailor from described",
-        file=sys.stderr,
-    )
-    print(
-        "  redo --from tailored,applied,failed          Batch redo by stage",
-        file=sys.stderr,
-    )
-    print(
-        "  retry                                        Retry failed", file=sys.stderr
-    )
+    print("  undo <jid>                                   Move back to described", file=sys.stderr)
+    print("  redo <jid>                                   Alias for undo", file=sys.stderr)
+    print("  retry                                        Retry all failed", file=sys.stderr)
+    print("  retry <jid>                                  Re-tailor a job", file=sys.stderr)
+    print("  retry <jid> --feedback \"x\"                  Re-tailor with feedback", file=sys.stderr)
+    print("  retry --from <stage>                         Batch move stage to described", file=sys.stderr)
     print(
         "  reset <jid> [--hard]                         Reset to described or extracted",
         file=sys.stderr,
