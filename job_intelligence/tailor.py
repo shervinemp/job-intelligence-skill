@@ -4,8 +4,12 @@ Usage:
   tailor.py [--count N]               Craft N described jobs (default: 1)
   tailor.py done <jid> [jid...]       Mark job(s) as applied
   tailor.py skip <jid> [jid...]       Skip job(s)
-  tailor.py redo <jid>                Re-tailor a job
-  tailor.py retry                     Retry all failed
+  tailor.py retry                     Retry all failed (batch)
+  tailor.py retry <jid>               Move job back to described (re-queue)
+  tailor.py retry <jid> --feedback "x" One-shot re-tailor with feedback
+  tailor.py retry --from <stage>      Batch move stage to described
+  tailor.py undo <jid>                Move job back to described (re-queue)
+  tailor.py redo <jid>                Alias for undo
   tailor.py reset <jid> [--hard]      Reset a job to described or extracted
   tailor.py reset --all [--hard]      Mass reset
   tailor.py ready [<jid>]             Open URL + files for a tailored job
@@ -46,7 +50,7 @@ Job Description:
 {job_description}"""
 
 
-def generate_tailored_docs(job_entry):
+def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
     job = job_entry
     url = job.get("url", "")
     job_id = hashlib.md5(url.encode()).hexdigest()[:16]
@@ -104,11 +108,14 @@ def generate_tailored_docs(job_entry):
     if notes:
         prompt += f"\n\nContext: {notes}"
 
-    prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
+    if feedback and prev_response:
+        prompt += f"\n\n--- YOUR PREVIOUS OUTPUT (address feedback below) ---\n{prev_response[:3000]}"
+        prompt += f"\n\n--- FEEDBACK FROM REVIEW ---\n{feedback}"
 
     tailor_mode = os.environ.get("JI_TAILOR", "agent")
 
     if tailor_mode == "agent":
+        prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
         prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
         try:
             with open(prompt_path) as f:
@@ -382,7 +389,40 @@ def cmd_resume(job_id):
         print(f"No application files for {job_id}", file=sys.stderr)
 
 
-def cmd_retry():
+def cmd_retry(job_id=None, feedback=None, from_stages=None):
+    if from_stages:
+        state = load()
+        stages = [s.strip() for s in from_stages.split(",")]
+        targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in stages]
+        for jid, entry in targets:
+            advance(entry, "described", error=None)
+            print(f"  {jid}: -> described", file=sys.stderr)
+        print(f"Redo: {len(targets)} jobs", file=sys.stderr)
+        return
+    if job_id:
+        state = load()
+        entry = state["jobs"].get(job_id)
+        if not entry:
+            print(f"Job not found: {job_id}", file=sys.stderr)
+            return
+        advance(entry, "described", error=None)
+        if feedback:
+            from lib.config import RESULTS_DIR
+            resp_path = os.path.join(RESULTS_DIR, job_id, "gemini_response.txt")
+            prev = ""
+            if os.path.exists(resp_path):
+                with open(resp_path, encoding="utf-8") as f:
+                    prev = f.read()
+            success, result = generate_tailored_docs(entry, feedback=feedback, prev_response=prev)
+            if success:
+                advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
+                print(f"  {job_id}: re-tailored with feedback", file=sys.stderr)
+            else:
+                advance(entry, "failed", error=str(result))
+                print(f"  {job_id}: re-tailor failed - {result}", file=sys.stderr)
+        else:
+            print(f"  {job_id}: -> described", file=sys.stderr)
+        return
     state = load()
     failed = get_failed(state)
     if not failed:
@@ -394,12 +434,7 @@ def cmd_retry():
         advance(entry, "described")
         success, result = generate_tailored_docs(entry)
         if success:
-            advance(
-                entry,
-                "tailored",
-                response_path=result.get("response_path"),
-                scripts=result.get("scripts", []),
-            )
+            advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
             processed += 1
             print(f"  {job_id}: retry success", file=sys.stderr)
         else:
@@ -581,9 +616,9 @@ def cmd_help():
     )
 
 
-def cmd_redo(job_id):
+def cmd_undo(job_id):
     if not job_id:
-        print("Usage: python3 tailor.py redo <job_id>", file=sys.stderr)
+        print("Usage: python3 tailor.py undo <job_id>", file=sys.stderr)
         return
     state = load()
     if job_id not in state.get("jobs", {}):
@@ -591,12 +626,9 @@ def cmd_redo(job_id):
         return
     entry = state["jobs"][job_id]
     old_stage = entry.get("stage")
-    if old_stage not in ("tailored", "applied", "failed", "skipped"):
-        print(f"Job is {old_stage} - cannot redo", file=sys.stderr)
-        return
     advance(entry, "described", error=None)
     print(
-        f"Redo: {entry.get('title')} @ {entry.get('company')} ({old_stage} -> described)",
+        f"Undone: {entry.get('title')} @ {entry.get('company')} ({old_stage} -> described)",
         file=sys.stderr,
     )
     print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
@@ -660,12 +692,14 @@ def main():
         help="Path to generated PDF (verifies file exists before marking applied)",
     )
     sub.add_parser("skip", help="Skip job").add_argument("jids", nargs="+")
-    redo_p = sub.add_parser("redo", help="Re-tailor from described")
+    undo_p = sub.add_parser("undo", help="Move job back to described (re-queue)")
+    undo_p.add_argument("jid", nargs="?")
+    redo_p = sub.add_parser("redo", help="Alias for undo (backward compat)")
     redo_p.add_argument("jid", nargs="?")
-    redo_p.add_argument(
-        "--from", dest="from_stages", help="Batch redo by stage (comma-separated)"
-    )
-    sub.add_parser("retry", help="Retry failed jobs")
+    retry_p = sub.add_parser("retry", help="Retry failed, or re-process a specific job")
+    retry_p.add_argument("jid", nargs="?")
+    retry_p.add_argument("--feedback", help="What to fix (triggers one-shot re-tailor)")
+    retry_p.add_argument("--from", dest="from_stages", help="Batch retry by stage (comma-separated)")
     reset_p = sub.add_parser("reset", help="Reset job stage")
     reset_p.add_argument("target", nargs="?", help="jid or --all")
     reset_p.add_argument(
@@ -687,23 +721,10 @@ def main():
         cmd_done(*args.jids, pdf_path=args.pdf)
     elif args.command == "skip":
         cmd_skip(*args.jids)
-    elif args.command == "redo":
-        if getattr(args, "from_stages", None):
-            state = load()
-            stages = [s.strip() for s in args.from_stages.split(",")]
-            targets = [
-                (jid, e) for jid, e in state["jobs"].items() if e.get("stage") in stages
-            ]
-            count = 0
-            for jid, entry in targets:
-                advance(entry, "described", error=None)
-                print(f"  {jid}: {entry.get('stage')} -> described", file=sys.stderr)
-                count += 1
-            print(f"Redo: {count} jobs", file=sys.stderr)
-        else:
-            cmd_redo(args.jid)
+    elif args.command in ("undo", "redo"):
+        cmd_undo(args.jid)
     elif args.command == "retry":
-        cmd_retry()
+        cmd_retry(job_id=args.jid, feedback=args.feedback, from_stages=getattr(args, "from_stages", None))
     elif args.command == "reset":
         target = args.target
         hard = args.hard
