@@ -30,7 +30,7 @@ Automated job discovery, description fetching, CV tailoring, and auto-apply — 
                                      └────────┬─────────┘
                                               │
                                      ┌────────▼─────────┐
-                                     │    enrich.py      │
+                                     │    enrich.py     │
                                      │ admit/reject/flag│
                                      └────────┬─────────┘
                                               │
