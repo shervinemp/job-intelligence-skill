@@ -173,8 +173,8 @@ def _migrate_schema():
     except sqlite3.OperationalError:
         pass
     # Migrate stage='skipped'/'failed' to state column
-    c.execute("UPDATE jobs SET state='skipped' WHERE stage='skipped' AND state='active'")
-    c.execute("UPDATE jobs SET state='failed' WHERE stage='failed' AND state='active'")
+    c.execute("UPDATE jobs SET state='rejected', stage='described' WHERE stage='skipped' AND state='active'")
+    c.execute("UPDATE jobs SET state='failed', stage='described' WHERE stage='failed' AND state='active'")
     c.commit()
 
 
@@ -215,7 +215,7 @@ def load_state():
         "SELECT stage, state, COUNT(*) as cnt FROM jobs GROUP BY stage, state"
     ).fetchall()
     stage_counts = {s: 0 for s in STAGES}
-    state_counts = {"active": 0, "skipped": 0, "failed": 0}
+    state_counts = {"active": 0, "rejected": 0, "failed": 0}
     for sr in stage_rows:
         st = sr["stage"]
         if sr["state"] == "active" and st in stage_counts:
