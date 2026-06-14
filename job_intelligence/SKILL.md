@@ -38,7 +38,7 @@ Before running pipeline, read these:
 | `tailor.py reject <jid>` | Skip |
 | `tailor.py undo <jid>` | Move back one stage |
 | `tailor.py retry [<jid>] [--feedback "x"]` | Retry failed or re-tailor with feedback |
-| `tailor.py reset --from failed,skipped` | Reset by stage |
+| `tailor.py reset --stage failed,skipped` | Reset by stage |
 | `extract.py reset` | Wipe DB, fresh start |
 | `lib/ask_api.py [--img <path>] --prompt <text>` | Query LLM API |
 | `status` | Pipeline state + next step |
