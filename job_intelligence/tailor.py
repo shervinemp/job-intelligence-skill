@@ -2,44 +2,26 @@
 
 Usage:
   tailor.py [--count N]               Craft N described jobs (default: 1)
-  tailor.py done <jid> [jid...]       Mark job(s) as applied
+  tailor.py admit <jid> [jid...]      Mark job as tailored (also: done)
   tailor.py skip <jid> [jid...]       Skip job(s)
   tailor.py retry                     Retry all failed (batch)
   tailor.py retry <jid>               Re-tailor a specific job
   tailor.py retry <jid> --feedback "x" Re-tailor with feedback
-  tailor.py retry --from <stage>      Batch move stage to described
-  tailor.py undo <jid>                Move job back to described (re-queue)
-  tailor.py redo <jid>                Alias for undo
-  tailor.py reset <jid> [--hard]      Reset a job to described or extracted
-  tailor.py reset --all [--hard]      Mass reset
-  tailor.py ready [<jid>]             Open URL + files for a tailored job
-  tailor.py resume <jid>              Show application files
-  tailor.py status                    Pipeline status
-  tailor.py list-gems                 List Gemini gems
+  tailor.py undo <jid>                Move job back one stage
+  tailor.py reset <jid>               Reset job to extracted (first stage)
+  tailor.py reset --all               Mass reset
+  tailor.py reset --from <stage>      Reset by stage
 """
 
-import hashlib
-import json
-import os
-import re
-import subprocess
-import sys
-import webbrowser
+import hashlib, json, os, re, subprocess, sys
 from datetime import datetime
 
 from lib.db import load, advance, get_failed, pipeline_status
-from lib.db import (
-    desc_get,
-    app_save,
-    app_get,
-    app_list,
-)
-from lib.call_gemini import (
-    call_gemini_node,
-    list_gems,
-)
+from lib.db import desc_get, app_save, app_get, app_list
+from lib.call_gemini import call_gemini_node, list_gems
 from lib.extract_pdf import extract_and_run
 from lib.platforms import clean as clean_desc
+
 
 JOB_PROMPT_TEMPLATE = """Job Title: {title}
 Company: {company}
@@ -62,13 +44,8 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
 
     cat = job.get("category")
     if not cat:
-        return (
-            False,
-            f"No category for job {job_id} — enrich.py admit --category <name> first",
-        )
-    cat_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "categories.json"
-    )
+        return False, f"No category for job {job_id} — enrich.py admit --category <name> first"
+    cat_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "categories.json")
     try:
         with open(cat_path) as f:
             cat_info = json.load(f).get(cat)
@@ -77,43 +54,29 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
     if not cat_info:
         return False, f"Category '{cat}' not in categories.json"
     gem = cat_info.get("gem")
-    title_clean = job.get("title", "Unknown").split("·")[0].split("\u00b7")[0].strip()
+    title_clean = job.get("title", "Unknown").split("\u00b7")[0].strip()
     desc_clean = description
     for bad, good in [
-        ("\u200b", ""),
-        ("\xa0", " "),
-        ("\u2013", "-"),
-        ("\u2014", "--"),
-        ("\u2018", "'"),
-        ("\u2019", "'"),
-        ("\u201c", '"'),
-        ("\u201d", '"'),
-        ("\u2026", "..."),
-        ("\u2022", "-"),
-        ("\u25e6", "-"),
-        ("\u00b7", "-"),
+        ("\u200b", ""), ("\xa0", " "), ("\u2013", "-"), ("\u2014", "--"),
+        ("\u2018", "'"), ("\u2019", "'"), ("\u201c", '"'), ("\u201d", '"'),
+        ("\u2026", "..."), ("\u2022", "-"), ("\u25e6", "-"), ("\u00b7", "-"),
     ]:
         desc_clean = desc_clean.replace(bad, good)
-
     desc_clean = re.sub(r"https?://\S+", "", desc_clean)
     desc_clean = re.sub(r"\n{2,}", "\n", desc_clean).strip()
 
     prompt = JOB_PROMPT_TEMPLATE.format(
-        title=title_clean,
-        company=job.get("company", "Unknown"),
-        location=job.get("location", "Unknown"),
-        job_description=desc_clean,
+        title=title_clean, company=job.get("company", "Unknown"),
+        location=job.get("location", "Unknown"), job_description=desc_clean,
     )
     notes = job.get("notes", "")
     if notes:
         prompt += f"\n\nContext: {notes}"
-
     if feedback and prev_response:
         prompt += f"\n\n--- YOUR PREVIOUS OUTPUT (address feedback below) ---\n{prev_response[:3000]}"
         prompt += f"\n\n--- FEEDBACK FROM REVIEW ---\n{feedback}"
 
     tailor_mode = os.environ.get("JI_TAILOR", "agent")
-
     if tailor_mode == "agent":
         prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
         try:
@@ -122,50 +85,35 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         except FileNotFoundError:
             agent_instructions = "Write a Python script that generates a tailored CV PDF for this job."
         prompt = agent_instructions + "\n\n---\n\n" + prompt
-
     prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
 
     if tailor_mode == "agent":
         from lib.config import RESULTS_DIR
-
         script_dir = os.path.join(RESULTS_DIR, job_id)
         print(f"PROMPT: generate script.py at {script_dir}/")
-        print(
-            f"  Instructions: read the full prompt above, write script.py, then run: python3 tailor.py done {job_id}",
-            file=sys.stderr,
-        )
+        print(f"  Instructions: read the full prompt above, write script.py, then run: tailor.py admit {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
     from lib.config import RESULTS_DIR
-
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
-    # Clear stale response file so a rate-limited exit doesn't reuse old content
     stale = os.path.join(app_dir, "gemini_response.txt")
     if os.path.exists(stale):
         os.remove(stale)
-    success, output = call_gemini_node(
-        [prompt, "--app-dir", app_dir], timeout_seconds=600, gem=gem
-    )
-
+    success, output = call_gemini_node([prompt, "--app-dir", app_dir], timeout_seconds=600, gem=gem)
     if not success:
         response_path = os.path.join(app_dir, "gemini_response.txt")
         if os.path.exists(response_path):
-            with open(response_path, "r", encoding="utf-8") as f:
+            with open(response_path, encoding="utf-8") as f:
                 content = f.read().strip()
             if len(content) > 50:
                 success, output = True, content
     if not success:
         return False, output
-
     app_save(job_id, "gemini_response.txt", output)
 
     strategy_path = None
-    strategy_match = re.search(
-        r"(?:1\.\s*)?(Strategy.*?)(?=\n\s*(?:2\s*[&.]|3\.|Optimized|$))",
-        output,
-        re.DOTALL,
-    )
+    strategy_match = re.search(r"(?:1\.\s*)?(Strategy.*?)(?=\n\s*(?:2\s*[&.]|3\.|Optimized|$))", output, re.DOTALL)
     if strategy_match:
         strategy_text = strategy_match.group(1).strip()
         app_save(job_id, "strategy.md", strategy_text)
@@ -173,21 +121,16 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
 
     saved_scripts, notes = extract_and_run(output, app_dir)
     notes.append(f"Full response: db://{job_id}/gemini_response.txt")
-
     return True, {
         "response_path": f"db://{job_id}/gemini_response.txt",
-        "text": output[:2000],
-        "scripts": saved_scripts,
-        "strategy_path": strategy_path,
-        "notes": "; ".join(notes),
+        "text": output[:2000], "scripts": saved_scripts,
+        "strategy_path": strategy_path, "notes": "; ".join(notes),
     }
 
 
 def cmd_craft(count=1):
     state = load()
-    described = [
-        (jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described"
-    ]
+    described = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described"]
     if not described:
         failed_count = state["stages"].get("failed", 0)
         if failed_count:
@@ -195,53 +138,37 @@ def cmd_craft(count=1):
         else:
             print(f"ALL_DONE", file=sys.stderr)
         return
-
     processed = failed_count = 0
     batch = described if count == -1 else described[:count]
     for jid, entry in batch:
         title = entry.get("title", "?")
         company = entry.get("company", "?")
-        url = entry.get("url", "")
         if count > 1:
             print(f"\nProcessing: {title} @ {company}", file=sys.stderr)
         else:
             print(f"\nJOB {jid} {title} @ {company}", file=sys.stderr)
-            print(f"URL: {url}")
+            print(f"URL: {entry.get('url', '')}")
             from lib.config import RESULTS_DIR
-
             print(f"DIR: {os.path.join(RESULTS_DIR, jid)}")
-
         try:
             success, result = generate_tailored_docs(entry)
             mode = os.environ.get("JI_TAILOR", "agent")
             if success and mode == "agent":
-                print(
-                    f"  PROMPT_READY {jid} — write script.py then run 'done {jid} --pdf <path>'",
-                    file=sys.stderr,
-                )
+                print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'", file=sys.stderr)
                 processed += 1
-            elif success:  # gem route — PDF auto-generated
+            elif success:
                 if count == 1:
-                    print(
-                        f"  COMPLETE {jid} — run 'done {jid}' to confirm",
-                        file=sys.stderr,
-                    )
+                    print(f"  COMPLETE {jid} — run 'admit {jid}' to confirm", file=sys.stderr)
                     text = result.get("text", "")
                     if text:
                         print(f"\n---RESPONSE---\n{text}\n---", file=sys.stderr)
                 else:
-                    print(
-                        f"  Complete -> run 'done <jid>' for each job", file=sys.stderr
-                    )
+                    print(f"  Complete -> run 'admit <jid>' for each job", file=sys.stderr)
                 processed += 1
             else:
                 err_str = str(result)[:120]
-                if any(
-                    x in err_str
-                    for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]
-                ):
+                if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
                     print(f"  TRANSIENT {jid} — {err_str}", file=sys.stderr)
-                    # Leave at described, stop batch — transient error
                     failed_count += 1
                     break
                 advance(entry, "failed", error=str(result)[:200])
@@ -251,13 +178,11 @@ def cmd_craft(count=1):
             advance(entry, "failed", error=str(e)[:200])
             print(f"  ERROR {jid} {str(e)[:120]}", file=sys.stderr)
             failed_count += 1
-
     if count > 1:
         print(f"\nDone. Crafted: {processed}, Failed: {failed_count}", file=sys.stderr)
 
 
 def craft_jid(jid):
-    """Tailor a specific job by JID. Advances from extracted/described if needed."""
     state = load()
     if jid not in state["jobs"]:
         print(f"ERROR: job {jid} not found", file=sys.stderr)
@@ -265,200 +190,59 @@ def craft_jid(jid):
     entry = state["jobs"][jid]
     stage = entry.get("stage")
     from lib.db import desc_exists
-
     if stage in ("extracted",):
         if desc_exists(jid):
             advance(entry, "described")
-            print(f"  {jid}: extracted -> described", file=sys.stderr)
         else:
-            print(
-                f"ERROR: job {jid} has no description \u2014 run enrich.py first",
-                file=sys.stderr,
-            )
+            print(f"ERROR: job {jid} has no description — run enrich.py first", file=sys.stderr)
             return
-
     if entry.get("stage") not in ("described",):
-        print(
-            f"ERROR: job {jid} is in stage '{entry.get('stage')}', can't tailor",
-            file=sys.stderr,
-        )
+        print(f"ERROR: job {jid} is in stage '{entry.get('stage')}', can't tailor", file=sys.stderr)
         return
-
     if not entry.get("category"):
-        print(
-            f"ERROR: job {jid} has no category — enrich.py admit --category <name> first",
-            file=sys.stderr,
-        )
+        print(f"ERROR: job {jid} has no category — enrich.py admit --category <name> first", file=sys.stderr)
         return
-
     success, result = generate_tailored_docs(entry)
     if success:
         mode = os.environ.get("JI_TAILOR", "agent")
-        if mode == "agent":
-            print(
-                f"  PROMPT_READY {jid} — write script.py then run 'done {jid} --pdf <path>'",
-                file=sys.stderr,
-            )
-        else:
-            print(f"  COMPLETE {jid} — run 'done {jid}' to confirm", file=sys.stderr)
+        print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'" if mode == "agent" else f"  COMPLETE {jid} — run 'admit {jid}' to confirm", file=sys.stderr)
     else:
         err_str = str(result)[:120]
-        if any(
-            x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]
-        ):
-            print(f"  TRANSIENT {jid} \u2014 {err_str}", file=sys.stderr)
+        if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
+            print(f"  TRANSIENT {jid} — {err_str}", file=sys.stderr)
         else:
             advance(entry, "failed", error=str(result)[:200])
             print(f"  FAILED {jid} {err_str}", file=sys.stderr)
 
 
-def cmd_status():
-    s = pipeline_status()
-    if not s["jobs"]:
-        print("No jobs in state. Run extract first.", file=sys.stderr)
+def cmd_admit(*job_ids, pdf_path=None):
+    if not job_ids:
+        print("Usage: python3 tailor.py admit <jid1> [jid2 ...]", file=sys.stderr)
         return
-    print(f"Jobs: {s['jobs']} total", file=sys.stderr)
-    for stage in ["extracted", "described", "tailored", "applied", "skipped", "failed"]:
-        c = s["stages"].get(stage, 0)
-        if c:
-            print(f"  {stage}: {c}", file=sys.stderr)
-    if s["staged"]["pending"]:
-        print(
-            f"  staged (pending extraction): {s['staged']['pending']}", file=sys.stderr
-        )
-    if s["auth_walls"]["count"]:
-        domains = " ".join(s["auth_walls"]["domains"])
-        print(f"  auth walls: {s['auth_walls']['count']} ({domains})", file=sys.stderr)
-    print(f"  next: {s['next_step']}", file=sys.stderr)
-
-
-def _cmd_ready(job_id):
     state = load()
-    if not state.get("jobs"):
-        return
-    entry = state["jobs"].get(job_id)
-    if not entry:
-        return
-    url = entry.get("url", "")
-    if url:
-        webbrowser.open(url)
-        print(f"Opening: {url}", file=sys.stderr)
+    count = 0
     from lib.config import RESULTS_DIR
-
-    tmp_dir = os.path.join(RESULTS_DIR, job_id)
-    os.makedirs(tmp_dir, exist_ok=True)
-    files = app_list(job_id)
-    for f in files:
-        content = app_get(job_id, f["filename"])
-        if content:
-            fpath = os.path.join(tmp_dir, f["filename"])
-            with open(fpath, "w", encoding="utf-8") as fh:
-                fh.write(content)
-    if os.path.exists(tmp_dir):
-        if sys.platform == "win32":
-            subprocess.run(["explorer", tmp_dir], shell=True)
-        elif sys.platform == "darwin":
-            subprocess.run(["open", tmp_dir])
-        else:
-            subprocess.run(["xdg-open", tmp_dir])
-        print(f"Folder: {tmp_dir}", file=sys.stderr)
-    print(f"\nReady: {entry.get('title')} @ {entry.get('company')}", file=sys.stderr)
-
-
-def cmd_ready(job_id=None):
-    state = load()
-    if not state.get("jobs"):
-        return
-    targets = []
-    for jid, entry in state["jobs"].items():
-        if job_id and jid == job_id:
-            targets = [(jid, entry)]
-            break
-        elif not job_id and entry.get("stage") == "tailored":
-            targets.append((jid, entry))
-    if not targets:
-        print("Job not found" if job_id else "No tailored jobs", file=sys.stderr)
-        return
-    for jid, entry in targets:
-        _cmd_ready(jid)
-
-
-def cmd_resume(job_id):
-    files = app_list(job_id)
-    if files:
-        for f in files:
-            print(f"  {job_id}/{f['filename']} ({f['created_at']})", file=sys.stderr)
-    else:
-        print(f"No application files for {job_id}", file=sys.stderr)
-
-
-def cmd_retry(job_id=None, feedback=None, from_stages=None):
-    if from_stages:
-        state = load()
-        stages = [s.strip() for s in from_stages.split(",")]
-        targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in stages]
-        if not targets:
-            print(f"No jobs in stage(s): {from_stages}", file=sys.stderr)
-            return
-        from lib.config import RESULTS_DIR
-        processed = 0
-        for jid, entry in targets:
-            advance(entry, "described", error=None)
-            resp_path = os.path.join(RESULTS_DIR, jid, "gemini_response.txt")
-            prev = ""
-            if os.path.exists(resp_path):
-                with open(resp_path, encoding="utf-8") as f:
-                    prev = f.read()
-            success, result = generate_tailored_docs(entry, feedback=None, prev_response=prev)
-            if success:
-                advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
-                processed += 1
-                print(f"  {jid}: re-tailored", file=sys.stderr)
-            else:
-                advance(entry, "failed", error=str(result))
-                print(f"  {jid}: re-tailor failed - {result}", file=sys.stderr)
-        print(f"Retry from {from_stages}: {processed}/{len(targets)} succeeded", file=sys.stderr)
-        return
-    if job_id:
-        state = load()
-        entry = state["jobs"].get(job_id)
-        if not entry:
+    for job_id in job_ids:
+        if job_id not in state.get("jobs", {}):
             print(f"Job not found: {job_id}", file=sys.stderr)
-            return
-        advance(entry, "described", error=None)
-        from lib.config import RESULTS_DIR
-        resp_path = os.path.join(RESULTS_DIR, job_id, "gemini_response.txt")
-        prev = ""
-        if os.path.exists(resp_path):
-            with open(resp_path, encoding="utf-8") as f:
-                prev = f.read()
-        success, result = generate_tailored_docs(entry, feedback=feedback, prev_response=prev)
-        if success:
-            advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
-            msg = f"re-tailored with feedback" if feedback else "re-tailored"
-            print(f"  {job_id}: {msg}", file=sys.stderr)
-        else:
-            advance(entry, "failed", error=str(result))
-            print(f"  {job_id}: re-tailor failed - {result}", file=sys.stderr)
-        return
-    state = load()
-    failed = get_failed(state)
-    if not failed:
-        print("No failed jobs.", file=sys.stderr)
-        return
-    print(f"Retrying {len(failed)} failed jobs...", file=sys.stderr)
-    processed = 0
-    for job_id, entry in failed:
-        advance(entry, "described")
-        success, result = generate_tailored_docs(entry)
-        if success:
-            advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
-            processed += 1
-            print(f"  {job_id}: retry success", file=sys.stderr)
-        else:
-            advance(entry, "failed", error=str(result))
-            print(f"  {job_id}: retry failed - {result}", file=sys.stderr)
-    print(f"\nRetry complete. Succeeded: {processed}/{len(failed)}", file=sys.stderr)
+            continue
+        if pdf_path and not os.path.exists(pdf_path):
+            print(f"PDF_NOT_FOUND: {job_id} — {pdf_path}", file=sys.stderr)
+            continue
+        advance(state["jobs"][job_id], "tailored", applied_at=datetime.now().isoformat())
+        job_url = state["jobs"][job_id].get("url", "")
+        if job_url and sys.platform == "win32":
+            url_path = os.path.join(RESULTS_DIR, job_id, f"{job_id}.url")
+            try:
+                os.makedirs(os.path.dirname(url_path), exist_ok=True)
+                with open(url_path, "w") as f:
+                    f.write(f"[InternetShortcut]\nURL={job_url}\n")
+            except Exception:
+                pass
+        count += 1
+    print(f"ADMITTED:{count}", file=sys.stderr)
+    if count:
+        print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
 def cmd_skip(*job_ids):
@@ -478,53 +262,81 @@ def cmd_skip(*job_ids):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_done(*job_ids, pdf_path=None):
-    if not job_ids:
-        print("Usage: python3 tailor.py done <jid1> [jid2 ...]", file=sys.stderr)
+def cmd_undo(job_id):
+    if not job_id:
+        print("Usage: python3 tailor.py undo <job_id>", file=sys.stderr)
         return
     state = load()
-    count = 0
-    from lib.config import RESULTS_DIR
+    if job_id not in state.get("jobs", {}):
+        print(f"Job not found: {job_id}", file=sys.stderr)
+        return
+    entry = state["jobs"][job_id]
+    old_stage = entry.get("stage")
+    prev = {"applied": "tailored", "tailored": "described", "described": "extracted"}.get(old_stage)
+    if not prev:
+        print(f"Can't undo: {old_stage} is the first stage", file=sys.stderr)
+        return
+    advance(entry, prev, error=None)
+    print(f"Undone: {entry.get('title')} @ {entry.get('company')} ({old_stage} -> {prev})", file=sys.stderr)
+    print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
-    for job_id in job_ids:
-        if job_id not in state.get("jobs", {}):
+
+def cmd_retry(job_id=None, feedback=None):
+    if job_id:
+        state = load()
+        entry = state["jobs"].get(job_id)
+        if not entry:
             print(f"Job not found: {job_id}", file=sys.stderr)
-            continue
-
-        if pdf_path and not os.path.exists(pdf_path):
-            print(f"PDF_NOT_FOUND: {job_id} — {pdf_path}", file=sys.stderr)
-            continue
-
-        advance(
-            state["jobs"][job_id], "tailored", applied_at=datetime.now().isoformat()
-        )
-
-        job_url = state["jobs"][job_id].get("url", "")
-        if job_url and sys.platform == "win32":
-            url_path = os.path.join(RESULTS_DIR, job_id, f"{job_id}.url")
-            try:
-                os.makedirs(os.path.dirname(url_path), exist_ok=True)
-                with open(url_path, "w") as f:
-                    f.write(f"[InternetShortcut]\nURL={job_url}\n")
-            except Exception:
-                pass
-        count += 1
-    print(f"DONE:{count}", file=sys.stderr)
-    if count:
-        print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
+            return
+        advance(entry, "described", error=None)
+        from lib.config import RESULTS_DIR
+        resp_path = os.path.join(RESULTS_DIR, job_id, "gemini_response.txt")
+        prev = ""
+        if os.path.exists(resp_path):
+            with open(resp_path, encoding="utf-8") as f:
+                prev = f.read()
+        success, result = generate_tailored_docs(entry, feedback=feedback, prev_response=prev)
+        if success:
+            advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
+            msg = "re-tailored with feedback" if feedback else "re-tailored"
+            print(f"  {job_id}: {msg}", file=sys.stderr)
+        else:
+            advance(entry, "failed", error=str(result))
+            print(f"  {job_id}: re-tailor failed - {result}", file=sys.stderr)
+        return
+    state = load()
+    failed_jobs = get_failed(state)
+    if not failed_jobs:
+        print("No failed jobs.", file=sys.stderr)
+        return
+    # Only retry jobs that have descriptions (tailor failures, not enrich failures)
+    from lib.db import desc_exists
+    failed = [(jid, e) for jid, e in failed_jobs if desc_exists(jid)]
+    skipped = len(failed_jobs) - len(failed)
+    if skipped:
+        print(f"Skipped {skipped} jobs with no description (not tailor failures)", file=sys.stderr)
+    if not failed:
+        print("No tailor failures to retry.", file=sys.stderr)
+        return
+    print(f"Retrying {len(failed)} failed jobs...", file=sys.stderr)
+    processed = 0
+    for job_id, entry in failed:
+        advance(entry, "described")
+        success, result = generate_tailored_docs(entry)
+        if success:
+            advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
+            processed += 1
+            print(f"  {job_id}: retry success", file=sys.stderr)
+        else:
+            advance(entry, "failed", error=str(result))
+            print(f"  {job_id}: retry failed - {result}", file=sys.stderr)
+    print(f"\nRetry complete. Succeeded: {processed}/{len(failed)}", file=sys.stderr)
 
 
 def cmd_relentless(count):
-    """Like cmd_craft but retries on rate limit instead of leaving jobs at described.
-    --count N: process N described jobs
-    --count -1: process ALL described jobs
-    On rate limit: parse reset time, idle until it passes, then retry.
-    """
     import re as _re, time as _time, subprocess as _sp, sys as _sys, os as _os
     from datetime import datetime
-
     _YEAR = datetime.now().year
-
     def wait_until(target_str):
         for fmt in [f"%b %d, %I:%M %p, %Y", f"%B %d, %I:%M %p, %Y"]:
             try:
@@ -536,128 +348,35 @@ def cmd_relentless(count):
                     return
             except ValueError:
                 continue
-        print(
-            f"Rate limit — unknown reset '{target_str}', sleeping 120s", file=sys.stderr
-        )
+        print(f"Rate limit — unknown reset '{target_str}', sleeping 120s", file=sys.stderr)
         _time.sleep(120)
-
-    tailor_script = _os.path.join(
-        _os.path.dirname(_os.path.abspath(__file__)), "tailor.py"
-    )
-
+    tailor_script = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "tailor.py")
     while True:
-        r = _sp.run(
-            [_sys.executable, tailor_script, f"--count={count}"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        r = _sp.run([_sys.executable, tailor_script, f"--count={count}"], capture_output=True, text=True, timeout=300)
         output = (r.stdout or "") + (r.stderr or "")
-
         if "ALL_DONE" in output or "NO_PENDING" in output:
             s = pipeline_status()
             print(f"DONE: {s['stages'].get('tailored',0)} tailored")
             break
-
         m = _re.search(r'"resetsAt"\s*:\s*"([^"]+)"', output)
         if m:
             wait_until(m.group(1))
-            # jobs stayed at 'described' — loop retries them
             continue
-
         s = pipeline_status()
         if s.get("stages", {}).get("described", 0) == 0:
             print(f"DONE: {s['stages'].get('tailored',0)} tailored")
             break
-
         if count != -1:
-            # Non-infinite: we processed what was asked
             break
 
 
-def cmd_help():
-    print("Usage:", file=sys.stderr)
-    print(
-        "  [--count N] [--open]                         Craft CVs (default 1, no browser)",
-        file=sys.stderr,
-    )
-    print(
-        "  [--count N] --relentless                     Craft all, idle on rate limits",
-        file=sys.stderr,
-    )
-    print(
-        "  done <jid> [jid...]                          Mark applied, create .url shortcut",
-        file=sys.stderr,
-    )
-    print("  skip <jid> [jid...]                          Skip", file=sys.stderr)
-    print("  undo <jid>                                   Move back to described", file=sys.stderr)
-    print("  redo <jid>                                   Alias for undo", file=sys.stderr)
-    print("  retry                                        Retry all failed", file=sys.stderr)
-    print("  retry <jid>                                  Re-tailor a job", file=sys.stderr)
-    print("  retry <jid> --feedback \"x\"                  Re-tailor with feedback", file=sys.stderr)
-    print("  retry --from <stage>                         Batch move stage to described", file=sys.stderr)
-    print(
-        "  reset <jid> [--hard]                         Reset to described or extracted",
-        file=sys.stderr,
-    )
-    print("  reset --all [--hard]                         Mass reset", file=sys.stderr)
-    print(
-        "  reset --from failed,skipped [--hard]         Reset by stage", file=sys.stderr
-    )
-    print(
-        "  ready [<jid>]                                Open URL + files folder",
-        file=sys.stderr,
-    )
-    print(
-        "  resume <jid>                                 Show application files",
-        file=sys.stderr,
-    )
-    print(
-        "  status                                       Pipeline state", file=sys.stderr
-    )
-    print(
-        "  list-gems                                    List Gemini gems",
-        file=sys.stderr,
-    )
-    print(
-        "  help                                         This message", file=sys.stderr
-    )
-    print("", file=sys.stderr)
-    print("  --count -1: process all described jobs", file=sys.stderr)
-    print(
-        "  --relentless: on rate limit, parse reset time, sleep, retry", file=sys.stderr
-    )
-
-
-def cmd_undo(job_id):
-    if not job_id:
-        print("Usage: python3 tailor.py undo <job_id>", file=sys.stderr)
-        return
-    state = load()
-    if job_id not in state.get("jobs", {}):
-        print(f"Job not found: {job_id}", file=sys.stderr)
-        return
-    entry = state["jobs"][job_id]
-    old_stage = entry.get("stage")
-    advance(entry, "described", error=None)
-    print(
-        f"Undone: {entry.get('title')} @ {entry.get('company')} ({old_stage} -> described)",
-        file=sys.stderr,
-    )
-    print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
-
-
-def cmd_reset(job_id=None, hard=False, from_stages=None):
+def cmd_reset(job_id=None, from_stages=None):
     state = load()
     if not state.get("jobs"):
         print("No jobs.", file=sys.stderr)
         return
     if from_stages:
-        targets = [
-            (jid, e)
-            for jid, e in state["jobs"].items()
-            if e.get("stage") in from_stages
-        ]
+        targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in from_stages]
         if not targets:
             print(f"No jobs with stage in {from_stages}.", file=sys.stderr)
             return
@@ -669,106 +388,83 @@ def cmd_reset(job_id=None, hard=False, from_stages=None):
             return
         targets = [(job_id, state["jobs"][job_id])]
     else:
-        print(
-            "Usage: python3 tailor.py reset <jid> [--hard] | --all [--hard]",
-            file=sys.stderr,
-        )
+        print("Usage: python3 tailor.py reset <jid> [--all]", file=sys.stderr)
         return
-    to_stage = "extracted" if hard else "described"
     for jid, entry in targets:
         old = entry.get("stage", "?")
-        advance(entry, to_stage, error=None, response_path=None, scripts=[])
-        print(f"  {jid}: {old} -> {to_stage}", file=sys.stderr)
-    mode = "hard" if hard else "soft"
-    print(f"Reset {len(targets)} jobs ({mode}).", file=sys.stderr)
+        advance(entry, "extracted", error=None, response_path=None, scripts=[])
+        print(f"  {jid}: {old} -> extracted", file=sys.stderr)
+    print(f"Reset {len(targets)} jobs.", file=sys.stderr)
+
+
+def cmd_help():
+    print("""Usage:
+  [--count N]                               Craft CVs (default 1)
+  [--count N] --relentless                  Craft all, idle on rate limits
+  admit <jid> [jid...]                      Mark tailored (also: done)
+  skip <jid> [jid...]                       Skip
+  undo <jid>                                Move back one stage
+  retry                                     Retry all failed (batch)
+  retry <jid>                               Re-tailor a job
+  retry <jid> --feedback "text"             Re-tailor with feedback
+  reset <jid>                               Reset to extracted (first stage)
+  reset --all                               Mass reset
+  reset --from failed,skipped               Reset by stage
+  help                                      This message""", file=sys.stderr)
 
 
 def main():
     import argparse
-
-    parser = argparse.ArgumentParser(
-        prog="tailor.py", description="Tailor CVs via Gemini Web"
-    )
-    parser.add_argument(
-        "--count", type=int, default=1, help="Jobs to process (default 1, -1 = all)"
-    )
-    parser.add_argument(
-        "--relentless", action="store_true", help="Retry on rate limit with idle loop"
-    )
+    parser = argparse.ArgumentParser(prog="tailor.py", description="Tailor CVs via Gemini Web")
+    parser.add_argument("--count", type=int, default=1, help="Jobs to process (default 1, -1 = all)")
+    parser.add_argument("--relentless", action="store_true", help="Retry on rate limit with idle loop")
     parser.add_argument("--jid", help="Tailor a specific job by JID")
 
     sub = parser.add_subparsers(dest="command")
-    done_p = sub.add_parser("done", help="Mark job as applied")
+    admit_p = sub.add_parser("admit", help="Mark job as tailored")
+    admit_p.add_argument("jids", nargs="+")
+    admit_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
+    done_p = sub.add_parser("done", help="Alias for admit (backward compat)")
     done_p.add_argument("jids", nargs="+")
-    done_p.add_argument(
-        "--pdf",
-        help="Path to generated PDF (verifies file exists before marking applied)",
-    )
+    done_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
     sub.add_parser("skip", help="Skip job").add_argument("jids", nargs="+")
-    undo_p = sub.add_parser("undo", help="Move job back to described (re-queue)")
-    undo_p.add_argument("jid", nargs="?")
-    redo_p = sub.add_parser("redo", help="Alias for undo (backward compat)")
-    redo_p.add_argument("jid", nargs="?")
     retry_p = sub.add_parser("retry", help="Retry failed, or re-process a specific job")
     retry_p.add_argument("jid", nargs="?")
     retry_p.add_argument("--feedback", help="What to fix (triggers one-shot re-tailor)")
-    retry_p.add_argument("--from", dest="from_stages", help="Batch retry by stage (comma-separated)")
-    reset_p = sub.add_parser("reset", help="Reset job stage")
+    sub.add_parser("undo", help="Move job back one stage").add_argument("jid", nargs="?")
+    reset_p = sub.add_parser("reset", help="Reset job to extracted (first stage)")
     reset_p.add_argument("target", nargs="?", help="jid or --all")
-    reset_p.add_argument(
-        "--hard", action="store_true", help="Reset to extracted instead of described"
-    )
-    reset_p.add_argument(
-        "--from", dest="from_stages", help="Reset by stage (comma-separated)"
-    )
-    sub.add_parser("status", help="Pipeline state")
-    sub.add_parser("resume", help="Show application files").add_argument(
-        "jid", nargs="?"
-    )
-    sub.add_parser("ready", help="Open URL + files").add_argument("jid", nargs="?")
-    sub.add_parser("list-gems", help="List Gemini gems")
+    reset_p.add_argument("--from", dest="from_stages", help="Reset by stage (comma-separated)")
+    sub.add_parser("help", help="This message")
 
     args = parser.parse_args()
 
-    if args.command == "done":
-        cmd_done(*args.jids, pdf_path=args.pdf)
+    if args.command in ("admit", "done"):
+        cmd_admit(*args.jids, pdf_path=args.pdf)
     elif args.command == "skip":
         cmd_skip(*args.jids)
-    elif args.command in ("undo", "redo"):
+    elif args.command == "undo":
         cmd_undo(args.jid)
     elif args.command == "retry":
-        cmd_retry(job_id=args.jid, feedback=args.feedback, from_stages=getattr(args, "from_stages", None))
+        cmd_retry(job_id=args.jid, feedback=args.feedback)
     elif args.command == "reset":
-        target = args.target
-        hard = args.hard
-        from_stages = getattr(args, "from_stages", None)
-        if from_stages:
-            from_stages = [s.strip() for s in from_stages.split(",")]
-            cmd_reset(from_stages=from_stages, hard=hard)
-        elif target == "--all":
-            cmd_reset(job_id="--all", hard=hard)
-        elif target:
-            cmd_reset(job_id=target, hard=hard)
+        if getattr(args, "from_stages", None):
+            cmd_reset(from_stages=[s.strip() for s in args.from_stages.split(",")])
+        elif args.target == "--all":
+            cmd_reset(job_id="--all")
+        elif args.target:
+            cmd_reset(job_id=args.target)
         else:
             parser.print_help()
-    elif args.command == "status":
-        cmd_status()
-    elif args.command == "resume":
-        cmd_resume(args.jid)
-    elif args.command == "ready":
-        cmd_ready(args.jid)
-    elif args.command == "list-gems":
-        list_gems()
     elif args.command == "help":
         cmd_help()
     elif args.jid:
         craft_jid(args.jid)
     elif args.command is None:
-        count = args.count
         if args.relentless:
-            cmd_relentless(count=count)
+            cmd_relentless(count=args.count)
         else:
-            cmd_craft(count=count)
+            cmd_craft(count=args.count)
 
 
 if __name__ == "__main__":
