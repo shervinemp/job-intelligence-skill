@@ -38,26 +38,48 @@ def cmd_shell():
 
 
 def cmd_stats():
-    s = load_state()
-    print(f"Total jobs: {len(s['jobs'])}")
+    from lib.db import get_conn
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT stage, state, COUNT(*) as cnt FROM jobs GROUP BY stage, state ORDER BY stage"
+    ).fetchall()
+    stages = ["extracted", "described", "tailored", "applied"]
+    states = ["active", "rejected", "failed"]
+    matrix = {st: {st2: 0 for st2 in states} for st in stages}
+    for r in rows:
+        if r["stage"] in matrix and r["state"] in states:
+            matrix[r["stage"]][r["state"]] = r["cnt"]
+
+    print(f"Total jobs: {conn.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]}")
     print()
-    print("Pipeline:")
-    for stage in STAGES:
-        c = s["stages"].get(stage, 0)
-        bar = "#" * (c // 10) if c else ""
-        print(f"  {stage:15s} {c:4d} {bar}")
-    print("States:")
-    for st, c in s["states"].items():
-        if c:
-            print(f"  {st:15s} {c:4d}")
+    print(f"{'Stage/State':16s}", end="")
+    for st in states:
+        print(f"{st:>10s}", end="")
+    print(f"{'Total':>8s}")
+    print("-" * 50)
+    total_by_stage = 0
+    for stage in stages:
+        row = matrix[stage]
+        row_total = sum(row.values())
+        print(f"{stage:16s}", end="")
+        for st in states:
+            print(f"{row[st]:>10d}", end="")
+        print(f"{row_total:>8d}")
+        total_by_stage += row_total
+    print("-" * 50)
+    print(f"{'Total':16s}", end="")
+    grand = 0
+    for st in states:
+        c = sum(matrix[s][st] for s in stages)
+        print(f"{c:>10d}", end="")
+        grand += c
+    print(f"{grand:>8d}")
     print()
     by_stage = job_count_by_stage()
     described = by_stage.get("described", 0)
     tailored = by_stage.get("tailored", 0)
-    applied = by_stage.get("applied", 0)
     print(f"Need tailoring: {described}")
     print(f"Ready to apply: {tailored}")
-    print(f"Applied: {applied}")
 
 
 
