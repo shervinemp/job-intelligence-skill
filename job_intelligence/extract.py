@@ -142,7 +142,7 @@ def cmd_reject(*jids):
     conn = get_conn()
     count = 0
     for jid in jids:
-        c = conn.execute("UPDATE jobs SET stage='skipped' WHERE id=?", (jid,))
+        c = conn.execute("UPDATE jobs SET state='skipped' WHERE id=?", (jid,))
         if c.rowcount:
             count += 1
     conn.commit()
@@ -282,7 +282,7 @@ def cmd_status():
     s = pipeline_status()
     p = s['staged']['total'] - s['staged']['pending']
     print(f"Staged: {s['staged']['total']} | Extracted: {p} | Pending: {s['staged']['pending']}", file=sys.stderr)
-    for stage in ["extracted", "described", "tailored", "applied", "skipped", "failed"]:
+    for stage in ["extracted", "described", "tailored", "applied"]:
         c = s["stages"].get(stage, 0)
         if c:
             print(f"  {stage}: {c}", file=sys.stderr)

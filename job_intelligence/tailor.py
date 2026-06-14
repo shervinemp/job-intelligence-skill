@@ -169,11 +169,11 @@ def cmd_craft(count=1):
                     print(f"  TRANSIENT {jid} — {err_str}", file=sys.stderr)
                     failed_count += 1
                     break
-                advance(entry, "failed", error=str(result)[:200])
+                advance(entry, entry.get("stage"), state="failed", error=str(result)[:200])
                 print(f"  FAILED {jid} {err_str}", file=sys.stderr)
                 failed_count += 1
         except Exception as e:
-            advance(entry, "failed", error=str(e)[:200])
+            advance(entry, entry.get("stage"), state="failed", error=str(e)[:200])
             print(f"  ERROR {jid} {str(e)[:120]}", file=sys.stderr)
             failed_count += 1
     if count > 1:
@@ -209,7 +209,7 @@ def craft_jid(jid):
         if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
             print(f"  TRANSIENT {jid} — {err_str}", file=sys.stderr)
         else:
-            advance(entry, "failed", error=str(result)[:200])
+            advance(entry, entry.get("stage"), state="failed", error=str(result)[:200])
             print(f"  FAILED {jid} {err_str}", file=sys.stderr)
 
 
@@ -246,11 +246,12 @@ def cmd_reject(*job_ids):
     if not job_ids:
         print("Usage: python3 tailor.py reject <jid1> [jid2 ...]", file=sys.stderr)
         return
-    state = load()
+    s = load()
     count = 0
     for job_id in job_ids:
-        if job_id in state.get("jobs", {}):
-            advance(state["jobs"][job_id], "skipped")
+        if job_id in s.get("jobs", {}):
+            entry = s["jobs"][job_id]
+            advance(entry, entry.get("stage"), state="skipped")
             count += 1
         else:
             print(f"Job not found: {job_id}", file=sys.stderr)
@@ -297,7 +298,7 @@ def cmd_retry(job_id=None, feedback=None):
             msg = "re-tailored with feedback" if feedback else "re-tailored"
             print(f"  {job_id}: {msg}", file=sys.stderr)
         else:
-            advance(entry, "failed", error=str(result))
+            advance(entry, entry.get("stage"), state="failed", error=str(result))
             print(f"  {job_id}: re-tailor failed - {result}", file=sys.stderr)
         return
     state = load()
@@ -324,7 +325,7 @@ def cmd_retry(job_id=None, feedback=None):
             processed += 1
             print(f"  {job_id}: retry success", file=sys.stderr)
         else:
-            advance(entry, "failed", error=str(result))
+            advance(entry, entry.get("stage"), state="failed", error=str(result))
             print(f"  {job_id}: retry failed - {result}", file=sys.stderr)
     print(f"\nRetry complete. Succeeded: {processed}/{len(failed)}", file=sys.stderr)
 

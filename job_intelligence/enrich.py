@@ -229,7 +229,7 @@ def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbo
         else:
             if result == "auth_wall":
                 auth_walls.add(jid, url, title, company)
-            advance(entry, "failed", error=str(result))
+            advance(entry, entry.get("stage"), state="failed", error=str(result))
             failed += 1
     print(f"FETCHED:{fetched} FAILED:{failed}", file=sys.stderr)
 
@@ -295,7 +295,8 @@ def cmd_skip(*jids):
     count = 0
     for jid in jids:
         if jid in state.get("jobs", {}):
-            advance(state["jobs"][jid], "skipped", error="garbage")
+            entry = state["jobs"][jid]
+            advance(entry, entry.get("stage"), state="skipped", error="garbage")
             count += 1
     print(f"REJECT:{count}", file=sys.stderr)
     if count:
@@ -377,7 +378,7 @@ def cmd_retry(use_playwright=True):
         else:
             if result == "auth_wall":
                 auth_walls.add(jid, entry.get("url", ""), entry.get("title", ""), entry.get("company", ""))
-            advance(entry, "failed", error=str(result))
+            advance(entry, entry.get("stage"), state="failed", error=str(result))
     print(f"RETRY:{fetched}", file=sys.stderr)
 
 
