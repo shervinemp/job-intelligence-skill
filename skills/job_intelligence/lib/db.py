@@ -1,0 +1,964 @@
+"""lib/db.py — SQLite backend for the job pipeline. v3 with companies, contacts, events."""
+
+import hashlib
+import json
+import os
+import re
+import sqlite3
+import sys
+from datetime import datetime
+
+from .config import DB_PATH, STATE_DIR as DB_DIR, AUTH_WALLS_PATH
+
+STAGES = ["extracted", "described", "tailored", "applied"]
+
+_conn = None
+
+
+def get_conn():
+    global _conn
+    if _conn is None:
+        os.makedirs(DB_DIR, exist_ok=True)
+        _conn = sqlite3.connect(DB_PATH)
+        _conn.row_factory = sqlite3.Row
+        _conn.execute("PRAGMA journal_mode=WAL")
+        _conn.execute("PRAGMA foreign_keys=ON")
+        _migrate_schema()
+    return _conn
+
+
+def _import_legacy_auth_walls():
+    old_path = AUTH_WALLS_PATH
+    if not os.path.exists(old_path):
+        return
+    try:
+        with open(old_path) as f:
+            entries = json.load(f)
+        conn = get_conn()
+        for e in entries:
+            jid = e.get("jid")
+            if jid:
+                conn.execute("UPDATE jobs SET auth_wall=1 WHERE id=?", (jid,))
+        conn.commit()
+        os.remove(old_path)
+    except Exception:
+        pass
+
+
+def _create_v3_tables():
+    c = get_conn()
+    c.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS stages (
+            id TEXT PRIMARY KEY, content TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            email_id TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            company TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL DEFAULT '',
+            salary TEXT,
+            salary_min INTEGER,
+            salary_max INTEGER,
+            salary_currency TEXT DEFAULT 'USD',
+            remote_status TEXT DEFAULT '',
+            job_type TEXT NOT NULL DEFAULT 'Full-Time',
+            department TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            source_url TEXT DEFAULT '',
+            stage TEXT NOT NULL DEFAULT 'extracted' CHECK(stage IN ('extracted','described','tailored','applied')),
+            state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','rejected','failed')),
+            fit_score REAL,
+            fit_summary TEXT,
+            company_vibe TEXT,
+            error TEXT,
+            auth_wall INTEGER NOT NULL DEFAULT 0,
+            scripts TEXT NOT NULL DEFAULT '[]',
+            response_path TEXT,
+            notes TEXT NOT NULL DEFAULT '',
+            category TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            applied_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS job_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_type TEXT NOT NULL CHECK(doc_type IN ('description','application')),
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            filename TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS companies (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            domain TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            size TEXT DEFAULT '',
+            industry TEXT DEFAULT '',
+            culture_notes TEXT DEFAULT '',
+            rating REAL,
+            source_url TEXT DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS contacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+            company_id TEXT REFERENCES companies(id) ON DELETE CASCADE,
+            name TEXT NOT NULL DEFAULT '',
+            role TEXT DEFAULT '',
+            email TEXT DEFAULT '',
+            linkedin_url TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            reached_out INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS search_threads (
+            thread_id TEXT PRIMARY KEY,
+            subject TEXT NOT NULL DEFAULT '',
+            date TEXT NOT NULL DEFAULT '',
+            from_addr TEXT NOT NULL DEFAULT '',
+            searched_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            description TEXT DEFAULT '',
+            event_at TEXT,
+            completed INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+    """
+    )
+    # Add columns that might be missing on existing DBs
+    for col in [
+        "response_path TEXT",
+        "notes TEXT NOT NULL DEFAULT ''",
+        "category TEXT",
+        "auth_wall INTEGER NOT NULL DEFAULT 0",
+    ]:
+        try:
+            c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
+    _import_legacy_auth_walls()
+
+    for idx in [
+        "CREATE INDEX IF NOT EXISTS idx_jd_job ON job_documents(job_id)",
+        "CREATE INDEX IF NOT EXISTS idx_jd_type ON job_documents(doc_type, job_id)",
+        "CREATE INDEX IF NOT EXISTS idx_events_job ON events(job_id)",
+        "CREATE INDEX IF NOT EXISTS idx_contacts_job ON contacts(job_id)",
+        "CREATE INDEX IF NOT EXISTS idx_company_name ON companies(name)",
+    ]:
+        try:
+            c.execute(idx)
+        except sqlite3.OperationalError:
+            pass
+    c.commit()
+
+
+def _migrate_schema():
+    _create_v3_tables()
+    c = get_conn()
+    try:
+        c.execute("ALTER TABLE jobs ADD COLUMN state TEXT NOT NULL DEFAULT 'active'")
+    except sqlite3.OperationalError:
+        pass
+
+
+# =========================================================================
+# Jobs
+# =========================================================================
+
+
+def _row_to_job(r):
+    d = dict(r)
+    if isinstance(d.get("scripts"), str):
+        try:
+            d["scripts"] = json.loads(d["scripts"])
+        except (json.JSONDecodeError, TypeError):
+            d["scripts"] = []
+    return d
+
+
+_JOBS_COLS = (
+    "id, email_id, title, company, location, url, salary,"
+    "salary_min, salary_max, salary_currency, remote_status,"
+    "job_type, department, source, source_url, stage, state, fit_score,"
+    "fit_summary, company_vibe, error, scripts, response_path,"
+    "notes, created_at, updated_at, applied_at, category"
+)
+
+
+def _insert_job(jid, replace=False, commit=True, **fields):
+    conn = get_conn()
+    now = fields.pop("updated_at", datetime.now().isoformat())
+    scripts = fields.pop("scripts", [])
+    if isinstance(scripts, list):
+        scripts = json.dumps(scripts)
+    fields.setdefault("created_at", now)
+    fields["updated_at"] = now
+    fields["scripts"] = scripts or "[]"
+    fields.setdefault("state", "active")
+    fields.setdefault("stage", "extracted")
+    fields["id"] = jid
+    cols = ", ".join(fields.keys())
+    qs = ", ".join("?" for _ in fields)
+    cmd = "INSERT OR REPLACE INTO" if replace else "INSERT INTO"
+    conn.execute(f"{cmd} jobs ({cols}) VALUES ({qs})", list(fields.values()))
+    if commit:
+        conn.commit()
+
+
+def load_state():
+    conn = get_conn()
+    rows = conn.execute(f"SELECT {_JOBS_COLS} FROM jobs ORDER BY created_at").fetchall()
+    jobs = {}
+    for r in rows:
+        d = _row_to_job(r)
+        jobs[d["id"]] = d
+    stage_rows = conn.execute(
+        "SELECT stage, state, COUNT(*) as cnt FROM jobs GROUP BY stage, state"
+    ).fetchall()
+    stage_counts = {s: 0 for s in STAGES}
+    state_counts = {"active": 0, "rejected": 0, "failed": 0}
+    for sr in stage_rows:
+        st = sr["stage"]
+        if sr["state"] == "active" and st in stage_counts:
+            stage_counts[st] += sr["cnt"]
+        if sr["state"] in state_counts:
+            state_counts[sr["state"]] += sr["cnt"]
+    return {"jobs": jobs, "stages": stage_counts, "states": state_counts}
+
+
+def save_state(state):
+    for jid, entry in state["jobs"].items():
+        fields = {k: v for k, v in entry.items() if v is not None or k in ("stage", "state", "scripts", "notes")}
+        _insert_job(jid, replace=True, commit=False, **fields)
+    get_conn().commit()
+
+
+def _normalize_url(url):
+    """Normalize URL for consistent hashing. Strips ad-tracking params only, preserves routing params."""
+    if not url:
+        return url
+    import urllib.parse
+
+    try:
+        parsed = urllib.parse.urlparse(url)
+        tracked = {
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_term",
+            "utm_content",
+            "fbclid",
+            "gclid",
+            "ref",
+            "source",
+            "trk",
+            "lipi",
+            "email_id",
+            "eid",
+            "refid",
+            "pos",
+            "ao",
+            "s",
+            "guid",
+            "src",
+            "gh_src",
+        }
+        qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        clean_qs = {k: v for k, v in qs.items() if k.lower() not in tracked}
+        clean_query = urllib.parse.urlencode(clean_qs, doseq=True) if clean_qs else ""
+        clean_path = parsed.path.rstrip("/") or "/"
+        return urllib.parse.urlunparse(
+            (parsed.scheme, parsed.netloc.lower(), clean_path, "", clean_query, "")
+        )
+    except Exception:
+        return url.strip("/")
+
+
+def add_job(job_data):
+    conn = get_conn()
+    raw_url = job_data.get("url", "")
+    url = _normalize_url(raw_url)
+    jid = hashlib.md5(url.encode()).hexdigest()[:16] if url else None
+    if not jid:
+        return None
+    if conn.execute("SELECT 1 FROM jobs WHERE id=?", (jid,)).fetchone():
+        if "notes" in job_data:
+            conn.execute(
+                "UPDATE jobs SET notes=?, updated_at=? WHERE id=?",
+                (job_data["notes"], datetime.now().isoformat(), jid),
+            )
+            conn.commit()
+        return jid
+    _insert_job(jid,
+        email_id=job_data.get("email_id", ""),
+        title=job_data.get("title", ""),
+        company=job_data.get("company", ""),
+        location=job_data.get("location", ""),
+        url=url,
+        salary=job_data.get("salary"),
+        salary_min=_parse_salary_min(job_data.get("salary", "")),
+        salary_max=_parse_salary_max(job_data.get("salary", "")),
+        salary_currency=_parse_salary_currency(job_data.get("salary", "")),
+        remote_status=_parse_remote_status(job_data.get("location", ""), job_data.get("title", "")),
+        job_type=job_data.get("job_type", "Full-Time"),
+        department=job_data.get("department", ""),
+        source=job_data.get("source", ""),
+        source_url=job_data.get("source_url", ""),
+        stage="extracted",
+        fit_score=job_data.get("fit_score"),
+        fit_summary=job_data.get("fit_summary"),
+        company_vibe=job_data.get("company_vibe"),
+        scripts=job_data.get("scripts", []),
+        response_path=job_data.get("response_path"),
+        notes=job_data.get("notes", ""),
+        category=job_data.get("category"),
+    )
+    company_name = job_data.get("company", "")
+    if company_name and company_name != "Unknown":
+        try:
+            company_upsert(company_name)
+        except Exception:
+            pass
+    return jid
+
+
+def record_failure(jid, reason, detail=""):
+    """Record a structured failure reason for a job."""
+    job = get_job(jid)
+    if not job:
+        return
+    advance(job, job.get("stage"), state="failed", error=f"{reason}: {detail}".strip()[:500])
+    event_add(jid, "failure", f"Failed: {reason}", description=detail)
+
+
+def failure_stats():
+    """Aggregate failure reasons across failed jobs."""
+    state = load_state()
+    from collections import Counter
+    reasons = Counter()
+    for jid, job in state["jobs"].items():
+        if job.get("state") == "failed" and job.get("error"):
+            reasons[job["error"]] += 1
+    return [{"error": k, "cnt": v} for k, v in reasons.most_common(20)]
+
+
+def advance_job(jid, new_stage, **updates):
+    conn = get_conn()
+    sets = ["stage=?", "updated_at=?"]
+    vals = [new_stage, datetime.now().isoformat()]
+    for k, v in updates.items():
+        if k == "scripts" and isinstance(v, list):
+            v = json.dumps(v)
+        sets.append(f"{k}=?")
+        vals.append(v)
+    vals.append(jid)
+    # Retry on SQLite locked with backoff
+    import time as _time
+
+    for attempt in range(3):
+        try:
+            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
+            conn.commit()
+            return
+        except Exception as e:
+            if "database is locked" in str(e).lower() and attempt < 2:
+                _time.sleep(0.1 * (attempt + 1))
+                continue
+            raise
+
+
+def get_job(jid):
+    conn = get_conn()
+    r = conn.execute(f"SELECT {_JOBS_COLS} FROM jobs WHERE id=?", (jid,)).fetchone()
+    return _row_to_job(r) if r else None
+
+
+def get_jobs_by_stage(stage):
+    conn = get_conn()
+    rows = conn.execute(
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE stage=? AND state='active' ORDER BY created_at", (stage,)
+    ).fetchall()
+    return [(r["id"], _row_to_job(r)) for r in rows]
+
+
+def next_pending_job():
+    conn = get_conn()
+    r = conn.execute(
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE stage='described' AND state='active' LIMIT 1"
+    ).fetchone()
+    return (r["id"], _row_to_job(r)) if r else (None, None)
+
+
+def get_failed_jobs():
+    state = load_state()
+    return [(jid, job) for jid, job in state["jobs"].items() if job.get("state") == "failed"]
+
+
+def search_jobs(query, stage=None, limit=50):
+    conn = get_conn()
+    clauses = []
+    params = []
+    if query:
+        clauses.append("(title LIKE ? OR company LIKE ? OR location LIKE ?)")
+        q = f"%{query}%"
+        params.extend([q, q, q])
+    if stage:
+        clauses.append("stage=?")
+        params.append(stage)
+    where = " AND ".join(clauses) if clauses else "1"
+    rows = conn.execute(
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE {where} ORDER BY created_at DESC LIMIT ?",
+        params + [limit],
+    ).fetchall()
+    return [(_row_to_job(r)) for r in rows]
+
+
+def job_count():
+    return get_conn().execute("SELECT COUNT(*) as c FROM jobs").fetchone()["c"]
+
+
+def job_count_by_stage():
+    rows = (
+        get_conn()
+        .execute(
+            "SELECT stage, COUNT(*) as cnt FROM jobs WHERE state='active' GROUP BY stage ORDER BY stage"
+        )
+        .fetchall()
+    )
+    return {r["stage"]: r["cnt"] for r in rows}
+
+
+# ── Salary/remote parsing helpers ──
+
+
+def _parse_salary_min(salary_text):
+    if not salary_text:
+        return None
+    nums = re.findall(
+        r"\$?([\d,]+)", salary_text.replace("K", "000").replace("k", "000")
+    )
+    if nums:
+        return int(nums[0].replace(",", ""))
+    return None
+
+
+def _parse_salary_max(salary_text):
+    if not salary_text:
+        return None
+    nums = re.findall(
+        r"\$?([\d,]+)", salary_text.replace("K", "000").replace("k", "000")
+    )
+    if len(nums) >= 2:
+        return int(nums[1].replace(",", ""))
+    if len(nums) == 1:
+        return int(nums[0].replace(",", ""))
+    return None
+
+
+def _parse_salary_currency(salary_text):
+    if not salary_text:
+        return "USD"
+    if "CA$" in salary_text or "C$" in salary_text:
+        return "CAD"
+    return "USD"
+
+
+def _parse_remote_status(location, title):
+    text = f"{location} {title}".lower()
+    if "remote" in text:
+        return "remote"
+    if "hybrid" in text:
+        return "hybrid"
+    if "onsite" in text or "on-site" in text:
+        return "onsite"
+    return ""
+
+
+# =========================================================================
+# Stages (raw email content)
+# =========================================================================
+
+
+def stage_save(tid, content):
+    c = get_conn()
+    c.execute(
+        "INSERT OR REPLACE INTO stages (id, content) VALUES (?,?)", (tid, content)
+    )
+    c.commit()
+
+
+def stage_get(tid):
+    r = get_conn().execute("SELECT content FROM stages WHERE id=?", (tid,)).fetchone()
+    return r["content"] if r else None
+
+
+def stage_exists(tid):
+    return (
+        get_conn().execute("SELECT 1 FROM stages WHERE id=?", (tid,)).fetchone()
+        is not None
+    )
+
+
+def stage_list_all():
+    rows = get_conn().execute("SELECT id, content FROM stages ORDER BY id").fetchall()
+    return [(r["id"], r["content"]) for r in rows]
+
+
+def stage_delete(tid):
+    c = get_conn()
+    c.execute("DELETE FROM stages WHERE id=?", (tid,))
+    c.commit()
+
+
+def stage_count():
+    return get_conn().execute("SELECT COUNT(*) as c FROM stages").fetchone()["c"]
+
+
+# =========================================================================
+# Job Documents
+# =========================================================================
+
+
+def doc_save(doc_type, job_id, filename, content):
+    c = get_conn()
+    existing = c.execute(
+        "SELECT id FROM job_documents WHERE doc_type=? AND job_id=? AND filename=?",
+        (doc_type, job_id, filename),
+    ).fetchone()
+    if existing:
+        c.execute(
+            "UPDATE job_documents SET content=? WHERE id=?", (content, existing["id"])
+        )
+    else:
+        c.execute(
+            "INSERT INTO job_documents (doc_type, job_id, filename, content) VALUES (?,?,?,?)",
+            (doc_type, job_id, filename, content),
+        )
+    c.commit()
+
+
+def doc_get(doc_type, job_id, filename="content"):
+    r = (
+        get_conn()
+        .execute(
+            "SELECT content FROM job_documents WHERE doc_type=? AND job_id=? AND filename=?",
+            (doc_type, job_id, filename),
+        )
+        .fetchone()
+    )
+    return r["content"] if r else None
+
+
+def doc_exists(doc_type, job_id):
+    return (
+        get_conn()
+        .execute(
+            "SELECT 1 FROM job_documents WHERE doc_type=? AND job_id=? LIMIT 1",
+            (doc_type, job_id),
+        )
+        .fetchone()
+        is not None
+    )
+
+
+def doc_list_ids(doc_type):
+    return {
+        r["job_id"]
+        for r in get_conn()
+        .execute(
+            "SELECT DISTINCT job_id FROM job_documents WHERE doc_type=?", (doc_type,)
+        )
+        .fetchall()
+    }
+
+
+def doc_list_files(job_id, doc_type="application"):
+    return [
+        dict(r)
+        for r in get_conn()
+        .execute(
+            "SELECT filename, created_at FROM job_documents WHERE job_id=? AND doc_type=? ORDER BY filename",
+            (job_id, doc_type),
+        )
+        .fetchall()
+    ]
+
+
+def doc_delete_all(job_id):
+    c = get_conn()
+    c.execute("DELETE FROM job_documents WHERE job_id=?", (job_id,))
+    c.commit()
+
+
+def desc_save(jid, content):
+    doc_save("description", jid, "content", content)
+
+
+def desc_get(jid):
+    return doc_get("description", jid, "content")
+
+
+def desc_exists(jid):
+    return doc_exists("description", jid)
+
+
+def desc_list_ids():
+    return doc_list_ids("description")
+
+
+def app_save(jid, filename, content):
+    doc_save("application", jid, filename, content)
+
+
+def app_get(jid, filename):
+    return doc_get("application", jid, filename)
+
+
+def app_list(jid):
+    return doc_list_files(jid, "application")
+
+
+def app_list_job_ids():
+    return doc_list_ids("application")
+
+
+def app_delete_all(jid):
+    doc_delete_all(jid)
+
+
+# =========================================================================
+# Companies
+# =========================================================================
+
+
+def company_upsert(name, **kw):
+    c = get_conn()
+    cid = hashlib.md5(name.lower().encode()).hexdigest()[:16]
+    now = datetime.now().isoformat()
+    existing = c.execute("SELECT * FROM companies WHERE id=?", (cid,)).fetchone()
+    if existing:
+        sets = ["updated_at=?"]
+        vals = [now]
+        for k, v in kw.items():
+            if v is not None:
+                sets.append(f"{k}=?")
+                vals.append(v)
+        vals.append(cid)
+        c.execute(f"UPDATE companies SET {', '.join(sets)} WHERE id=?", vals)
+    else:
+        c.execute(
+            """INSERT INTO companies (id, name, domain, description, size, industry,
+               culture_notes, rating, source_url, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                cid,
+                name,
+                kw.get("domain", ""),
+                kw.get("description", ""),
+                kw.get("size", ""),
+                kw.get("industry", ""),
+                kw.get("culture_notes", ""),
+                kw.get("rating"),
+                kw.get("source_url", ""),
+                now,
+                now,
+            ),
+        )
+    c.commit()
+    return cid
+
+
+def company_get(name_or_id):
+    c = get_conn()
+    r = c.execute(
+        "SELECT * FROM companies WHERE id=? OR name=?", (name_or_id, name_or_id)
+    ).fetchone()
+    return dict(r) if r else None
+
+
+def company_search(query, limit=20):
+    rows = (
+        get_conn()
+        .execute(
+            "SELECT * FROM companies WHERE name LIKE ? OR domain LIKE ? OR industry LIKE ? LIMIT ?",
+            (f"%{query}%", f"%{query}%", f"%{query}%", limit),
+        )
+        .fetchall()
+    )
+    return [dict(r) for r in rows]
+
+
+def company_list_jobs(company_name):
+    c = get_conn()
+    rows = c.execute(
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE company=? ORDER BY created_at DESC",
+        (company_name,),
+    ).fetchall()
+    return [_row_to_job(r) for r in rows]
+
+
+# =========================================================================
+# Contacts
+# =========================================================================
+
+
+def contact_add(job_id, name, **kw):
+    c = get_conn()
+    c.execute(
+        """INSERT INTO contacts (job_id, company_id, name, role, email, linkedin_url, notes, reached_out)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (
+            job_id,
+            kw.get("company_id"),
+            name,
+            kw.get("role", ""),
+            kw.get("email", ""),
+            kw.get("linkedin_url", ""),
+            kw.get("notes", ""),
+            1 if kw.get("reached_out") else 0,
+        ),
+    )
+    c.commit()
+    return c.lastrowid
+
+
+def contact_list(job_id=None):
+    c = get_conn()
+    if job_id:
+        rows = c.execute(
+            "SELECT * FROM contacts WHERE job_id=? ORDER BY created_at", (job_id,)
+        ).fetchall()
+    else:
+        rows = c.execute(
+            "SELECT * FROM contacts ORDER BY created_at DESC LIMIT 50"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def contact_update(cid, **kw):
+    if not kw:
+        return
+    c = get_conn()
+    sets = []
+    vals = []
+    for k, v in kw.items():
+        sets.append(f"{k}=?")
+        vals.append(v)
+    vals.append(cid)
+    c.execute(f"UPDATE contacts SET {', '.join(sets)} WHERE id=?", vals)
+    c.commit()
+
+
+# =========================================================================
+# Events
+# =========================================================================
+
+
+def event_add(job_id, event_type, title, **kw):
+    c = get_conn()
+    c.execute(
+        """INSERT INTO events (job_id, event_type, title, description, event_at, completed)
+           VALUES (?,?,?,?,?,?)""",
+        (
+            job_id,
+            event_type,
+            title,
+            kw.get("description", ""),
+            kw.get("event_at"),
+            1 if kw.get("completed") else 0,
+        ),
+    )
+    c.commit()
+    return c.lastrowid
+
+
+def event_list(job_id=None, upcoming=False):
+    c = get_conn()
+    if job_id:
+        rows = c.execute(
+            "SELECT * FROM events WHERE job_id=? ORDER BY event_at, created_at",
+            (job_id,),
+        ).fetchall()
+    elif upcoming:
+        rows = c.execute(
+            "SELECT e.*, j.title as job_title, j.company as job_company FROM events e "
+            "JOIN jobs j ON j.id=e.job_id "
+            "WHERE e.completed=0 AND e.event_at >= datetime('now') "
+            "ORDER BY e.event_at LIMIT 20"
+        ).fetchall()
+    else:
+        rows = c.execute(
+            "SELECT * FROM events ORDER BY created_at DESC LIMIT 50"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def event_complete(eid):
+    c = get_conn()
+    c.execute("UPDATE events SET completed=1 WHERE id=?", (eid,))
+    c.commit()
+
+
+# =========================================================================
+# Settings
+# =========================================================================
+
+
+def setting_get(key, default=None):
+    r = get_conn().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    if r:
+        try:
+            return json.loads(r["value"])
+        except (json.JSONDecodeError, TypeError):
+            return r["value"]
+    return default
+
+
+def setting_set(key, value):
+    c = get_conn()
+    if not isinstance(value, str):
+        value = json.dumps(value)
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, value))
+    c.commit()
+
+
+# =========================================================================
+# Search Threads
+# =========================================================================
+
+
+def search_threads_save(threads):
+    c = get_conn()
+    for t in threads:
+        c.execute(
+            "INSERT OR IGNORE INTO search_threads (thread_id, subject, date, from_addr) VALUES (?,?,?,?)",
+            (t["id"], t.get("subject", ""), t.get("date", ""), t.get("from", "")),
+        )
+    c.commit()
+
+
+def search_threads_pending():
+    seen = set(setting_get("staged_ids", [])) | set(setting_get("skipped_ids", []))
+    rows = (
+        get_conn()
+        .execute(
+            "SELECT thread_id, subject, date, from_addr FROM search_threads ORDER BY date"
+        )
+        .fetchall()
+    )
+    return [
+        (r["thread_id"], r["subject"], r["date"], r["from_addr"])
+        for r in rows
+        if r["thread_id"] not in seen
+    ]
+
+
+def search_threads_clear():
+    c = get_conn()
+    c.execute("DELETE FROM search_threads")
+    c.commit()
+
+
+# =========================================================================
+# State wrappers (merged from lib.state for SLM simplicity)
+# =========================================================================
+
+
+def load():
+    return load_state()
+
+
+def save(state):
+    save_state(state)
+
+
+def job_id(url):
+    return hashlib.md5(url.encode()).hexdigest()[:16] if url else None
+
+
+def add(state, job_data):
+    jid = add_job(job_data)
+    if jid:
+        state["jobs"][jid] = get_job(jid)
+        company = job_data.get("company", "")
+        if company and company != "Unknown":
+            try:
+                company_upsert(company)
+            except Exception:
+                pass
+    return jid
+
+
+def advance(entry, new_stage, **updates):
+    jid = entry.get("id")
+    entry["stage"] = new_stage
+    for k, v in updates.items():
+        entry[k] = v
+    advance_job(jid, new_stage, **updates)
+
+
+def get_by_stage(state, stage):
+    return get_jobs_by_stage(stage)
+
+
+def next_pending(state):
+    return next_pending_job()
+
+
+def get_failed(state):
+    return get_failed_jobs()
+
+
+def pipeline_status():
+    from .auth_walls import count as auth_count, domains as auth_domains
+
+    state = load_state()
+    staged_total = stage_count()
+    extracted_ids = setting_get("extracted_ids", [])
+    pending_staged = max(0, staged_total - len(extracted_ids))
+    auth_n = auth_count()
+    auth_d = auth_domains()
+
+    next_step = ""
+    if pending_staged > 0:
+        next_step = f"extract.py --count {min(3, pending_staged)}"
+    elif state["stages"].get("extracted", 0) > 0:
+        next_step = "enrich.py --count 3"
+    elif state["stages"].get("described", 0) > 0:
+        next_step = "tailor.py"
+    elif state["stages"].get("tailored", 0) > 0:
+        next_step = "apply.py detect <jid>"
+    elif state["states"].get("failed", 0) > 0:
+        next_step = "enrich.py retry or tailor.py retry"
+    elif auth_n > 0:
+        next_step = "enrich.py open"
+    else:
+        next_step = "all done — run gmail search"
+
+    return {
+        "jobs": len(state["jobs"]),
+        "stages": state["stages"],
+        "states": state["states"],
+        "staged": {"total": staged_total, "pending": pending_staged},
+        "auth_walls": {"count": auth_n, "domains": auth_d},
+        "next_step": next_step,
+    }
+
+
+def close():
+    global _conn
+    if _conn:
+        _conn.close()
+        _conn = None
