@@ -245,9 +245,9 @@ def cmd_admit(*job_ids, pdf_path=None):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_skip(*job_ids):
+def cmd_reject(*job_ids):
     if not job_ids:
-        print("Usage: python3 tailor.py skip <jid1> [jid2 ...]", file=sys.stderr)
+        print("Usage: python3 tailor.py reject <jid1> [jid2 ...]", file=sys.stderr)
         return
     state = load()
     count = 0
@@ -257,7 +257,7 @@ def cmd_skip(*job_ids):
             count += 1
         else:
             print(f"Job not found: {job_id}", file=sys.stderr)
-    print(f"SKIP:{count}", file=sys.stderr)
+    print(f"REJECT:{count}", file=sys.stderr)
     if count:
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
@@ -427,7 +427,7 @@ def main():
     done_p = sub.add_parser("done", help="Alias for admit (backward compat)")
     done_p.add_argument("jids", nargs="+")
     done_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
-    sub.add_parser("skip", help="Skip job").add_argument("jids", nargs="+")
+    sub.add_parser("reject", help="Reject job").add_argument("jids", nargs="+")
     retry_p = sub.add_parser("retry", help="Retry failed, or re-process a specific job")
     retry_p.add_argument("jid", nargs="?")
     retry_p.add_argument("--feedback", help="What to fix (triggers one-shot re-tailor)")
@@ -441,8 +441,8 @@ def main():
 
     if args.command in ("admit", "done"):
         cmd_admit(*args.jids, pdf_path=args.pdf)
-    elif args.command == "skip":
-        cmd_skip(*args.jids)
+    elif args.command == "reject":
+        cmd_reject(*args.jids)
     elif args.command == "undo":
         cmd_undo(args.jid)
     elif args.command == "retry":
