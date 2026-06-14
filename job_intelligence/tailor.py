@@ -19,6 +19,7 @@ from datetime import datetime
 from lib.db import load, advance, get_failed, pipeline_status
 from lib.db import desc_get, app_save, app_get, app_list
 from lib.call_gemini import call_gemini_node, list_gems
+from lib.config import RESULTS_DIR
 from lib.extract_pdf import extract_and_run
 from lib.platforms import clean as clean_desc
 
@@ -88,13 +89,11 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
     prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
 
     if tailor_mode == "agent":
-        from lib.config import RESULTS_DIR
         script_dir = os.path.join(RESULTS_DIR, job_id)
         print(f"PROMPT: generate script.py at {script_dir}/")
         print(f"  Instructions: read the full prompt above, write script.py, then run: tailor.py admit {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
-    from lib.config import RESULTS_DIR
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
     stale = os.path.join(app_dir, "gemini_response.txt")
@@ -148,7 +147,6 @@ def cmd_craft(count=1):
         else:
             print(f"\nJOB {jid} {title} @ {company}", file=sys.stderr)
             print(f"URL: {entry.get('url', '')}")
-            from lib.config import RESULTS_DIR
             print(f"DIR: {os.path.join(RESULTS_DIR, jid)}")
         try:
             success, result = generate_tailored_docs(entry)
@@ -221,7 +219,6 @@ def cmd_admit(*job_ids, pdf_path=None):
         return
     state = load()
     count = 0
-    from lib.config import RESULTS_DIR
     for job_id in job_ids:
         if job_id not in state.get("jobs", {}):
             print(f"Job not found: {job_id}", file=sys.stderr)
@@ -289,7 +286,6 @@ def cmd_retry(job_id=None, feedback=None):
             print(f"Job not found: {job_id}", file=sys.stderr)
             return
         advance(entry, "described", error=None)
-        from lib.config import RESULTS_DIR
         resp_path = os.path.join(RESULTS_DIR, job_id, "gemini_response.txt")
         prev = ""
         if os.path.exists(resp_path):
