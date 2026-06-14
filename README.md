@@ -157,7 +157,7 @@ Features:
 | 2 | URL extraction | `extract.py` | `admit --category <name> <jid>` or `reject` |
 | 3 | LinkedIn scrape | `linkedin.py` | admit/reject |
 | 4 | Fetch description | `enrich.py` | `admit` / `reject` / `flag` |
-| 5 | CV tailoring | `tailor.py` | `done` / `skip` / `redo` |
+| 5 | CV tailoring | `tailor.py` | `admit` / `reject` / `undo` / `retry` |
 | 6 | Classify type | `apply.py detect <jid>` | Follow TYPE hint (easy_apply / external / applied) |
 | 7 | Navigate ATS | `apply.py navigate <jid>` | Auto (finds external Apply button) |
 | 8 | Fill form | `apply.py act --fill <jid>` | Provide `--answers` for unmatched fields |
@@ -310,7 +310,7 @@ Edit `profile.json`: name, contact info, work history, common answers. Required 
 python stage_emails.py   # Stage Gmail threads → DB
 python extract.py        # SLM admits/rejects URLs
 python enrich.py          # SLM admits/rejects descriptions
-python tailor.py         # SLM reviews CV, runs done/skip
+python tailor.py         # SLM reviews CV, runs admit or review/retry
 ```
 
 ---
