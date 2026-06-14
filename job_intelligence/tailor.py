@@ -10,7 +10,7 @@ Usage:
   tailor.py undo <jid>                Move job back one stage
   tailor.py reset <jid>               Reset job to extracted (first stage)
   tailor.py reset --all               Mass reset
-  tailor.py reset --stage <stage>     Reset by stage
+  tailor.py reset --state <state>     Reset by state (failed, skipped)
 """
 
 import hashlib, json, os, re, subprocess, sys
@@ -366,16 +366,16 @@ def cmd_relentless(count):
             break
 
 
-def cmd_reset(job_id=None, stages=None):
-    state = load()
-    if not state.get("jobs"):
+def cmd_reset(job_id=None, states=None):
+    s = load()
+    if not s.get("jobs"):
         print("No jobs.", file=sys.stderr)
         return
-    if stages:
-        stage_list = [s.strip() for s in stages.split(",")]
-        targets = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") in stage_list]
+    if states:
+        state_list = [st.strip() for st in states.split(",")]
+        targets = [(jid, e) for jid, e in s["jobs"].items() if e.get("stage") in state_list]
         if not targets:
-            print(f"No jobs with stage in {stages}.", file=sys.stderr)
+            print(f"No jobs in state(s): {states}.", file=sys.stderr)
             return
     elif job_id == "--all":
         targets = list(state["jobs"].items())
@@ -406,7 +406,7 @@ def cmd_help():
   retry <jid> --feedback "text"             Re-tailor with feedback
   reset <jid>                               Reset to extracted (first stage)
   reset --all                               Mass reset
-  reset --stage failed,skipped              Reset by stage
+  reset --state failed,skipped              Reset by stage
   help                                      This message""", file=sys.stderr)
 
 
@@ -431,7 +431,7 @@ def main():
     sub.add_parser("undo", help="Move job back one stage").add_argument("jid", nargs="?")
     reset_p = sub.add_parser("reset", help="Reset job to extracted (first stage)")
     reset_p.add_argument("target", nargs="?", help="jid or --all")
-    reset_p.add_argument("--stage", dest="stages", help="Reset by stage (comma-separated)")
+    reset_p.add_argument("--state", dest="states", help="Reset by stage (comma-separated)")
     sub.add_parser("help", help="This message")
 
     args = parser.parse_args()
@@ -445,8 +445,8 @@ def main():
     elif args.command == "retry":
         cmd_retry(job_id=args.jid, feedback=args.feedback)
     elif args.command == "reset":
-        if getattr(args, "stages", None):
-            cmd_reset(stages=args.stages)
+        if getattr(args, "states", None):
+            cmd_reset(states=args.states)
         elif args.target == "--all":
             cmd_reset(job_id="--all")
         elif args.target:
