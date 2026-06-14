@@ -12,9 +12,9 @@
 - Compression: `GUIDELINES.md` for high-density rewriting.
 
 ## Job Pipeline
-- **Flow:** `stage_emails.py` ΓåÆ `extract.py` ΓåÆ `enrich.py` ΓåÆ `tailor.py`. See `SKILL.md` for full commands.
+- **Flow:** `stage_emails.py` → `extract.py` → `enrich.py` → `tailor.py`. See `SKILL.md` for full commands.
 - **LinkedIn:** `linkedin.py [--max N]` as alt entry point.
-- **Recovery:** auth ΓåÆ `gmail-cli auth add` | Chrome crash ΓåÆ `Start-Process ... --remote-debugging-port=9222` | FAILED ΓåÆ `retry` | SKIPPED ΓåÆ `retry-skipped`
+- **Recovery:** auth → `gmail-cli auth add` | Chrome crash → `Start-Process ... --remote-debugging-port=9222` | FAILED → `retry` | SKIPPED → `retry-skipped`
 - **Output:** `~/.ji/results/{jid}/`
 
 ## Tools & Automation
