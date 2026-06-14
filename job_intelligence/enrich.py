@@ -297,7 +297,7 @@ def cmd_skip(*jids):
         if jid in state.get("jobs", {}):
             advance(state["jobs"][jid], "skipped", error="garbage")
             count += 1
-    print(f"SKIP:{count}", file=sys.stderr)
+    print(f"REJECT:{count}", file=sys.stderr)
     if count:
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 

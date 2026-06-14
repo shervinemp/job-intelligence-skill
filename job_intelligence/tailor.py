@@ -3,7 +3,7 @@
 Usage:
   tailor.py [--count N]               Craft N described jobs (default: 1)
   tailor.py admit <jid> [jid...]      Mark job as tailored (also: done)
-  tailor.py skip <jid> [jid...]       Skip job(s)
+  tailor.py reject <jid> [jid...]      Reject job(s)
   tailor.py retry                     Retry all failed (batch)
   tailor.py retry <jid>               Re-tailor a specific job
   tailor.py retry <jid> --feedback "x" Re-tailor with feedback
@@ -402,7 +402,7 @@ def cmd_help():
   [--count N]                               Craft CVs (default 1)
   [--count N] --relentless                  Craft all, idle on rate limits
   admit <jid> [jid...]                      Mark tailored (also: done)
-  skip <jid> [jid...]                       Skip
+  reject <jid> [jid...]                     Reject
   undo <jid>                                Move back one stage
   retry                                     Retry all failed (batch)
   retry <jid>                               Re-tailor a job

@@ -138,7 +138,7 @@ def cmd_admit(*jids, category=None, notes=None):
     print(f"ADMITTED:{len(jids)}", file=sys.stderr)
 
 
-def cmd_skip(*jids):
+def cmd_reject(*jids):
     conn = get_conn()
     count = 0
     for jid in jids:
@@ -147,7 +147,7 @@ def cmd_skip(*jids):
             count += 1
     conn.commit()
     if count:
-        print(f"SKIP:{count}", file=sys.stderr)
+        print(f"REJECT:{count}", file=sys.stderr)
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
