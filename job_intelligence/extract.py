@@ -340,7 +340,7 @@ def main():
     admit_p.add_argument("jids", nargs="+")
     admit_p.add_argument("--category", help="Job category (required on first admit)")
     admit_p.add_argument("--notes", help="Job notes/context")
-    sub.add_parser("skip", help="Skip an extracted job").add_argument("jids", nargs="+")
+    sub.add_parser("reject", help="Reject an extracted job").add_argument("jids", nargs="+")
     sub.add_parser("review", help="Review extracted jobs for admit/reject")
     sub.add_parser("help", help="This message")
 
@@ -359,8 +359,8 @@ def main():
         cmd_status()
     elif args.command == "admit":
         cmd_admit(*args.jids, category=args.category, notes=args.notes)
-    elif args.command == "skip":
-        cmd_skip(*args.jids)
+    elif args.command == "reject":
+        cmd_reject(*args.jids)
     elif args.command == "review":
         cmd_review(args.count)
     elif args.command == "auto" or args.command is None:

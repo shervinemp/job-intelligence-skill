@@ -442,7 +442,7 @@ def main():
     admit_p.add_argument("--category", help="Job category (tech/general)")
     admit_p.add_argument("--notes", help="Job notes/context")
     admit_p.add_argument("--url", help="External apply URL")
-    sub.add_parser("skip", help="Skip (garbage/closed)").add_argument("jids", nargs="+")
+    sub.add_parser("reject", help="Skip (garbage/closed)").add_argument("jids", nargs="+")
     sub.add_parser("flag", help="Mark as auth wall").add_argument("jids", nargs="*")
     sub.add_parser("open", help="Open job in Chrome").add_argument("jid", nargs="?")
     sub.add_parser("retry", help="Retry failed fetches")
@@ -455,8 +455,8 @@ def main():
     
     if args.command == "admit":
         cmd_admit(*args.jids, title=args.title, company=args.company, location=args.location, salary=args.salary, category=args.category, notes=args.notes, url=args.url)
-    elif args.command == "skip":
-        cmd_skip(*args.jids)
+    elif args.command == "reject":
+        cmd_reject(*args.jids)
     elif args.command == "flag":
         cmd_flag(*args.jids)
     elif args.command == "open":
