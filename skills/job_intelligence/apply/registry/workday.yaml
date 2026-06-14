@@ -1,0 +1,40 @@
+name: workday
+version: 1
+notes: |
+  Phone: strip +1 prefix when separate Country Phone Code field present.
+  Skills autocomplete: type skill then press Enter.
+
+detect:
+  domains:
+    - myworkdayjobs.com
+    - myworkdayjobs.wd5.myworkdayjobs.com
+    - myworkdayjobs.wd1.myworkdayjobs.com
+    - workday.com
+    - workdayjobs.com
+    - wday.com
+
+probe:
+  best_strategy: dialog
+  widgets:
+    dropdown: "button[aria-haspopup='listbox']"
+    autocomplete: "input[role='combobox']"
+
+patterns:
+  login_wall:
+    - "sign in to apply"
+    - "sign in with email"
+    - "create account"
+  guest_apply:
+    - "continue without signing in"
+    - "apply as guest"
+    - "apply manually"
+  already_applied:
+    - "already applied"
+    - "you have already submitted an application"
+    - "previously applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+  has_progress_bar: true
+  page_range: [3, 7]

@@ -1,0 +1,38 @@
+"""Centralised path configuration. All pipeline paths derive from JI_HOME.
+
+Override via JI_HOME env var for CI, Docker, or custom setups.
+Default: ~/.ji/
+
+Auto-loads job_intelligence/.env (if exists) into os.environ so all
+pipeline vars (JI_HOME, JI_TAILOR, GMAIL_SEARCH_QUERY) can come from
+a single .env file. Existing env vars take precedence.
+"""
+
+import os
+from pathlib import Path
+
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+if _ENV_PATH.exists():
+    with open(_ENV_PATH, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _key, _val = _line.split("=", 1)
+            _key = _key.strip()
+            _val = _val.strip().strip('"').strip("'")
+            if _key and _val:
+                os.environ.setdefault(_key, _val)
+
+JI_HOME = os.environ.get("JI_HOME", os.path.join(os.path.expanduser("~"), ".ji"))
+
+STATE_DIR = os.path.join(JI_HOME, "state")
+RESULTS_DIR = os.path.join(JI_HOME, "results")
+SNAPSHOTS_DIR = Path(JI_HOME) / "snapshots"
+CHROME_PROFILE = os.path.join(JI_HOME, "chrome-profile")
+
+DB_PATH = os.path.join(STATE_DIR, "jobs.db")
+STATE_PATH = os.path.join(STATE_DIR, "apply_state.json")
+REGISTRY_PATH = os.path.join(STATE_DIR, "page_registry.json")
+AUTH_WALLS_PATH = os.path.join(STATE_DIR, "needs_auth.json")
+CHROME_CONFIG = os.path.join(JI_HOME, "chrome-config.json")
