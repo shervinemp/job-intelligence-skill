@@ -366,16 +366,20 @@ def cmd_relentless(count):
             break
 
 
-def cmd_reset(job_id=None, states=None):
+def cmd_reset(job_id=None, states=None, stages=None):
     s = load()
     if not s.get("jobs"):
         print("No jobs.", file=sys.stderr)
         return
+    stage_filter = []
     if states:
-        state_list = [st.strip() for st in states.split(",")]
-        targets = [(jid, e) for jid, e in s["jobs"].items() if e.get("stage") in state_list]
+        stage_filter.extend(st.strip() for st in states.split(","))
+    if stages:
+        stage_filter.extend(st.strip() for st in stages.split(","))
+    if stage_filter:
+        targets = [(jid, e) for jid, e in s["jobs"].items() if e.get("stage") in stage_filter]
         if not targets:
-            print(f"No jobs in state(s): {states}.", file=sys.stderr)
+            print(f"No matching jobs.", file=sys.stderr)
             return
     elif job_id == "--all":
         targets = list(state["jobs"].items())
@@ -431,7 +435,8 @@ def main():
     sub.add_parser("undo", help="Move job back one stage").add_argument("jid", nargs="?")
     reset_p = sub.add_parser("reset", help="Reset job to extracted (first stage)")
     reset_p.add_argument("target", nargs="?", help="jid or --all")
-    reset_p.add_argument("--state", dest="states", help="Reset by stage (comma-separated)")
+    reset_p.add_argument("--state", dest="states", help="Filter by state: failed, skipped")
+    reset_p.add_argument("--stage", dest="stages", help="Filter by stage: tailored, described, extracted")
     sub.add_parser("help", help="This message")
 
     args = parser.parse_args()
@@ -445,8 +450,8 @@ def main():
     elif args.command == "retry":
         cmd_retry(job_id=args.jid, feedback=args.feedback)
     elif args.command == "reset":
-        if getattr(args, "states", None):
-            cmd_reset(states=args.states)
+        if getattr(args, "states", None) or getattr(args, "stages", None):
+            cmd_reset(states=args.states, stages=args.stages)
         elif args.target == "--all":
             cmd_reset(job_id="--all")
         elif args.target:
