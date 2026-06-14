@@ -1,9 +1,9 @@
-"""enrich.py — Fetch job descriptions + enrich fields (title, company, location, salary, category). SLM reviews DESC lines, admits or rejects.
+"""enrich.py — Fetch job descriptions + enrich fields (title, company, location, salary, category). SLM reviews DESC lines, admits or skips.
 
 Usage:
   enrich.py [--count N] [--curl] [--force] [--refresh]   (default --count 3)
   enrich.py admit <jid> [jid...]
-  enrich.py reject <jid> [jid...]
+  enrich.py skip <jid> [jid...]
   enrich.py flag <jid> [jid...]
   enrich.py open [<jid>]
   enrich.py retry               Retry failed fetches
@@ -290,14 +290,14 @@ def cmd_admit(*jids, **fields):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_reject(*jids):
+def cmd_skip(*jids):
     state = load()
     count = 0
     for jid in jids:
         if jid in state.get("jobs", {}):
             advance(state["jobs"][jid], "skipped", error="garbage")
             count += 1
-    print(f"REJECTED:{count}", file=sys.stderr)
+    print(f"SKIP:{count}", file=sys.stderr)
     if count:
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
@@ -350,7 +350,7 @@ def cmd_help():
     print("Usage:", file=sys.stderr)
     print("  [--count N] [--curl] [--force] [--refresh] [--verbose]   Fetch descriptions (default 3)", file=sys.stderr)
     print("  admit <jid> [jid...] [--category <name>] [--title ...] [--company ...] [--location ...] [--salary ...] [--url ...] [--notes ...]   Mark described", file=sys.stderr)
-    print("  reject <jid> [jid...]                                     Skip (garbage/closed)", file=sys.stderr)
+    print("  skip <jid> [jid...]                                        Skip (garbage/closed)", file=sys.stderr)
     print("  flag <jid> [jid...]                                       Mark as auth wall", file=sys.stderr)
     print("  open [<jid>]                                              Open in Chrome", file=sys.stderr)
     print("  retry                                                     Retry failed fetches", file=sys.stderr)
@@ -442,7 +442,7 @@ def main():
     admit_p.add_argument("--category", help="Job category (tech/general)")
     admit_p.add_argument("--notes", help="Job notes/context")
     admit_p.add_argument("--url", help="External apply URL")
-    sub.add_parser("reject", help="Skip (garbage/closed)").add_argument("jids", nargs="+")
+    sub.add_parser("skip", help="Skip (garbage/closed)").add_argument("jids", nargs="+")
     sub.add_parser("flag", help="Mark as auth wall").add_argument("jids", nargs="*")
     sub.add_parser("open", help="Open job in Chrome").add_argument("jid", nargs="?")
     sub.add_parser("retry", help="Retry failed fetches")
@@ -455,8 +455,8 @@ def main():
     
     if args.command == "admit":
         cmd_admit(*args.jids, title=args.title, company=args.company, location=args.location, salary=args.salary, category=args.category, notes=args.notes, url=args.url)
-    elif args.command == "reject":
-        cmd_reject(*args.jids)
+    elif args.command == "skip":
+        cmd_skip(*args.jids)
     elif args.command == "flag":
         cmd_flag(*args.jids)
     elif args.command == "open":

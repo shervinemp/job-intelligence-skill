@@ -138,12 +138,17 @@ def cmd_admit(*jids, category=None, notes=None):
     print(f"ADMITTED:{len(jids)}", file=sys.stderr)
 
 
-def cmd_reject(*jids):
+def cmd_skip(*jids):
     conn = get_conn()
+    count = 0
     for jid in jids:
-        conn.execute("UPDATE jobs SET stage='skipped' WHERE id=?", (jid,))
+        c = conn.execute("UPDATE jobs SET stage='skipped' WHERE id=?", (jid,))
+        if c.rowcount:
+            count += 1
     conn.commit()
-    print(f"REJECTED:{len(jids)}", file=sys.stderr)
+    if count:
+        print(f"SKIP:{count}", file=sys.stderr)
+        print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
 def cmd_review(count):
@@ -335,8 +340,7 @@ def main():
     admit_p.add_argument("jids", nargs="+")
     admit_p.add_argument("--category", help="Job category (required on first admit)")
     admit_p.add_argument("--notes", help="Job notes/context")
-    reject_p = sub.add_parser("reject", help="Reject an extracted job")
-    reject_p.add_argument("jids", nargs="+")
+    sub.add_parser("skip", help="Skip an extracted job").add_argument("jids", nargs="+")
     sub.add_parser("review", help="Review extracted jobs for admit/reject")
     sub.add_parser("help", help="This message")
 
@@ -355,8 +359,8 @@ def main():
         cmd_status()
     elif args.command == "admit":
         cmd_admit(*args.jids, category=args.category, notes=args.notes)
-    elif args.command == "reject":
-        cmd_reject(*args.jids)
+    elif args.command == "skip":
+        cmd_skip(*args.jids)
     elif args.command == "review":
         cmd_review(args.count)
     elif args.command == "auto" or args.command is None:
