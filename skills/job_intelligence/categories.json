@@ -1,0 +1,10 @@
+{
+  "tech": {
+    "gem": "optimizer_tech",
+    "desc": "Building or maintaining technology: software, data, ML, IT, backend, frontend, DevOps, cloud, infra, security."
+  },
+  "general": {
+    "gem": "optimizer_general",
+    "desc": "No specialized skills needed: retail, food service, warehouse, hospitality, cleaning, labor."
+  }
+}
