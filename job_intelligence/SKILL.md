@@ -15,7 +15,7 @@ Before running pipeline, read these:
 | `extract.py` | `admit --category <name> <jid>` / reject |
 | `linkedin.py [--url] [--max N]` | admit/reject |
 | `enrich.py [--count N]` | admit/reject/flag |
-| `tailor.py [--count N]` | done/skip/redo. See tailoring section |
+| `tailor.py [--count N]` | admit/reject/undo/retry. See tailoring section |
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
 
 > Use default batch sizes: `enrich.py --count 3`, `tailor.py --count 1`. Larger counts confuse state tracking.
@@ -34,12 +34,11 @@ Before running pipeline, read these:
 | `enrich.py retry-skipped` | Reset skipped → extracted |
 | `enrich.py open [<jid>]` | Open in Chrome |
 | `tailor.py [--count N]` | Start tailoring (default 1, -1 = all) |
-| `tailor.py done <jid> [--pdf <path>]` | Confirm PDF → stage = tailored |
-| `tailor.py skip <jid>` | Skip |
-| `tailor.py redo <jid>` | Re-tailor |
-| `tailor.py retry` | Retry failed |
+| `tailor.py admit <jid> [--pdf <path>]` (also: done) | Confirm PDF → stage = tailored |
+| `tailor.py reject <jid>` | Skip |
+| `tailor.py undo <jid>` | Move back one stage |
+| `tailor.py retry [<jid>] [--feedback "x"]` | Retry failed or re-tailor with feedback |
 | `tailor.py reset --from failed,skipped` | Reset by stage |
-| `tailor.py ready [<jid>]` | Open results folder |
 | `extract.py reset` | Wipe DB, fresh start |
 | `lib/ask_api.py [--img <path>] --prompt <text>` | Query LLM API |
 | `status` | Pipeline state + next step |
@@ -48,10 +47,10 @@ Before running pipeline, read these:
 
 Two backends via `JI_TAILOR` env var:
 
-- **`JI_TAILOR=agent`** (default): Prompt printed to stdout. Write `script.py` based on instructions, run it to produce PDF, `done <jid> --pdf <path>` verifies file + advances stage.
-- **`JI_TAILOR=gem`**: Uses Gemini Web gem. Gem generates `script.py`, pipeline runs it inline, PDF appears. Run `done <jid>` to confirm + advance stage.
+- **`JI_TAILOR=agent`** (default): Prompt printed to stdout. Write `script.py` based on instructions, run it to produce PDF, `admit <jid> --pdf <path>` verifies file + advances stage.
+- **`JI_TAILOR=gem`**: Uses Gemini Web gem. Gem generates `script.py`, pipeline runs it inline, PDF appears. Run `admit <jid>` to confirm + advance stage.
 
-Both routes converge on `done` — gem route skips `--pdf` (PDF auto-generated), agent route should provide it. `done` advances DB stage to "tailored" (CV ready). Apply pipeline advances to "applied" (form submitted).
+Both routes converge on `admit` (or `done` for backward compat) — gem route skips `--pdf` (PDF auto-generated), agent route should provide it. `admit` advances DB stage to "tailored" (CV ready). Apply pipeline advances to "applied" (form submitted).
 
 Prompt does not include default resume — fill in CV content from candidate profile + job requirements.
 
@@ -150,7 +149,7 @@ Attach context via `extract.py submit '{"url":"...","notes":"..."}'`.
 
 ## Technical notes
 
-- **JI_TAILOR**: `"agent"` (default) = SLM writes `script.py`, `done` confirms. `"gem"` = Gemini Web gem.
+- **JI_TAILOR**: `"agent"` (default) = SLM writes `script.py`, `admit` confirms. `"gem"` = Gemini Web gem.
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
 - **LinkedIn title dedup**: Cards repeat title — `linkedin.py` deduplicates by matching repeated half.
 - **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
