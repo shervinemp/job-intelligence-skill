@@ -10,7 +10,7 @@ from datetime import datetime
 
 from .config import DB_PATH, STATE_DIR as DB_DIR, AUTH_WALLS_PATH
 
-STAGES = ["extracted", "described", "tailored", "applied", "skipped", "failed"]
+STAGES = ["extracted", "described", "tailored", "applied"]
 
 _conn = None
 
@@ -71,6 +71,7 @@ def _create_v3_tables():
             source TEXT NOT NULL DEFAULT '',
             source_url TEXT DEFAULT '',
             stage TEXT NOT NULL DEFAULT 'extracted',
+            state TEXT NOT NULL DEFAULT 'active',
             fit_score REAL,
             fit_summary TEXT,
             company_vibe TEXT,
@@ -165,6 +166,16 @@ def _create_v3_tables():
 
 def _migrate_schema():
     _create_v3_tables()
+    c = get_conn()
+    # Ensure state column exists (migration for legacy DBs)
+    try:
+        c.execute("ALTER TABLE jobs ADD COLUMN state TEXT NOT NULL DEFAULT 'active'")
+    except sqlite3.OperationalError:
+        pass
+    # Migrate stage='skipped'/'failed' to state column
+    c.execute("UPDATE jobs SET state='skipped' WHERE stage='skipped' AND state='active'")
+    c.execute("UPDATE jobs SET state='failed' WHERE stage='failed' AND state='active'")
+    c.commit()
 
 
 # =========================================================================
@@ -185,12 +196,12 @@ def _row_to_job(r):
 _JOBS_COLS = (
     "id, email_id, title, company, location, url, salary,"
     "salary_min, salary_max, salary_currency, remote_status,"
-    "job_type, department, source, source_url, stage, fit_score,"
+    "job_type, department, source, source_url, stage, state, fit_score,"
     "fit_summary, company_vibe, error, scripts, response_path,"
     "notes, created_at, updated_at, applied_at, category"
 )
 
-_JOBS_Q = ",".join("?" for _ in range(27))
+_JOBS_Q = ",".join("?" for _ in range(28))
 
 
 def load_state():
@@ -201,12 +212,17 @@ def load_state():
         d = _row_to_job(r)
         jobs[d["id"]] = d
     stage_rows = conn.execute(
-        "SELECT stage, COUNT(*) as cnt FROM jobs GROUP BY stage"
+        "SELECT stage, state, COUNT(*) as cnt FROM jobs GROUP BY stage, state"
     ).fetchall()
     stage_counts = {s: 0 for s in STAGES}
+    state_counts = {"active": 0, "skipped": 0, "failed": 0}
     for sr in stage_rows:
-        stage_counts[sr["stage"]] = sr["cnt"]
-    return {"jobs": jobs, "stages": stage_counts}
+        st = sr["stage"]
+        if sr["state"] == "active" and st in stage_counts:
+            stage_counts[st] += sr["cnt"]
+        if sr["state"] in state_counts:
+            state_counts[sr["state"]] += sr["cnt"]
+    return {"jobs": jobs, "stages": stage_counts, "states": state_counts}
 
 
 def save_state(state):
@@ -430,7 +446,7 @@ def next_pending_job():
 def get_failed_jobs():
     conn = get_conn()
     rows = conn.execute(
-        f"SELECT {_JOBS_COLS} FROM jobs WHERE stage='failed' ORDER BY created_at"
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE state='failed' ORDER BY created_at"
     ).fetchall()
     return [(r["id"], _row_to_job(r)) for r in rows]
 
@@ -462,7 +478,7 @@ def job_count_by_stage():
     rows = (
         get_conn()
         .execute(
-            "SELECT stage, COUNT(*) as cnt FROM jobs GROUP BY stage ORDER BY stage"
+            "SELECT stage, COUNT(*) as cnt FROM jobs WHERE state='active' GROUP BY stage ORDER BY stage"
         )
         .fetchall()
     )
@@ -969,7 +985,7 @@ def pipeline_status():
         next_step = "tailor.py"
     elif state["stages"].get("tailored", 0) > 0:
         next_step = "apply.py detect <jid>"
-    elif state["stages"].get("failed", 0) > 0:
+    elif state["states"].get("failed", 0) > 0:
         next_step = "enrich.py retry or tailor.py retry"
     elif auth_n > 0:
         next_step = "enrich.py open"
@@ -979,6 +995,7 @@ def pipeline_status():
     return {
         "jobs": len(state["jobs"]),
         "stages": state["stages"],
+        "states": state["states"],
         "staged": {"total": staged_total, "pending": pending_staged},
         "auth_walls": {"count": auth_n, "domains": auth_d},
         "next_step": next_step,

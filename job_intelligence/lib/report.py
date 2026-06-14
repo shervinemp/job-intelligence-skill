@@ -46,6 +46,10 @@ def cmd_stats():
         c = s["stages"].get(stage, 0)
         bar = "#" * (c // 10) if c else ""
         print(f"  {stage:15s} {c:4d} {bar}")
+    print("States:")
+    for st, c in s["states"].items():
+        if c:
+            print(f"  {st:15s} {c:4d}")
     print()
     by_stage = job_count_by_stage()
     described = by_stage.get("described", 0)
