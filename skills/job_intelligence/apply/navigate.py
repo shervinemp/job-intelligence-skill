@@ -8,6 +8,7 @@ from lib.db import get_conn
 from apply.common.page_helpers import read_page, save_state, load_state
 from apply.common.platforms import detect_platform
 from apply.common.output import emit_next, emit_error
+from lib.auth_walls import add as mark_auth_wall
 
 
 def run(jid):
@@ -108,9 +109,10 @@ def run(jid):
                 has_password = len(ep.locator('input[type="password"]').all()) > 0
                 body_text = (ep.evaluate("document.body.innerText") or "").lower()
                 if has_password or ("sign in" in body_text and "apply" not in body_text):
-                    print("LOGIN_WALL: leads to sign-in — aborting", file=sys.stderr)
+                    mark_auth_wall(jid, ep.url, title or "", company or "")
+                    print(f"AUTH_WALL: {jid} — {title} @ {company}", file=sys.stderr)
                     save_state({"jid": jid, "external_url": ep.url, "page": page_state})
-                    emit_next("act --inspect")
+                    emit_next("enrich.py open")
                     sys.exit(0)
 
     pm = PageManager(ctx, jid)
