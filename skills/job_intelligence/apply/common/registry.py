@@ -19,6 +19,8 @@ class RegistryConfig:
         self.domains = data.get("detect", {}).get("domains", [])
         self.best_strategy = data.get("probe", {}).get("best_strategy", "standard")
         self.widgets = data.get("probe", {}).get("widgets", {})
+        self.widget_parent = data.get("probe", {}).get("widget_parent",
+            '[data-automation-id], [role="dialog"], dialog, form, fieldset')
         self.patterns = data.get("patterns", {})
         self.multi_page = data.get("properties", {}).get("multi_page", False)
         self.has_eeo = data.get("properties", {}).get("has_eeo", False)

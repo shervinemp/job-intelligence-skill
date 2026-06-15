@@ -7,7 +7,7 @@ import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn, desc_exists
-from apply.common.page_helpers import read_page, check_captcha, STATE_PATH
+from apply.common.page_helpers import read_page, check_captcha, tag_page, STATE_PATH
 from apply.common.output import emit_next, emit_status, emit_type, emit_error
 from apply.common.registry import resolve as resolve_registry
 from apply.common.platforms import (
@@ -20,7 +20,7 @@ from apply.common.platforms import (
 
 
 def _merge_state(new):
-    """Merge new state into existing state (don't wipe external_url etc)."""
+    """Merge new state into existing. Clears stale job fields when jid changes."""
     existing = {}
     if os.path.exists(STATE_PATH):
         try:
@@ -28,6 +28,9 @@ def _merge_state(new):
                 existing = json.load(f)
         except (json.JSONDecodeError, OSError):
             pass
+    # Clear stale job-specific fields when switching to a new job
+    if "jid" in new and new["jid"] != existing.get("jid"):
+        existing = {"jid": existing["jid"]} if "jid" in existing else {}
     existing.update(new)
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
     tmp = STATE_PATH + ".tmp"
@@ -71,6 +74,14 @@ def run(jid):
         emit_next("tailor.py retry")
         _merge_state({"jid": jid})
         sys.exit(0)
+    # Guard: tailored stage must have a resume PDF (may be missing after manual DB edit
+    # or admit without --pdf). If missing, treat same as described -> needs re-tailor.
+    if stage == "tailored" and not _has_pdf(jid):
+        emit_status(f"stage=tailored but no Resume PDF — re-tailoring")
+        emit_next(f"tailor.py undo {jid} && tailor.py --jid {jid}")
+        _merge_state({"jid": jid})
+        sys.exit(0)
+
     if stage in ("extracted", "described"):
         if not _has_pdf(jid):
             if desc_exists(jid):
@@ -85,6 +96,16 @@ def run(jid):
     # Classify type
     b, ctx = connect()
     p = ctx.new_page()
+    page_owner = True  # track whether we should close p at exit
+
+    def _close_p():
+        nonlocal page_owner
+        if page_owner:
+            try:
+                p.close()
+            except Exception:
+                pass
+            page_owner = False
 
     if "linkedin.com/jobs/view" in url:
         job_id = url.split("/jobs/view/")[1].split("/")[0]
@@ -123,7 +144,7 @@ def run(jid):
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
         try:
             p.wait_for_selector('[role="main"], article, .jobs-details', timeout=8000)
-        except:
+        except Exception:
             pass
         time.sleep(2)
         from apply.common.page_manager import PageManager
@@ -146,14 +167,38 @@ def run(jid):
             emit_type("already_applied")
             emit_next("none")
             _merge_state({"jid": jid})
+            _close_p()
             sys.exit(0)
         if any("on company website" in (b.get("aria") or "").lower() for b in buttons):
-            buttons_detail = json.dumps(
-                [b for b in buttons if "company website" in b["aria"]]
-            )
-            emit_type("external", f"BUTTONS: {buttons_detail}")
+            ext_url = p.evaluate("""() => {
+                const anchors = document.querySelectorAll('a[href]');
+                const intent = (s) => (s||'').toLowerCase().includes('on company website');
+                for (const a of anchors) {
+                    const btn = a.querySelector('button');
+                    if (!btn) continue;
+                    if (intent(btn.getAttribute('aria-label')) && btn.offsetParent) return a.href;
+                }
+                for (const a of anchors) {
+                    if (intent(a.getAttribute('aria-label'))) return a.href;
+                    if ((a.href||'').includes('linkedin.com/safety/go/')) return a.href;
+                }
+                return null;
+            }""")
+            if ext_url and "linkedin.com/safety/go/" in ext_url:
+                import urllib.parse as _up
+                qs = _up.urlparse(ext_url).query
+                decoded = _up.parse_qs(qs).get("url", [None])[0]
+                if decoded:
+                    ext_url = _up.unquote(decoded)
+                else:
+                    ext_url = None
+            try:
+                p.close()
+            except Exception:
+                pass
+            emit_type("external", f"EXTERNAL_URL: {ext_url}")
             emit_next("navigate")
-            _merge_state({"jid": jid, "url": url, "title": title, "company": company})
+            _merge_state({"jid": jid, "url": url, "title": title, "company": company, "external_url": ext_url or ""})
             sys.exit(0)
 
         # Not external — try opening Easy Apply modal
@@ -166,13 +211,15 @@ def run(jid):
             p.wait_for_selector(
                 '[role="dialog"], [data-test-form-builder]', timeout=8000
             )
-        except:
+        except Exception:
             pass
         time.sleep(2)
+        tag_page(p, jid)  # re-tag after navigation (first tag was wiped)
 
         if check_captcha(p):
             emit_status("captcha", "detected on Easy Apply modal")
             emit_next("retry after solving")
+            _close_p()
             return
 
         page_state = read_page(p)
@@ -189,20 +236,23 @@ def run(jid):
 
         reg = resolve_registry(url)
         if page_state and page_state["fieldCount"] > 0:
-            _merge_state({"jid": jid, "_detect_fields": page_state})
+            page_owner = False  # keep page open for act --fill
+            _merge_state({"jid": jid, "_detect_fields": page_state, "external_url": p.url})
             emit_type("easy_apply")
             if reg:
                 reg.emit_notes()
             emit_next("act --fill")
         elif apply_fields:
             fb = {"fieldCount": len(apply_fields), "fields": apply_fields}
-            _merge_state({"jid": jid, "_detect_fields": fb})
+            page_owner = False
+            _merge_state({"jid": jid, "_detect_fields": fb, "external_url": p.url})
             emit_type("easy_apply")
             if reg:
                 reg.emit_notes()
             emit_next("act --fill")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
-            _merge_state({"jid": jid})
+            page_owner = False
+            _merge_state({"jid": jid, "external_url": p.url})
             emit_type("easy_apply", "dialog not auto-opened")
             if reg:
                 reg.emit_notes()
@@ -216,9 +266,10 @@ def run(jid):
             p.wait_for_selector(
                 'form, input, select, textarea, [role="dialog"]', timeout=8000
             )
-        except:
+        except Exception:
             pass
         time.sleep(2)
+        tag_page(p, jid)  # tag so act can find this page by JID
         if check_captcha(p):
             emit_status("captcha", "detected on job page")
             emit_next("retry after solving")

@@ -1,8 +1,14 @@
 """inspect_lib.py — Reusable page inspection helpers.
 Save screenshot + dump HTML (universal). Run probes + analyze fields (apply-specific).
 All output to stdout for SLM consumption. Filenames overwrite on re-run.
+
+Capture vs file handling separated:
+  page_jpeg(page) / page_html(page) — pure capture, no I/O
+  save_persistent(data, jid, ext, prefix) — saves to screenshots/ dir
+  save_temp(data, suffix) — saves to system temp dir, caller must clean up
+  capture(page, jid, prefix) — combines them for the standard persistent flow
 """
-import json, os, sys
+import json, os, sys, tempfile
 from urllib.parse import urlparse
 
 from lib.config import JI_HOME
@@ -25,27 +31,94 @@ def _path(jid, ext, prefix=""):
     return path
 
 
+def page_jpeg(page, full=True):
+    """Capture page screenshot as JPEG bytes. No file I/O.
+    full=True captures the entire scrollable page (for inspect/debug).
+    full=False captures only the viewport (for vision checks — avoids API downscaling)."""
+    return page.screenshot(type="jpeg", quality=80, full_page=full)
+
+
+def page_html(page):
+    """Capture page HTML including shadow DOM as string. No file I/O."""
+    return page.evaluate("""() => {
+        const VOID = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+        function serialize(node) {
+            if (node.nodeType === Node.TEXT_NODE) return node.textContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            if (node.nodeType !== Node.ELEMENT_NODE) return '';
+            const tag = node.tagName.toLowerCase();
+            let a = '';
+            for (const attr of node.attributes) {
+                const v = attr.value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+                a += ' ' + attr.name + '="' + v + '"';
+            }
+            let inner = '';
+            if (node.shadowRoot) {
+                inner += '<template shadowrootmode="' + node.shadowRoot.mode + '">';
+                for (const c of node.shadowRoot.childNodes) inner += serialize(c);
+                inner += '</template>';
+            }
+            for (const c of node.childNodes) {
+                if (c.nodeType === Node.ELEMENT_NODE && c.tagName === 'SLOT') continue;
+                inner += serialize(c);
+            }
+            if (VOID.has(tag)) return '<' + tag + a + '>';
+            return '<' + tag + a + '>' + inner + '</' + tag + '>';
+        }
+        return '<!DOCTYPE html>\\n' + serialize(document.documentElement);
+    }""")
+
+
+def save_persistent(data, jid, ext, prefix=""):
+    """Save bytes/string to screenshots/ directory. Overwrites on re-run. Returns path."""
+    path = _path(jid, ext, prefix)
+    mode = "wb" if isinstance(data, bytes) else "w"
+    try:
+        with open(path, mode) as f:
+            f.write(data)
+        print(f"FILE: {path}")
+    except Exception as e:
+        print(f"FILE_FAILED: {e}", file=sys.stderr)
+    return path
+
+
+def save_temp(data, suffix):
+    """Save data to a temporary file. Returns path; caller must os.unlink()."""
+    mode = "wb" if isinstance(data, bytes) else "w"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        with open(tmp.name, mode) as f:
+            f.write(data)
+    except Exception:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+        raise
+    finally:
+        tmp.close()
+    return tmp.name
+
+
 def capture(page, jid, prefix=""):
     """Universal: save screenshot (JPEG) + HTML dump. Outputs IMG: and HTML: paths.
     Optional prefix (e.g. 'fetch') separates files per pipeline stage. Overwrites on re-run.
     Safe to call from any pipeline stage (fetch, tailor, apply). Returns img path."""
-    img = _path(jid, "jpg", prefix)
+    img_path = _path(jid, "jpg", prefix)
     try:
-        page.screenshot(path=img, type="jpeg", quality=80)
-        print(f"IMG: {img}")
+        img_data = page_jpeg(page, full=True)
+        with open(img_path, "wb") as f:
+            f.write(img_data)
+        print(f"IMG: {img_path}")
     except Exception as e:
         print(f"IMG_FAILED: {e}", file=sys.stderr)
-
-    html = _path(jid, "html", prefix)
+    html_path = _path(jid, "html", prefix)
     try:
-        h = page.evaluate("() => document.documentElement.outerHTML")
-        with open(html, "w", encoding="utf-8") as f:
-            f.write(h)
-        print(f"HTML: {html}")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(page_html(page))
+        print(f"HTML: {html_path}")
     except Exception as e:
         print(f"HTML_FAILED: {e}", file=sys.stderr)
-
-    return img
+    return img_path
 
 
 def probe_state(page):
@@ -54,9 +127,11 @@ def probe_state(page):
     page_domain = domain(page.url)
     registry = resolve_registry(page.url)
     best = probe_page(page, domain=page_domain, registry_config=registry)
-    if best and best.field_count > 0:
+    if best and best.field_count > ps.get("fieldCount", 0):
         ps = best.to_dict()
-        print(f"Probe: {best.strategy} ({best.field_count} fields)", file=sys.stderr)
+        print(f"Probe: {best.strategy} ({best.field_count} fields, deeper than read_page)", file=sys.stderr)
+    elif best and best.field_count > 0:
+        print(f"Probe: {best.strategy} ({best.field_count} fields, read_page had more)", file=sys.stderr)
     else:
         best, all_results = probe_all(page, domain=page_domain, registry_config=registry)
         if best and best.field_count > 0:

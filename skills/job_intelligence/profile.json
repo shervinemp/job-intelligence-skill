@@ -56,9 +56,15 @@
     "communicationconsent": "notGiven",
     "visa_sponsorship": "No, I do not require work permit sponsorship to work in Canada",
     "office": "Yes, in the Toronto office",
-    "yes": "No - I do not consent to receiving text messages",
+    "yes": "Yes",
     "no": "No, I do not require work permit sponsorship to work in Canada",
     "yes_the_san_francisco": "Yes, in the Toronto office",
-    "not_require_visa_sponsorship": "Yes, I require work permit sponsorship to work in Canada"
+    "not_require_visa_sponsorship": "No, I do not require work permit sponsorship to work in Canada",
+    "hired_which_country_wil": "Canada",
+    "upload_file": "C:\\Users\\sherv\\Downloads\\Shervin_Naseri_Resume.pdf",
+    "phone_country_code": "Canada (+1)",
+    "mobile_phone_number": "+1 (343) 558-1744",
+    "phone_country_codephone_country": "Canada (+1)",
+    "how_many_years_work": "3+"
   }
 }

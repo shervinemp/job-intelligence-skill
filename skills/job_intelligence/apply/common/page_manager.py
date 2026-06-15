@@ -13,7 +13,7 @@ def _load():
     try:
         with open(REGISTRY_PATH) as f:
             return json.load(f)
-    except:
+    except Exception:
         return {}
 
 
@@ -28,7 +28,7 @@ def _save(r):
 def _fingerprint(page):
     try:
         return (page.evaluate("() => (document.body.innerText || '').trim().slice(0, 100)") or "")
-    except:
+    except Exception:
         return ""
 
 
@@ -72,7 +72,7 @@ class PageManager:
                 try:
                     if urlparse(url).netloc.lower() == fallback_domain:
                         domain_matches.append(p)
-                except:
+                except Exception:
                     pass
 
         if tagged:
@@ -137,23 +137,23 @@ class PageManager:
                 url = p.url.lower()
                 if "about:blank" in url or "chrome-error" in url or "newtab" in url:
                     try: p.close()
-                    except: pass
+                    except Exception: pass
 
     def close_others(self, keep_page):
         keep = read_page_tag(keep_page)
         for p in self.ctx.pages:
             if p != keep_page and read_page_tag(p) == keep:
                 try: p.close()
-                except: pass
+                except Exception: pass
 
     def close_stale(self, target_url=""):
         for p in self.ctx.pages:
             url = p.url.lower()
             if "about:blank" in url or "chrome-error" in url or "newtab" in url:
                 try: p.close()
-                except: pass
+                except Exception: pass
                 continue
             jid = read_page_tag(p)
             if jid and jid != self.jid:
                 try: p.close()
-                except: pass
+                except Exception: pass
