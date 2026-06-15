@@ -155,12 +155,12 @@ _READER_JS = """(config) => {
     root.querySelectorAll(':defined').forEach(el => { if (el.shadowRoot) fileCount += el.shadowRoot.querySelectorAll('input[type="file"]').length; });
 
     // Buttons (standard DOM)
-    const buttons = Array.from(root.querySelectorAll('button'))
+    const buttons = Array.from(root.querySelectorAll('button, a.btn, a[role="button"]'))
         .filter(b => b.offsetParent !== null)
         .map(b => ({
             text: (b.textContent || '').trim().slice(0, 30),
             disabled: b.disabled || false,
-            type: b.getAttribute('type') || 'button',
+            type: 'button',
         }));
 
     const text = (document.body.innerText || '').toLowerCase();
