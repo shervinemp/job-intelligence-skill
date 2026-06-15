@@ -4,7 +4,7 @@
   "email": "shervin.naseri@gmail.com",
   "phone": "+1 (343) 558-1744",
   "location": "Ottawa, Ontario, Canada",
-  "resume_path": "C:\\Users\\sherv\\Downloads\\Shervin_Naseri_Resume.pdf",
+  "resume_path": "C:\\\\Users\\\\sherv\\\\Downloads\\\\Shervin_Naseri_Resume.pdf",
   "linkedin_url": "https://www.linkedin.com/in/shervin-naseri-b3a016b0",
   "portfolio_url": "https://shervinemp.github.io/portfolio",
   "github_url": "https://github.com/shervinemp",
@@ -21,6 +21,7 @@
     "notice_period": "Immediately",
     "consent_text_messages": "No",
     "office_preference": "Yes, in the Toronto office",
-    "authorized_to_work": "Yes"
+    "authorized_to_work": "Yes",
+    "work_authorization": "Yes, I am legally authorized to work in Canada"
   }
 }
