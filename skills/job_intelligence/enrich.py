@@ -1,7 +1,7 @@
 """enrich.py — Fetch job descriptions + enrich fields (title, company, location, salary, category). SLM reviews DESC lines, admits or skips.
 
 Usage:
-  enrich.py [--count N] [--curl] [--force] [--refresh]   (default --count 3)
+  enrich.py [--curl] [--force] [--refresh]
   enrich.py admit <jid> [jid...]
   enrich.py skip <jid> [jid...]
   enrich.py flag <jid> [jid...]
@@ -171,14 +171,12 @@ def save_description(jid, text):
     desc_save(jid, text)
 
 
-def cmd_fetch(count=None, use_playwright=True, force=False, refresh=False, verbose=False):
+def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
     state = load()
     stage = "described" if refresh else "extracted"
     pending = [(jid, e) for jid, e in state["jobs"].items()
                if e.get("stage") == stage and e.get("state") == "active" and (force or not desc_exists(jid))]
 
-    if count:
-        pending = pending[:count]
     if not pending:
         print("NO_PENDING_FETCH", file=sys.stderr)
         return
@@ -352,7 +350,7 @@ def cmd_undo(jid):
 
 def cmd_help():
     print("Usage:", file=sys.stderr)
-    print("  [--count N] [--curl] [--force] [--refresh] [--verbose]   Fetch descriptions (default 3)", file=sys.stderr)
+    print("  [--curl] [--force] [--refresh] [--verbose]   Fetch descriptions", file=sys.stderr)
     print("  admit <jid> [jid...] [--category <name>] [--title ...] [--company ...] [--location ...] [--salary ...] [--url ...] [--notes ...]   Mark described", file=sys.stderr)
     print("  skip <jid> [jid...]                                        Skip (garbage/closed)", file=sys.stderr)
     print("  flag <jid> [jid...]                                       Mark as auth wall", file=sys.stderr)
@@ -429,7 +427,6 @@ def cmd_open(*jids):
 def main():
     import argparse
     parser = argparse.ArgumentParser(prog="enrich.py", description="Fetch descriptions + enrich job fields (title, company, location, salary, category)")
-    parser.add_argument("--count", type=int, default=3, help="Jobs to fetch (default 3)")
     parser.add_argument("--curl", action="store_true", help="Use curl instead of Playwright")
     parser.add_argument("--force", action="store_true", help="Re-fetch even if description exists")
     parser.add_argument("--refresh", action="store_true", help="Fetch from described stage")
@@ -477,7 +474,6 @@ def main():
         cmd_help()
     else:
         cmd_fetch(
-            count=args.count,
             use_playwright=not args.curl,
             force=args.force,
             refresh=args.refresh,

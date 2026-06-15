@@ -14,11 +14,11 @@ Before running pipeline, read these:
 | `stage_emails.py [--days N]` | Auto |
 | `extract.py` | `admit --category <name> <jid>` / reject |
 | `linkedin.py [--url] [--max N]` | admit/reject |
-| `enrich.py [--count N]` | admit/reject/flag |
-| `tailor.py [--count N]` | admit/reject/undo/retry. See tailoring section |
+| `enrich.py` | admit/reject/flag |
+| `tailor.py [--auto]` | admit/reject/undo/retry. See tailoring section |
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
 
-> Use default batch sizes: `enrich.py --count 3`, `tailor.py --count 1`. Larger counts confuse state tracking.
+> `tailor.py` crafts one job at a time. Use `--auto` to process all described jobs with rate-limit handling.
 
 ## Commands
 
@@ -33,7 +33,7 @@ Before running pipeline, read these:
 | `enrich.py retry` | Retry failed |
 | `enrich.py retry-skipped` | Reset skipped → extracted |
 | `enrich.py open [<jid>]` | Open in Chrome |
-| `tailor.py [--count N]` | Start tailoring (default 1, -1 = all) |
+| `tailor.py [--auto]` | Start tailoring (crafst 1, --auto = all) |
 | `tailor.py admit <jid> [--pdf <path>]` (also: done) | Confirm PDF → stage = tailored |
 | `tailor.py reject <jid>` | Skip |
 | `tailor.py undo <jid>` | Move back one stage |
@@ -77,7 +77,7 @@ detect <jid> → [navigate] → act --fill → act --next (repeat) → act --sub
 |------|-------------|
 | `detect <jid>` | Pre-flight: DB stage, PDF, classify type (easy_apply / external / ats_direct / already_applied / login_wall). Outputs `TYPE:` + `NEXT:`. |
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS |
-| `act --fill <jid> [--answers '{}'] [--dry-run]` | Resolve via 6-step chain: session_cache → label_map → prefix → exact (profile + derivations + answers + hash-gated derived_answers) → --answers → LLM w/ decisions.md context. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
+| `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
 | `act --submit <jid> --confirm` | Submit. **`--confirm` req'd** — dry-run w/o. Checks validation errors, CAPTCHA, success text. |
@@ -86,16 +86,14 @@ detect <jid> → [navigate] → act --fill → act --next (repeat) → act --sub
 
 ### Apply tips
 
-- `--answers` — normalized exact match (case/punctuation insensitive). Overrides automatic resolution for one run.
+- `--answers` — normalized exact match (case/punctuation insensitive). Full label text.
 - `--candidate N` — picks from CANDIDATES list. Works on --fill/--next/--submit/--inspect.
 - `--dry-run` on `--fill` shows resolved answers without DOM modification. Validates field detection first.
-- Resolution order: session_cache → label_map → prefix → exact (profile facts + derivations + answers + hash-gated derived_answers) → --answers → LLM (selects key or suggests new:key|value from decisions.md). LLM-derived values persist to `derived_answers` and auto-refresh when decisions.md hash changes.
-- Two-encounter rule: LLM guesses only become permanent after same label → same key on 2 separate jobs.
 - Multi-page: fill → next → fill → ... until Submit appears or verify passes.
 - Guest apply: auto-clicks "continue without signing in" when available.
 - Pipeline cannot create accounts, remember passwords, or handle 2FA.
 - 3x guard: same page 3 fills in a row → warns.
-- EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `answers` keys for reuse.
+- EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `common_answers.eeo` for reuse.
 - Platform registry (`apply/registry/*.yaml`): per-ATS widget overrides. `widget_parent` config controls dropdown parent selector.
 
 ## Platform quirks
@@ -171,10 +169,8 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 - **JI_TAILOR**: `"agent"` (default) = SLM writes `script.py`, `admit` confirms. `"gem"` = Gemini Web gem.
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
 - **LinkedIn title dedup**: Cards repeat title — `linkedin.py` deduplicates by matching repeated half.
-- **Resolve chain**: `resolve.py` — 6-step cascading resolution (session_cache → label_map → prefix → exact → --answers → LLM). LLM selects from existing keys only, never generates values. `new:key|value` supported for decisions.md-derived answers, persisted to `derived_answers` (hash-gated: auto-refreshes when decisions.md changes). Two-encounter rule prevents single bad LLM guess from persisting.
-- **decisions.md**: included as context in every LLM selection call. No parsing, no seed step. User edits plain markdown, LLM reads it live when needed.
-- **Common_answers**: `--answers` exact → `answers` dict (profile.json). Old `common_answers` migrated, no backward compat needed.
-- **EEO detection**: Uses decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic, zero false positives. Saved under `answers` keys for reuse.
+- **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
+- **EEO detection**: Uses decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic, zero false positives. Saved under `common_answers.eeo` sub-key.
 - **Chrome lifecycle**: Pipeline starts its own Chrome instance on a free port (never reuses user's browser). Port persisted to `chrome-config.json` across processes.
 - **PDF guard**: `detect` refuses to proceed if stage is `tailored` but no Resume PDF exists. Run `tailor.py undo <jid> && tailor.py --jid <jid>` to regenerate.
 - **Platform registry**: `apply/registry/*.yaml` defines per-ATS configs (`widget_parent` selector, custom widgets). Auto-resolved from page URL — no caller changes needed.
