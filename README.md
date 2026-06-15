@@ -109,7 +109,7 @@ job_intelligence/
     │   ├── field_reader.py# Canonical DOM field reader (JS, crash-guarded)
     │   ├── inspect_lib.py # Reusable page capture + probe analysis
     │   ├── inspector.py   # 8-depth probe cascade + DOM snapshot
-    │   ├── answer_matcher.py # Exact match + safe word-overlap fallback
+    │   ├── answer_matcher.py # Normalized exact match (case/punctuation insensitive)
     │   ├── learner.py     # ButtonIntentClassifier only
     │   ├── page_helpers.py# read_page, scan_actions, page finding
     │   ├── page_manager.py# Page registry (tag → domain → candidates)
@@ -176,7 +176,7 @@ All scripts respond to `help` and `status` subcommands.
 
 `detect` classifies job type (Easy Apply / External / Applied / ATS direct).  
 `navigate` clicks "Apply on company website" on LinkedIn, decodes safety redirect, lands on ATS form.  
-`act --fill` fills all fields from `--answers` → profile (exact + word-overlap). Supports INPUT, SELECT, TEXTAREA, radio grids, DROPDOWN, flatpickr dates, autocomplete, file uploads, and contenteditable.  
+`act --fill` fills all fields from `--answers` → `common_answers` → profile (normalized exact match). Supports INPUT, SELECT, TEXTAREA, radio grids, DROPDOWN, flatpickr dates, autocomplete, file uploads, and contenteditable. Pass `--dry-run` to preview without DOM changes.  
 `act --next` advances through multi-page forms. Ambiguous buttons → CANDIDATES, pick with `--candidate N`.  
 `act --submit` clicks Submit (dry-run w/o `--confirm`). Checks result: CAPTCHA, validation errors, AJAX submit.  
 `verify` 4-strategy check (modal closed, success text, Applied button, DB stage). Grants platform trust on success.
@@ -274,11 +274,7 @@ copy .env.example .env
 
 **4. Start Chrome with persistent profile**
 
-```powershell
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
-    --user-data-dir="$env:USERPROFILE\.ji\chrome-profile" `
-    --remote-debugging-port=9222 --no-first-run
-```
+Chrome is auto-managed by the pipeline — each stage starts/reuses a dedicated instance on a free port. No manual launch needed.
 
 **5. Authenticate Gmail**
 
@@ -311,6 +307,13 @@ python stage_emails.py   # Stage Gmail threads → DB
 python extract.py        # SLM admits/rejects URLs
 python enrich.py          # SLM admits/rejects descriptions
 python tailor.py         # SLM reviews CV, runs admit or review/retry
+
+# Auto-apply (optional, after tailoring)
+python apply.py detect <jid>   # Classify job type
+python apply.py act --fill <jid>   # Fill form fields
+python apply.py act --next <jid>   # Advance multi-page forms
+python apply.py act --submit <jid> --confirm   # Submit
+python apply.py verify <jid>   # Confirm submission
 ```
 
 ---
@@ -335,7 +338,7 @@ Tailored CVs and application files are written to `~/.ji/results/{jid}/`:
 |---------|-------|-----|
 | `invalid_grant` | Stale OAuth token | `gmail-cli auth add <email>` |
 | `TIMEOUT` / `RATE_LIMIT` | Gemini throttling | `python3 tailor.py retry` |
-| Chrome crash | Process died | Restart Chrome (see Setup step 4) |
+| Chrome crash | Process died | Auto-restarted — do nothing |
 | DB corruption | Bad reset / crash | `python3 extract.py reset` |
 | Auth wall stuck | Blocked page | `enrich.py open` then `enrich.py --refresh` |
 ---
