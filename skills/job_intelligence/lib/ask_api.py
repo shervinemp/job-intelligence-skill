@@ -127,7 +127,7 @@ def _jpeg_dims(data):
     return None
 
 
-def _payload(messages, temperature, max_tokens, cfg):
+def _payload(messages, temperature, max_tokens, cfg, timeout=60):
     """Build request body and call the API. Returns (reply, error)."""
     body = json.dumps({
         "model": cfg["model"],
@@ -142,7 +142,7 @@ def _payload(messages, temperature, max_tokens, cfg):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
         return data["choices"][0]["message"]["content"], None
     except urllib.error.HTTPError as e:
@@ -165,9 +165,9 @@ def _vision(image_data, prompt, temperature, max_tokens, cfg):
     return _payload([{"role": "user", "content": content}], temperature, max_tokens, cfg)
 
 
-def _text(prompt, temperature, max_tokens, cfg):
+def _text(prompt, temperature, max_tokens, cfg, timeout=10):
     """Send text-only prompt to API."""
-    return _payload([{"role": "user", "content": prompt}], temperature, max_tokens, cfg)
+    return _payload([{"role": "user", "content": prompt}], temperature, max_tokens, cfg, timeout=timeout)
 
 
 if __name__ == "__main__":

@@ -235,7 +235,7 @@ def _llm_select(label: str, available_keys: list) -> Optional[str]:
 
     try:
         from lib.ask_api import _text, _load_config
-        reply, err = _text(prompt, 0.1, 64, _load_config())
+        reply, err = _text(prompt, 0.1, 64, _load_config(), timeout=5)
         if err or not reply:
             return None
         result = (reply or "").strip().strip('"').strip("'")
