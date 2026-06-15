@@ -30,7 +30,7 @@ from apply.common.output import (
 )
 from apply.common.page_manager import PageManager
 from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
-from apply.common.resolve import resolution_for_fill, commit_resolutions, Resolution
+from apply.common.resolve import resolution_for_fill
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 
