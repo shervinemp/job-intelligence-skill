@@ -11,4 +11,6 @@ page-dump.json
 Thumbs.db
 
 # Personal data
-job_intelligence/profile.json
+**/profile.json
+label_map.json
+session_cache.json

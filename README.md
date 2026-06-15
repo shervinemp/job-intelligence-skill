@@ -81,7 +81,7 @@ job_intelligence/
 ├── requirements.txt      # Python dependencies (pip install -r)
 ├── gems.json             # Gem alias → ID mapping
 ├── categories.json       # Category → gem mapping
-├── profile.json          # User profile for auto-fill (gitignored)
+├── profile.json          # User profile (top-level keys + answers dict, local only)
 ├── decisions.md          # User preferences — edit for your situation
 ├── tailor_prompt.md      # Agent route prompt template — edit for custom instructions
 ├── SKILL.md              # Full operations manual
@@ -109,7 +109,7 @@ job_intelligence/
     │   ├── field_reader.py# Canonical DOM field reader (JS, crash-guarded)
     │   ├── inspect_lib.py # Reusable page capture + probe analysis
     │   ├── inspector.py   # 8-depth probe cascade + DOM snapshot
-    │   ├── answer_matcher.py # Normalized exact match (case/punctuation insensitive)
+    │   ├── resolve.py      # Resolution chain: cache → exact → LLM w/ decisions.md context
     │   ├── learner.py     # ButtonIntentClassifier only
     │   ├── page_helpers.py# read_page, scan_actions, page finding
     │   ├── page_manager.py# Page registry (tag → domain → candidates)
@@ -176,7 +176,7 @@ All scripts respond to `help` and `status` subcommands.
 
 `detect` classifies job type (Easy Apply / External / Applied / ATS direct).  
 `navigate` clicks "Apply on company website" on LinkedIn, decodes safety redirect, lands on ATS form.  
-`act --fill` fills all fields from `--answers` → `common_answers` → profile (normalized exact match). Supports INPUT, SELECT, TEXTAREA, radio grids, DROPDOWN, flatpickr dates, autocomplete, file uploads, and contenteditable. Pass `--dry-run` to preview without DOM changes.  
+`act --fill` resolves answers through 6-step chain: session cache → label_map → prefix → exact → --answers → LLM w/ decisions.md context. Pass `--dry-run` to preview without DOM changes.  
 `act --next` advances through multi-page forms. Ambiguous buttons → CANDIDATES, pick with `--candidate N`.  
 `act --submit` clicks Submit (dry-run w/o `--confirm`). Checks result: CAPTCHA, validation errors, AJAX submit.  
 `verify` 4-strategy check (modal closed, success text, Applied button, DB stage). Grants platform trust on success.
@@ -285,14 +285,14 @@ gmail-cli auth add you@gmail.com
 
 **6. Fill in your profile**
 
-Edit `profile.json`: name, contact info, work history, common answers. Required before first apply.
+Edit `profile.json`: name, contact info. Answers auto-populate from `--answers` and decisions.md rules.
 
 ### Configuration files
 
 | File | Location | What goes in it | Required? |
 |------|----------|-----------------|-----------|
 | `.env` | `job_intelligence/` | `JI_HOME` (default `~/.ji/`), `JI_TAILOR` (`"agent"` or `"gem"`), `GMAIL_SEARCH_QUERY` | No (sensible defaults) |
-| `profile.json` | `job_intelligence/` | Name, email, phone, work history, education, skills, `resume_path` (path to PDF), `common_answers` (form fill answers) | Yes |
+| `profile.json` | `job_intelligence/` | Top-level keys (name, email, phone, location) + `answers` dict (reusable form fill values). Edit once, answers accumulate over time via `--answers` and decisions.md seeding. | Yes (local only, not tracked) |
 | `client_secret.json` | `ji-skill/` root | OAuth 2.0 Desktop credentials from Google Cloud Console (Gmail API) | Yes, for email staging |
 | `gems.json` | `job_intelligence/` | Gemini gem alias → raw ID mapping. Created by `call_gemini.py --refresh` | Only if using `JI_TAILOR=gem` |
 | `categories.json` | `job_intelligence/` | Category → gem alias mapping (e.g. `tech` → `optimizer_tech`) | Only if using `JI_TAILOR=gem` |
