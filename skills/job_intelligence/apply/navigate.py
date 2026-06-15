@@ -111,7 +111,8 @@ def run(jid):
                 if has_password or ("sign in" in body_text and "apply" not in body_text):
                     mark_auth_wall(jid, ep.url, title or "", company or "")
                     print(f"AUTH_WALL: {jid} — {title} @ {company}", file=sys.stderr)
-                    save_state({"jid": jid, "external_url": ep.url, "page": page_state})
+                    # Preserve original external_url so re-run re-detects login wall
+                    save_state({"jid": jid, "external_url": external_url, "page": page_state})
                     emit_next("enrich.py open")
                     sys.exit(0)
 
