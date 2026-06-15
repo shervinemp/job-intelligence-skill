@@ -13,7 +13,7 @@ Resolution order (strict):
 """
 from __future__ import annotations
 
-import json, os, re, time
+import hashlib, json, os, re, time
 from typing import Optional
 
 # ─── Paths (anchored to profile.json directory) ──────────────────────
@@ -67,9 +67,13 @@ def _save_json(path: str, data):
 def _load_decisions_md() -> str:
     try:
         with open(_DECISIONS_PATH, encoding="utf-8") as f:
-            return f.read().strip()
+            return f.read()
     except (FileNotFoundError, OSError):
         return ""
+
+def _decisions_md_hash() -> str:
+    c = _load_decisions_md()
+    return hashlib.md5(c.encode()).hexdigest()[:12] if c else ""
 
 
 # ─── Ephemeral answer builder ───────────────────────────────────────
@@ -109,6 +113,13 @@ def _build_ephemeral(profile: dict) -> dict:
         for k, v in answers.items():
             if v:
                 ephemeral[k] = (v, "static")
+
+    # derived_answers: LLM-generated from decisions.md, hash-gated
+    da = profile.get("derived_answers", {})
+    if isinstance(da, dict) and profile.get("decisions_md_hash") == _decisions_md_hash():
+        for k, v in da.items():
+            if v and k not in ephemeral:
+                ephemeral[k] = (v, "derived")
 
     return ephemeral
 
@@ -188,7 +199,8 @@ def resolve(
                                        "created": time.strftime("%Y-%m-%d"), "hit_count": 1}
                     _save_json(_LABEL_MAP_PATH, label_map)
                     p = _load_json(os.path.join(_JI_DIR, "profile.json"))
-                    p.setdefault("answers", {})[new_key] = new_val
+                    p.setdefault("derived_answers", {})[new_key] = new_val
+                    p["decisions_md_hash"] = _decisions_md_hash()
                     _save_json(os.path.join(_JI_DIR, "profile.json"), p)
                     return Resolution(new_val, new_key, label, "md_derived", False)
 
