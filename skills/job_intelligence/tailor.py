@@ -1,7 +1,7 @@
 """tailor.py — Tailor CVs via Gemini Web.
 
 Usage:
-  tailor.py [--count N]               Craft N described jobs (default: 1)
+  tailor.py [--auto]                  Craft all described jobs
   tailor.py admit <jid> [jid...]      Mark job as tailored (also: done)
   tailor.py reject <jid> [jid...]      Reject job(s)
   tailor.py retry                     Retry all failed (batch)
@@ -127,7 +127,9 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
     }
 
 
-def cmd_craft(count=1):
+def cmd_craft(auto=False):
+    if auto:
+        return cmd_relentless()
     state = load()
     described = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described" and e.get("state") == "active"]
     if not described:
@@ -137,47 +139,31 @@ def cmd_craft(count=1):
         else:
             print(f"ALL_DONE", file=sys.stderr)
         return
-    processed = failed_count = 0
-    batch = described if count == -1 else described[:count]
-    for jid, entry in batch:
-        title = entry.get("title", "?")
-        company = entry.get("company", "?")
-        if count > 1:
-            print(f"\nProcessing: {title} @ {company}", file=sys.stderr)
+    jid, entry = described[0]
+    title = entry.get("title", "?")
+    company = entry.get("company", "?")
+    print(f"\nJOB {jid} {title} @ {company}", file=sys.stderr)
+    print(f"URL: {entry.get('url', '')}")
+    print(f"DIR: {os.path.join(RESULTS_DIR, jid)}")
+    try:
+        success, result = generate_tailored_docs(entry)
+        if success and os.environ.get("JI_TAILOR", "agent") == "agent":
+            print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'", file=sys.stderr)
+        elif success:
+            print(f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check quality", file=sys.stderr)
+            text = result.get("text", "")
+            if text:
+                print(f"\n---RESPONSE---\n{text}\n---", file=sys.stderr)
         else:
-            print(f"\nJOB {jid} {title} @ {company}", file=sys.stderr)
-            print(f"URL: {entry.get('url', '')}")
-            print(f"DIR: {os.path.join(RESULTS_DIR, jid)}")
-        try:
-            success, result = generate_tailored_docs(entry)
-            mode = os.environ.get("JI_TAILOR", "agent")
-            if success and mode == "agent":
-                print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'", file=sys.stderr)
-                processed += 1
-            elif success:
-                if count == 1:
-                    print(f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check quality", file=sys.stderr)
-                    text = result.get("text", "")
-                    if text:
-                        print(f"\n---RESPONSE---\n{text}\n---", file=sys.stderr)
-                else:
-                    print(f"  Complete -> run 'admit <jid>' or 'review'", file=sys.stderr)
-                processed += 1
-            else:
-                err_str = str(result)[:120]
-                if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
-                    print(f"  TRANSIENT {jid} — {err_str}", file=sys.stderr)
-                    failed_count += 1
-                    break
-                advance(entry, entry.get("stage"), state="failed", error=str(result)[:200])
-                print(f"  FAILED {jid} {err_str}", file=sys.stderr)
-                failed_count += 1
-        except Exception as e:
-            advance(entry, entry.get("stage"), state="failed", error=str(e)[:200])
-            print(f"  ERROR {jid} {str(e)[:120]}", file=sys.stderr)
-            failed_count += 1
-    if count > 1:
-        print(f"\nDone. Crafted: {processed}, Failed: {failed_count}", file=sys.stderr)
+            err_str = str(result)[:120]
+            if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
+                print(f"  TRANSIENT {jid} — {err_str}", file=sys.stderr)
+                return
+            advance(entry, entry.get("stage"), state="failed", error=str(result)[:200])
+            print(f"  FAILED {jid} {err_str}", file=sys.stderr)
+    except Exception as e:
+        advance(entry, entry.get("stage"), state="failed", error=str(e)[:200])
+        print(f"  ERROR {jid} {str(e)[:120]}", file=sys.stderr)
 
 
 def craft_jid(jid):
@@ -358,7 +344,7 @@ def cmd_retry(job_id=None, feedback=None):
     print(f"\nRetry complete. Succeeded: {processed}/{len(failed)}", file=sys.stderr)
 
 
-def cmd_relentless(count):
+def cmd_relentless():
     import re as _re, time as _time, subprocess as _sp, sys as _sys, os as _os
     from datetime import datetime
     _YEAR = datetime.now().year
@@ -377,7 +363,7 @@ def cmd_relentless(count):
         _time.sleep(120)
     tailor_script = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "tailor.py")
     while True:
-        r = _sp.run([_sys.executable, tailor_script, f"--count={count}"], capture_output=True, text=True, timeout=300)
+        r = _sp.run([_sys.executable, tailor_script], capture_output=True, text=True, timeout=300)
         output = (r.stdout or "") + (r.stderr or "")
         if "ALL_DONE" in output or "NO_PENDING" in output:
             s = pipeline_status()
@@ -390,8 +376,6 @@ def cmd_relentless(count):
         s = pipeline_status()
         if s.get("stages", {}).get("described", 0) == 0:
             print(f"DONE: {s['stages'].get('tailored',0)} tailored")
-            break
-        if count != -1:
             break
 
 
@@ -432,8 +416,7 @@ def cmd_reset(job_id=None, states=None, stages=None):
 
 def cmd_help():
     print("""Usage:
-  [--count N]                               Craft CVs (default 1)
-  [--count N] --relentless                  Craft all, idle on rate limits
+  [--auto]                                  Craft all described jobs
   admit <jid> [jid...]                      Mark tailored (also: done)
   reject <jid> [jid...]                     Reject
   undo <jid>                                Move back one stage
@@ -449,8 +432,7 @@ def cmd_help():
 def main():
     import argparse
     parser = argparse.ArgumentParser(prog="tailor.py", description="Tailor CVs via Gemini Web")
-    parser.add_argument("--count", type=int, default=1, help="Jobs to process (default 1, -1 = all)")
-    parser.add_argument("--relentless", action="store_true", help="Retry on rate limit with idle loop")
+    parser.add_argument("--auto", action="store_true", help="Craft all described jobs, retry on rate limit")
     parser.add_argument("--jid", help="Tailor a specific job by JID")
 
     sub = parser.add_subparsers(dest="command")
@@ -499,10 +481,7 @@ def main():
     elif args.jid:
         craft_jid(args.jid)
     elif args.command is None:
-        if args.relentless:
-            cmd_relentless(count=args.count)
-        else:
-            cmd_craft(count=args.count)
+        cmd_craft(auto=args.auto)
 
 
 if __name__ == "__main__":
