@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#! /usr/bin/env python3
 """navigate.py — Go to external ATS URL (stored by detect), classify the form."""
-import json, os, sys, time
+import json, os, re, sys, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
@@ -75,6 +75,28 @@ def run(jid):
     ep = ctx.new_page()
     ep.goto(external_url, wait_until="domcontentloaded", timeout=30000)
     time.sleep(5)
+
+    # Some ATS (Taleo, Workday job listings) land on a job details page
+    # with an "Apply now" button instead of the application form directly.
+    apply_btn = ep.locator("a.btn, a[role=button], button").filter(has_text=re.compile(r"Apply", re.I)).first
+    if apply_btn.count():
+        page_state = read_page(ep)
+        real_fields = [f for f in page_state.get("fields", [])
+                       if f.get("required") and f.get("tag") != "CHECKBOX"]
+        if not real_fields:
+            apply_btn.click()
+            time.sleep(4)
+            # Guard: if the click surfaced a login/sign-up page, abort
+            has_password = ep.locator('input[type="password"]').count()
+            body_text = (ep.inner_text("body") or "").lower()
+            if has_password or ("sign in" in body_text and "apply" not in body_text):
+                print("LOGIN_WALL: Apply button leads to sign-in — aborting", file=sys.stderr)
+                save_state({"jid": jid, "external_url": ep.url, "page": read_page(ep)})
+                emit_next("act --inspect")
+                sys.exit(0)
+
+    from apply.common.page_manager import PageManager
+
     from apply.common.page_manager import PageManager
 
     pm = PageManager(ctx, jid)
