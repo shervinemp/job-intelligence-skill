@@ -131,14 +131,53 @@ def _find_free_port():
     return CDP_PORT
 
 
-def start():
-    """Start Chrome with remote debugging on CDP_PORT."""
-    port = _find_free_port()
+def _read_port():
+    """Read persisted port from config file (written by start())."""
+    try:
+        with open(CHROME_CONFIG) as f:
+            return json.load(f).get("CDP_PORT", CDP_PORT)
+    except Exception:
+        return CDP_PORT
+
+
+def _write_port():
+    """Update config file with the current CDP_PORT so next process reuses it."""
     global CDP_PORT, CDP_URL
+    try:
+        with open(CHROME_CONFIG, "w") as f:
+            json.dump({
+                "CHROME_PATH": CHROME_PATH,
+                "CHROME_PROFILE": CHROME_PROFILE,
+                "CDP_PORT": CDP_PORT,
+                "CDP_URL": CDP_URL,
+            }, f, indent=2)
+    except Exception:
+        pass
+
+
+def start():
+    """Start a DEDICATED pipeline Chrome instance. Reuses a previously-started
+    pipeline Chrome (from config) if still alive. Never connects to user's Chrome."""
+    global CDP_PORT, CDP_URL
+    # Try reusing pipeline's Chrome from a previous process
+    if os.path.exists(CHROME_CONFIG):
+        cfg_port = _read_port()
+        if cfg_port != CDP_PORT:
+            old_url = f"http://127.0.0.1:{cfg_port}"
+            try:
+                pw = _pw()
+                b = pw.chromium.connect_over_cdp(old_url)
+                _ = b.contexts[0].pages
+                CDP_PORT = cfg_port
+                CDP_URL = old_url
+                b.close()
+                return True
+            except Exception:
+                pass  # stale — start fresh
+    # Find a free port that is NOT the user's Chrome port
+    port = _find_free_port()
     CDP_PORT = port
     CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
-    if is_running():
-        return True
     os.makedirs(CHROME_PROFILE, exist_ok=True)
     subprocess.Popen(
         [CHROME_PATH,
@@ -150,19 +189,26 @@ def start():
     )
     for _ in range(30):
         if is_running():
+            _write_port()
             return True
         time.sleep(1)
     return False
 
 
 def connect(timeout=15):
-    """Get a (browser, context) pair connected to a healthy Chrome.
-    Auto-restarts Chrome if the process crashed or is unresponsive."""
+    """Get a (browser, context) pair connected to a healthy dedicated Chrome.
+    Reuses a previously-started pipeline Chrome (from config file), or starts a new one.
+    Never connects to the user's personal Chrome."""
+    global CDP_PORT, CDP_URL
     pw = _pw()
     for attempt in range(3):
-        # Check if Chrome is alive
+        # Read persisted port from last start(), or env default
+        port = _read_port()
+        CDP_PORT = port
+        CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
         running = is_running()
         if not running:
+            # Our Chrome is not running — start a fresh one on a free port
             if not start():
                 print("ERROR: could not start Chrome", file=__import__('sys').stderr)
                 return None, None
@@ -216,14 +262,16 @@ def session_ok(url, check_text="Sign in", timeout=15):
             pass
 
 
-# On import, write a JSON config that Node tools (gemini.js) can read
-try:
-    with open(CHROME_CONFIG, "w") as f:
-        json.dump({
-            "CHROME_PATH": CHROME_PATH,
-            "CHROME_PROFILE": CHROME_PROFILE,
-            "CDP_PORT": CDP_PORT,
-            "CDP_URL": CDP_URL,
-        }, f, indent=2)
-except Exception:
-    pass
+# On import, write initial config for Node tools (gemini.js) if not yet created
+# start() will update the port once Chrome is actually running
+if not os.path.exists(CHROME_CONFIG):
+    try:
+        with open(CHROME_CONFIG, "w") as f:
+            json.dump({
+                "CHROME_PATH": CHROME_PATH,
+                "CHROME_PROFILE": CHROME_PROFILE,
+                "CDP_PORT": CDP_PORT,
+                "CDP_URL": CDP_URL,
+            }, f, indent=2)
+    except Exception:
+        pass

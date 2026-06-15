@@ -77,21 +77,24 @@ detect <jid> → [navigate] → act --fill → act --next (repeat) → act --sub
 |------|-------------|
 | `detect <jid>` | Pre-flight: DB stage, PDF, classify type (easy_apply / external / ats_direct / already_applied / login_wall). Outputs `TYPE:` + `NEXT:`. |
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS |
-| `act --fill <jid> [--answers '{}']` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". |
+| `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
 | `act --submit <jid> --confirm` | Submit. **`--confirm` req'd** — dry-run w/o. Checks validation errors, CAPTCHA, success text. |
-| `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons. Use when stuck. |
-| `verify <jid>` | Scan open pages for "thank you"/"submitted" text. Updates DB stage to "applied" if confirmed. |
+| `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
+| `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 
 ### Apply tips
 
 - `--answers` — normalized exact match (case/punctuation insensitive). Full label text.
 - `--candidate N` — picks from CANDIDATES list. Works on --fill/--next/--submit/--inspect.
+- `--dry-run` on `--fill` shows resolved answers without DOM modification. Validates field detection first.
 - Multi-page: fill → next → fill → ... until Submit appears or verify passes.
 - Guest apply: auto-clicks "continue without signing in" when available.
 - Pipeline cannot create accounts, remember passwords, or handle 2FA.
 - 3x guard: same page 3 fills in a row → warns.
+- EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `common_answers.eeo` for reuse.
+- Platform registry (`apply/registry/*.yaml`): per-ATS widget overrides. `widget_parent` config controls dropdown parent selector.
 
 ## Platform quirks
 
@@ -167,4 +170,8 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
 - **LinkedIn title dedup**: Cards repeat title — `linkedin.py` deduplicates by matching repeated half.
 - **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
+- **EEO detection**: Uses decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic, zero false positives. Saved under `common_answers.eeo` sub-key.
+- **Chrome lifecycle**: Pipeline starts its own Chrome instance on a free port (never reuses user's browser). Port persisted to `chrome-config.json` across processes.
+- **PDF guard**: `detect` refuses to proceed if stage is `tailored` but no Resume PDF exists. Run `tailor.py undo <jid> && tailor.py --jid <jid>` to regenerate.
+- **Platform registry**: `apply/registry/*.yaml` defines per-ATS configs (`widget_parent` selector, custom widgets). Auto-resolved from page URL — no caller changes needed.
 - **Gems**: `categories.json` → `gems.json` → `gemini.js` resolution chain.

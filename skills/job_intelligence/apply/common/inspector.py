@@ -12,6 +12,7 @@ Probe strategies:
 
 import json
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -173,8 +174,8 @@ def _probe_iframes(page):
                     iframe_srcs.append(frame.url)
             except Exception:
                 pass  # cross-origin iframe — can't access
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"PROBE_ERROR: iframe probe failed — {e}", file=sys.stderr)
 
     if not all_fields:
         try:
@@ -198,11 +199,13 @@ def _probe_iframes(page):
     )
 
 
+probe_iframes = _probe_iframes  # public alias for page_helpers.read_page
+
+
 def _probe_iframe_navigate(page, prev_result=None):
     """Depth 2.5: Navigate to cross-origin iframe src URLs and re-probe.
     Handles ATS that load forms in cross-origin iframes (UKG/UltiPro, etc.).
-    Navigates back to original URL if no fields found in the iframe.
-    """
+    Navigates back to original URL if no fields found in the iframe."""
     iframe_srcs = prev_result.iframe_srcs if prev_result else []
     if not iframe_srcs:
         try:
@@ -229,6 +232,9 @@ def _probe_iframe_navigate(page, prev_result=None):
             except Exception:
                 pass
     return ProbeResult(strategy="iframe_navigate", field_count=0, page_type="unknown", url=page.url)
+
+
+probe_iframe_navigate = _probe_iframe_navigate  # public alias for act.py
 
 
 def _probe_shadow_dom(page):
@@ -439,6 +445,30 @@ _PROBE_STRATEGIES = [
 # Strategies that should never be auto-tried (only via --deep)
 _DEEP_ONLY = {"html_scan"}
 
+def _merge_with_widgets(result, registry_config, page):
+    """If registry has widget selectors, probe for custom dropdowns and merge.
+    Deduplicates by field label. Returns (merged_result, was_merged)."""
+    if not registry_config or not registry_config.widgets:
+        return result, False
+    cw_result = _probe_custom_widgets(page, registry_config=registry_config)
+    if cw_result.field_count == 0:
+        return result, False
+    existing_labels = {f.get("label", "") for f in result.fields}
+    merged = list(result.fields)
+    for f in cw_result.fields:
+        if f.get("label", "") not in existing_labels:
+            merged.append(f)
+            existing_labels.add(f.get("label", ""))
+    return ProbeResult(
+        fields=merged, buttons=result.buttons,
+        strategy=f"{result.strategy}+custom_widgets",
+        field_count=len(merged),
+        page_type=result.page_type,
+        has_file_input=result.has_file_input or cw_result.has_file_input,
+        url=result.url,
+    ), True
+
+
 def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=True, jid=None):
     """Run the probe cascade. Returns the first successful ProbeResult.
 
@@ -461,6 +491,8 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
                 kw["registry_config"] = registry_config
             result = strategy_fn(page, **kw)
             if result.field_count > 0:
+                if best_strategy != "custom_widgets":
+                    result, _ = _merge_with_widgets(result, registry_config, page)
                 return result
             best_strategy_failed = True
 
@@ -480,6 +512,8 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
         if result.field_count > 0:
             if best_strategy_failed:
                 print(f"CONFIG_STALE: {best_strategy} returned 0 fields, cascade found {name} with {result.field_count} fields", file=sys.stderr)
+            if name != "custom_widgets":
+                result, _ = _merge_with_widgets(result, registry_config, page)
             return result
 
     # All strategies failed

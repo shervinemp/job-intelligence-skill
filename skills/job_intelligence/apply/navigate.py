@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""navigate.py — LinkedIn job page -> click external apply -> detect ATS."""
-import json, os, sys, time, urllib.parse
+"""navigate.py — Go to external ATS URL (stored by detect), classify the form."""
+import json, os, sys, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn
-from apply.common.page_helpers import read_page, save_state
+from apply.common.page_helpers import read_page, save_state, load_state
 from apply.common.platforms import detect_platform
 from apply.common.output import emit_next, emit_error
 
@@ -23,74 +23,37 @@ def run(jid):
 
     print(f"JOB: {title or '?'} @ {company or '?'}", file=sys.stderr)
 
-    b, ctx = connect()
-    p = ctx.new_page()
-    p.goto(url, wait_until="domcontentloaded", timeout=30000)
-    time.sleep(5)
-
-    external_url = p.evaluate(
-        """() => {
-        const anchors = document.querySelectorAll('a[href]');
-        const hasApplyIntent = (s) => {
-            const t = (s || '').toLowerCase();
-            return t.includes('on company website') || t.includes('company site')
-                || /apply\\s*(on|at|through|via|external(ly)?)/.test(t)
-                || /external\\s+apply/.test(t);
-        };
-        // 1. Anchor wrapping a button with external-apply intent
-        for (const a of anchors) {
-            const btn = a.querySelector('button');
-            if (!btn) continue;
-            const aria = btn.getAttribute('aria-label') || '';
-            const text = (btn.textContent || '').trim();
-            if ((hasApplyIntent(aria) || hasApplyIntent(text)) && btn.offsetParent !== null)
-                return a.href;
-        }
-        // 2. Anchor with external-apply aria-label
-        for (const a of anchors) {
-            const aria = a.getAttribute('aria-label') || '';
-            const text = (a.textContent || '').trim();
-            const href = a.href || '';
-            if (hasApplyIntent(aria) || hasApplyIntent(text)) return href;
-            if (href.includes('linkedin.com/safety/go/')) return href;
-        }
-        // 3. Bare button with external-apply intent (no wrapping anchor)
-        const buttons = document.querySelectorAll('button');
-        for (const b of buttons) {
-            const aria = b.getAttribute('aria-label') || '';
-            const text = (b.textContent || '').trim();
-            if (hasApplyIntent(aria) || hasApplyIntent(text)) return b.getAttribute('formaction') || '';
-        }
-        return null;
-    }"""
-    )
-
-    if external_url and "linkedin.com/safety/go/" in external_url:
-        qs = urllib.parse.urlparse(external_url).query
-        decoded = urllib.parse.parse_qs(qs).get("url", [None])[0]
-        if decoded:
-            external_url = urllib.parse.unquote(decoded)
-        else:
-            external_url = None
-
+    # External URL was stored by detect — use it directly, skip LinkedIn re-navigation
+    state = load_state()
+    external_url = state.get("external_url", "")
     if not external_url or "linkedin.com" in external_url:
-        p.evaluate(
-            """() => { document.querySelectorAll('button').forEach(b => { if ((b.getAttribute('aria-label')||'').includes('on company website') && b.offsetParent !== null) b.click(); }); }"""
-        )
-        time.sleep(5)
-        for p2 in ctx.pages:
-            u = p2.url
-            if (
-                "linkedin.com" not in u
-                and u != "about:blank"
-                and not u.startswith("chrome")
-            ):
-                external_url = u
-                break
-        if not external_url or "linkedin.com" in external_url:
-            current = p.evaluate("window.location.href")
-            if "linkedin.com" not in current:
-                external_url = current
+        # Fallback: detect may not have found it — try opening LinkedIn job page
+        from apply.common.page_helpers import tag_page as _tp
+        b, ctx = connect()
+        p = ctx.new_page()
+        p.goto(url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(3)
+        external_url = p.evaluate("""() => {
+            for (const a of document.querySelectorAll('a[href]')) {
+                const btn = a.querySelector('button');
+                const aria = (btn?.getAttribute('aria-label') || a.getAttribute('aria-label') || '').toLowerCase();
+                if (aria.includes('on company website') && (btn?.offsetParent || a.offsetParent)) return a.href;
+                if ((a.href||'').includes('linkedin.com/safety/go/')) return a.href;
+            }
+            return null;
+        }""")
+        if external_url and "linkedin.com/safety/go/" in external_url:
+            import urllib.parse as _up
+            qs = _up.urlparse(external_url).query
+            decoded = _up.parse_qs(qs).get("url", [None])[0]
+            if decoded:
+                external_url = _up.unquote(decoded)
+            else:
+                external_url = None
+        try:
+            p.close()
+        except Exception:
+            pass
 
     if not external_url or "linkedin.com" in (external_url or ""):
         emit_error("no external URL — job may be closed or premium-walled")
@@ -100,31 +63,15 @@ def run(jid):
     plat = detect_platform(external_url)
     print(f"EXTERNAL_URL: {external_url}\nPLATFORM: {plat}", file=sys.stderr)
 
-    # Close the origin LinkedIn page and any safety-redirect pages
-    for pg in ctx.pages:
-        u = pg.url
-        if "linkedin.com" in u and u != p.url:
-            try:
-                pg.close()
-            except:
-                pass
-
-    # Close LinkedIn page
-    try:
-        p.close()
-    except:
-        pass
-
-    # Close existing page on same external URL (avoid duplicate tabs)
+    b, ctx = connect()
     for pg in ctx.pages:
         if pg.url.rstrip("/") == external_url.rstrip("/"):
             try:
                 pg.close()
-            except:
+            except Exception:
                 pass
             break
 
-    # Navigate to external URL and read form
     ep = ctx.new_page()
     ep.goto(external_url, wait_until="domcontentloaded", timeout=30000)
     time.sleep(5)
@@ -138,6 +85,8 @@ def run(jid):
     print(f"PAGE: {json.dumps(page_state)}", file=sys.stderr)
     emit_next("act --fill")
 
+    # Use actual page URL (Greenhouse rewrites boards -> job-boards on redirect)
+    actual_url = ep.url
     save_state(
-        {"jid": jid, "external_url": external_url, "platform": plat, "page": page_state}
+        {"jid": jid, "external_url": actual_url, "platform": plat, "page": page_state}
     )

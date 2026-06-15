@@ -26,7 +26,7 @@ def tag_page(page, jid):
     """Persistently tag a page with a JID via DOM attribute (survives process restarts)."""
     try:
         page.evaluate(f"document.documentElement.setAttribute('{_DOM_ATTR}', {json.dumps(jid)})")
-    except:
+    except Exception:
         pass
     _PAGE_JID_MAP[id(page)] = jid  # cache for current process
 
@@ -35,7 +35,7 @@ def read_page_tag(page):
     """Read persistent JID tag from DOM."""
     try:
         return page.evaluate(f"document.documentElement.getAttribute('{_DOM_ATTR}') or ''")
-    except:
+    except Exception:
         return ""
 
 _CAPTCHA_SIGNALS = [
@@ -90,7 +90,7 @@ def handle_captcha(page, state):
 
 def load_state():
     try:
-        with open(STATE_PATH) as f:
+        with open(STATE_PATH, encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError, FileNotFoundError):
         return {}
@@ -98,18 +98,49 @@ def load_state():
 def save_state(state):
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
     tmp = STATE_PATH + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
     os.replace(tmp, STATE_PATH)
 
-def read_page(p):
+def read_page(p, custom_widgets=None):
     """Read page content including fields, buttons, page type hints.
     Tries document scope first, falls back to dialog scope if no fields found.
-    Dialog scope auto-detection via activeElement was unreliable — this is simpler and catches more cases."""
+    If still no fields found, probes same-origin iframes for embedded forms.
+
+    If custom_widgets is not provided, auto-resolves from the page URL via
+    platform registry — works for Ashby, Workday, and other ATS without
+    callers needing to know about widget configs."""
     from apply.common.field_reader import read_fields as _rf
-    result = _rf(p, scope="document")
+    from apply.common.inspector import probe_iframes
+    if custom_widgets is None:
+        try:
+            from apply.common.registry import resolve as resolve_registry
+            registry = resolve_registry(p.url)
+            if registry and registry.widgets:
+                cw = dict(registry.widgets)
+                wp = getattr(registry, 'widget_parent', None)
+                if wp:
+                    cw["parent"] = wp
+                custom_widgets = cw
+        except Exception:
+            pass
+    result = _rf(p, scope="document", custom_widgets=custom_widgets)
     if result["fieldCount"] == 0:
-        result = _rf(p, scope="dialog")
+        result = _rf(p, scope="dialog", custom_widgets=custom_widgets)
+    # Iframe fallback: some ATS embed forms in same-origin iframes.
+    # Only merge if the iframe has MORE fields than the parent DOM — this prevents
+    # sidebar widgets or analytics iframes from polluting the field list.
+    # probe_iframes only accesses same-origin iframes; cross-origin ones are skipped.
+    has_iframes = p.evaluate("() => !!document.querySelector('iframe')")
+    if has_iframes:
+        ifr = probe_iframes(p)
+        if ifr.field_count > result.get("fieldCount", 0):
+            existing = {f.get("label", "") for f in result.get("fields", [])}
+            for f in ifr.fields:
+                if f.get("label", "") not in existing:
+                    result["fields"].append(f)
+                    existing.add(f.get("label", ""))
+            result["fieldCount"] = len(result["fields"])
     return result
 
 def find_page(ctx, state):
@@ -149,7 +180,7 @@ def find_page(ctx, state):
     if "linkedin.com/jobs/view" in ext:
         try:
             li_job_id = ext.split("/jobs/view/")[1].split("/")[0]
-        except:
+        except Exception:
             pass
     if li_job_id:
         for p in ctx.pages:

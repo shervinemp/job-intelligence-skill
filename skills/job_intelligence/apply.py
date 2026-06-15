@@ -33,6 +33,7 @@ def main():
     act_p.add_argument("--back", action="store_true", help="Click Back")
     act_p.add_argument("--submit", action="store_true", help="Click Submit (dry-run w/o --confirm)")
     act_p.add_argument("--inspect", action="store_true", help="Full page analysis: screenshot, HTML, probes, fields")
+    act_p.add_argument("--dry-run", action="store_true", help="Preview fill without modifying DOM")
     act_p.add_argument("--answers", help="JSON field->value mapping for --fill")
     act_p.add_argument("--candidate", type=int, default=None, help="Pick Nth from CANDIDATES")
     act_p.add_argument("--confirm", action="store_true", help="Confirm submit (required to actually send)")

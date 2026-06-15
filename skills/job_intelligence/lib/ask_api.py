@@ -43,35 +43,98 @@ def available():
 
 
 def ask(image_path, prompt, temperature=0.3, max_tokens=2048):
+    """Send image file + prompt to vision API. Returns (reply, error)."""
+    try:
+        with open(image_path, "rb") as f:
+            image_data = f.read()
+    except FileNotFoundError:
+        return None, f"image not found: {image_path}"
+    except Exception as e:
+        return None, f"reading image: {e}"
+    return ask_bytes(image_data, prompt, temperature, max_tokens)
+
+
+def ask_bytes(image_data, prompt, temperature=0.3, max_tokens=2048):
+    """Send raw image bytes + prompt to vision API. No temp files needed. Returns (reply, error)."""
     cfg = _load_config()
     if not cfg["url"]:
         return None, "LLM_API_URL not set"
+    return _vision(image_data, prompt, temperature, max_tokens, cfg)
 
-    messages = [{"role": "user", "content": prompt}]
-    if image_path:
-        try:
-            with open(image_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-        except FileNotFoundError:
-            return None, f"image not found: {image_path}"
-        except Exception as e:
-            return None, f"reading image: {e}"
 
-        ext = os.path.splitext(image_path)[1].lower()
-        mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                "webp": "image/webp", "gif": "image/gif"}.get(ext, "image/png")
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-        ]}]
+def ask_chunked(image_data, prompt, temperature=0.3, max_tokens=2048,
+                max_chunk_height=1800, overlap=150):
+    """Send image to vision API, auto-chunking if taller than max_chunk_height.
+    Each chunk is sent with section context, then observations are consolidated.
+    Falls back to ask_bytes() if PIL is not available or image is small."""
+    cfg = _load_config()
+    if not cfg["url"]:
+        return None, "LLM_API_URL not set"
+    dims = _jpeg_dims(image_data)
+    if not dims or dims[1] <= max_chunk_height:
+        return _vision(image_data, prompt, temperature, max_tokens, cfg)
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(image_data))
+        w, h = dims
+        chunks = []
+        n = max(1, (h - overlap) // (max_chunk_height - overlap) + 1)
+        for i in range(n):
+            y1 = max(0, i * (max_chunk_height - overlap))
+            y2 = min(y1 + max_chunk_height, h)
+            buf = io.BytesIO()
+            img.crop((0, y1, w, y2)).save(buf, format="JPEG", quality=80)
+            cp = f"{prompt}\n\nThis is visual section {i+1} of {n} of the page (top to bottom). Focus on this section only."
+            reply, err = _vision(buf.getvalue(), cp, temperature, max_tokens, cfg)
+            if err:
+                return None, err
+            chunks.append(reply)
+        consol = (
+            f"Below are observations from {n} sections of a page (top to bottom).\n\n"
+            + "\n---\n".join(f"Section {i+1}:\n{r}" for i, r in enumerate(chunks))
+            + f"\n\nBased on ALL sections above, answer the original question:\n{prompt}\n"
+            "Give a single, precise, consolidated answer. If sections disagree, explain why."
+        )
+        final, err = _text(consol, temperature, min(max_tokens, 1024), cfg)
+        if err:
+            partials = "\n".join(f"Section {i+1}: {r[:200]}" for i, r in enumerate(chunks))
+            return (f"CONSOLIDATION_FAILED — partial results:\n{partials}", None)
+        return (final, None)
+    except ImportError:
+        return _vision(image_data, prompt, temperature, max_tokens, cfg)
 
+
+def _jpeg_dims(data):
+    """Read JPEG dimensions from raw bytes. No dependencies."""
+    import struct
+    i = 0
+    while i < len(data) - 1:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        m = data[i+1]
+        if m in (0xC0, 0xC1, 0xC2):
+            return (struct.unpack_from('>H', data, i+7)[0],
+                    struct.unpack_from('>H', data, i+5)[0])
+        if m == 0xD9:
+            break
+        if 0xD0 <= m <= 0xD8:
+            i += 2
+            continue
+        length = struct.unpack_from('>H', data, i+2)[0]
+        i += 2 + length
+    return None
+
+
+def _payload(messages, temperature, max_tokens, cfg):
+    """Build request body and call the API. Returns (reply, error)."""
     body = json.dumps({
         "model": cfg["model"],
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }).encode()
-
     api_url = f"{cfg['url']}/chat/completions"
     req = urllib.request.Request(
         api_url, data=body,
@@ -90,6 +153,21 @@ def ask(image_path, prompt, temperature=0.3, max_tokens=2048):
         return None, f"bad response: {e}"
     except Exception as e:
         return None, str(e)
+
+
+def _vision(image_data, prompt, temperature, max_tokens, cfg):
+    """Send image bytes + text to vision API."""
+    b64 = base64.b64encode(image_data).decode()
+    # Detect MIME from magic bytes
+    mime = "image/jpeg" if image_data[:2] == b"\xff\xd8" else "image/png"
+    content = [{"type": "text", "text": prompt},
+               {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}]
+    return _payload([{"role": "user", "content": content}], temperature, max_tokens, cfg)
+
+
+def _text(prompt, temperature, max_tokens, cfg):
+    """Send text-only prompt to API."""
+    return _payload([{"role": "user", "content": prompt}], temperature, max_tokens, cfg)
 
 
 if __name__ == "__main__":

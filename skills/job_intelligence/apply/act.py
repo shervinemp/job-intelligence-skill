@@ -20,6 +20,7 @@ from apply.common.page_helpers import (
 from apply.common.registry import resolve as resolve_registry
 from apply.common.inspector import probe as probe_page
 from apply.common.learner import ButtonIntentClassifier
+from apply.common.field_reader import scan_errors
 from apply.common.output import (
     emit_next,
     emit_status,
@@ -240,7 +241,7 @@ def _handle_post_click(state, ps, page):
         if has_submit_btn:
             return False
         text = (page.evaluate("() => document.body.innerText") or "").lower()
-        for w in ["thank you", "submitted", "your application", "has been sent"]:
+        for w in ["your application has been", "your application was", "has been sent", "you have applied"]:
             if w in text:
                 emit_status("submitted")
                 emit_next("verify")
@@ -313,7 +314,7 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
                 if el and not el.is_checked():
                     el.check()
                     return True
-        except:
+        except Exception:
             pass
         return False
 
@@ -326,33 +327,22 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
         if ans:
             ans_lower = ans.lower()
             matched = False
-            # 1. Match by option_label (for grid/matrix: column header or choice text)
+            # 1. Match by option_label (exact match only — defers to LLM for fuzzy cases)
             for rf in group:
                 ol = (rf.get("option_label", "") or "").lower()
-                if ol and (ans_lower in ol or ol in ans_lower):
+                if ol and ans_lower == ol:
                     if _check_radio(rf):
                         filled += 1
                         matched = True
                         break
             if not matched:
-                # 2. Match by value attribute
+                # 2. Match by value attribute (exact match only)
                 for rf in group:
                     rv = (rf.get("value", "") or "").lower()
-                    if rv and (ans_lower == rv or rv in ans_lower or ans_lower in rv):
+                    if rv and ans_lower == rv:
                         if _check_radio(rf):
                             filled += 1
                             matched = True
-                            break
-            if not matched:
-                # 3. Fallback: match by primary label (original behavior)
-                for opt in opts:
-                    if ans_lower in opt.lower():
-                        for rf in group:
-                            if rf["label"] == opt and _check_radio(rf):
-                                filled += 1
-                                matched = True
-                                break
-                        if matched:
                             break
         else:
             unfilled.append(
@@ -395,7 +385,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                 continue
             candidates = []
             for fn in os.listdir(results_dir):
-                if re.search(r"\bResume\b", fn, re.I) and fn.lower().endswith(".pdf"):
+                if "Resume" in fn and fn.lower().endswith(".pdf"):
                     score = 0
                     if (state.get("title") or "").split(" ")[0].lower() in fn.lower():
                         score += 2
@@ -444,7 +434,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                     file_uploaded = True
                     filled += 1
                     continue
-            except:
+            except Exception:
                 pass
             # Fallback: drag-and-drop zone with no visible file input
             if not file_uploaded:
@@ -530,8 +520,8 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                                 else:
                                     # Close dropdown by clicking trigger again (safe toggle, won't close modal)
                                     btn.first.click(force=True, timeout=5000)
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"  DROPDOWN: {lbl[:40]} — {e}", file=sys.stderr)
             elif f.get("required"):
                 unfilled.append({"label": lbl[:60], "options": [], "tag": "DROPDOWN"})
             continue
@@ -584,8 +574,8 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                         )
                         or ""
                     )
-                except:
-                    pass
+                except Exception as e:
+                    print(f"  SELECTOR_JS: {f.get('label','?')[:40]} — {e}", file=sys.stderr)
             if sel:
                 try:
                     el = page.query_selector(sel)
@@ -598,7 +588,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                                         (
                                             o
                                             for o in f["options"]
-                                            if v.lower() in o.lower()
+                                            if v.lower() == o.lower()
                                         ),
                                         v,
                                     )
@@ -646,7 +636,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                                 ml = el.get_attribute("maxlength")
                                 if ml and ans and len(ans) > int(ml):
                                     ans = ans[: int(ml)]
-                            except:
+                            except Exception:
                                 pass
                             # Check if this is an autocomplete field (multiselect widget)
                             is_ac = False
@@ -655,7 +645,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                                     "data_automation_id", ""
                                 ):
                                     is_ac = True
-                            except:
+                            except Exception:
                                 pass
                             if is_ac:
                                 # Use press_sequentially for autocomplete (triggers dropdown, suggests options)
@@ -684,8 +674,8 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                             else:
                                 el.fill(ans)
                             filled += 1
-                except:
-                    pass
+                except Exception as e:
+                    print(f"  FILL_FAILED: {lbl[:40]} — {e}", file=sys.stderr)
         elif f.get("required"):
             unfilled.append(
                 {"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]}
@@ -714,12 +704,12 @@ def _check_already_submitted(state, jid):
     return False
 
 
-def cmd_fill(jid, answers_json=None, candidate=None):
+def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
     answers = {}
     if answers_json:
         try:
             answers = json.loads(answers_json)
-        except:
+        except Exception:
             print("ERROR: --answers must be valid JSON", file=sys.stderr)
 
     state = load_state()
@@ -794,7 +784,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     ):
         ps = state["_detect_fields"]
     if ps.get("fieldCount", 0) == 0 and domain:
-        reg_config = registry  # Pass RegistryConfig object for best_strategy + widgets
+        reg_config = registry
         probe_result = probe_page(page, domain=domain, registry_config=reg_config)
         if probe_result.field_count > 0:
             ps = probe_result.to_dict()
@@ -803,6 +793,18 @@ def cmd_fill(jid, answers_json=None, candidate=None):
                 f"PROBE_FAILED: snapshot saved to {probe_result.snapshot_path}",
                 file=sys.stderr,
             )
+    # Also probe if iframes exist — parent DOM may have chrome fields while the real form is in an iframe
+    elif ps.get("fieldCount", 0) > 0 and domain and page.evaluate("() => !!document.querySelector('iframe')"):
+        from apply.common.inspector import probe_iframes, probe_iframe_navigate
+        # Same-origin iframes (fast, no navigation)
+        ifr = probe_iframes(page)
+        if ifr.field_count > ps.get("fieldCount", 0):
+            ps = ifr.to_dict()
+        else:
+            # Cross-origin iframes: navigate to the iframe URL, read fields, navigate back
+            ifr2 = probe_iframe_navigate(page)
+            if ifr2.field_count > ps.get("fieldCount", 0):
+                ps = ifr2.to_dict()
 
     # Guard: if this page was already filled, warn but proceed
     last_fingerprint = state.get("page_fingerprint", "")
@@ -934,6 +936,38 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             _validate_profile(profile)
     ca = profile.get("common_answers", {})
 
+    # Dry-run: resolve answers without touching DOM, print what would happen
+    if dry_run:
+        filled = 0
+        total = len(ps.get("fields", []))
+        print("DRY_RUN — would fill:", file=sys.stderr)
+        for f in ps.get("fields", []):
+            lbl = f.get("label", "")
+            if not lbl:
+                continue
+            if f["type"] == "file":
+                print(f"  [{f['tag']}] {lbl[:50]} -> <resume PDF>", file=sys.stderr)
+                filled += 1
+                continue
+            lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
+            ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
+            opts = f.get("options", [])
+            if ans:
+                if opts and ans not in opts:
+                    match = next((o for o in opts if ans.lower() in o.lower()), None)
+                    if not match:
+                        print(f"  [{f['tag']}] {lbl[:50]} -> {ans[:50]}  WARN: not in options {opts[:5]}", file=sys.stderr)
+                        continue  # don't count as resolvable
+                print(f"  [{f['tag']}] {lbl[:50]} -> {ans[:50]}", file=sys.stderr)
+                filled += 1
+            elif f.get("required"):
+                print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (required)", file=sys.stderr)
+        print(f"DRY_RUN: {filled}/{total} fields resolvable", file=sys.stderr)
+        if filled < total:
+            print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
+        emit_next("proceed" if filled == total else "act --fill --answers '...'")
+        return
+
     radio_filled, radio_unfilled = _fill_radios(
         page, ps["fields"], answers, ca, profile, jid
     )
@@ -942,6 +976,46 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     )
     filled = radio_filled + text_filled
     unfilled = radio_unfilled + text_unfilled
+
+    # EEO/demographic fields — detect by decline options (language-agnostic),
+    # report to LLM but DO NOT auto-fill (let LLM decide via --answers).
+    # Saved answers auto-apply on future jobs.
+    _DECLINE_SIGNALS = ["prefer not", "decline", "not say", "rather not"]
+    eeo_unfilled = [f for f in unfilled if any(
+        any(sig in (o or "").lower() for sig in _DECLINE_SIGNALS)
+        for o in f.get("options", [])
+    )]
+    if eeo_unfilled:
+        from apply.common.answer_matcher import match_answer as _ma
+        eeo_saved = ca.get("eeo", {})
+        new_saves = {}
+        for ef in eeo_unfilled:
+            lbl = ef["label"]
+            lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
+            ans = _ma(lbl, answers=answers, common_answers={"eeo": eeo_saved}, profile=profile, required=False)
+            if ans:
+                new_saves[lbl_norm] = ans
+                nf, _ = _fill_text(page, [ef], {lbl: ans}, ca, profile, jid, state)
+                filled += nf
+                print(f"  EEO: {lbl[:50]} -> {ans[:40]}", file=sys.stderr)
+            else:
+                print(f"  EEO_UNANSWERED: {lbl[:50]} (options: {[o[:30] for o in ef.get('options', [])[:4]]})", file=sys.stderr)
+        if new_saves:
+            merged = {**eeo_saved, **new_saves}
+            ca["eeo"] = merged
+            # Persist under common_answers.eeo sub-key (not flat namespace — avoids
+            # collisions with regular answers that share label keywords like "race")
+            try:
+                with open(profile_path) as f:
+                    p = json.load(f)
+                p.setdefault("common_answers", {})["eeo"] = merged
+                tmp = profile_path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(p, f, indent=2)
+                os.replace(tmp, profile_path)
+            except OSError:
+                pass
+        # Don't remove from unfilled — LLM sees them and can provide answers via --answers
 
     # Unfollow company/social update checkboxes (always)
     page.evaluate(
@@ -1014,6 +1088,20 @@ def cmd_fill(jid, answers_json=None, candidate=None):
 
     read_and_save(page, state)
 
+    # Verify filled values persisted (ATS may reject or clear values silently)
+    ps_v = read_page(page)
+    missing = [fv.get("label", "?")[:50] for fv in ps_v.get("fields", [])
+               if fv.get("required") and not fv.get("value", "").strip() and fv.get("type") != "file"]
+    if missing:
+        print(f"RE_FILL: {len(missing)} required fields empty after fill — retrying", file=sys.stderr)
+        for ml in missing:
+            match = next((ff for ff in ps_v["fields"] if ff.get("label", "")[:50] == ml), None)
+            if match:
+                nf, _ = _fill_text(page, [match], answers, ca, profile, jid, state)
+                filled += nf
+        state.pop("_fields_with_errors", None)
+        read_and_save(page, state)
+
     # Save new answers to profile common_answers for future use
     if filled > 0 and answers:
         for label, val in answers.items():
@@ -1045,7 +1133,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
         page_text = (page.evaluate("() => document.body.innerText") or "").lower()
         if any(
             w in page_text
-            for w in ["thank you", "submitted", "your application", "has been sent"]
+            for w in ["your application has been", "your application was", "has been sent", "you have applied"]
         ):
             emit_status("submitted", "auto-submit without clicking")
             emit_next("verify")
@@ -1087,6 +1175,89 @@ def cmd_next(jid, candidate=None):
     advance_kws = ["next", "continue", "review", "done", "submit", "submit application"]
     all_candidates = scan_actions(page, advance_kws, _EXCLUDED_BUTTONS)
 
+    # Detect page/step number from the DOM — multi-strategy cascade
+    step_info = page.evaluate(r"""() => {
+        const doc = document;
+        const text = (doc.body.innerText || '').toLowerCase();
+
+        // Strategy 1: ARIA progressbar (most reliable)
+        const pb = doc.querySelector('[role="progressbar"]');
+        if (pb) {
+            const now = pb.getAttribute('aria-valuenow');
+            const max = pb.getAttribute('aria-valuemax');
+            if (now && max) return {current: parseInt(now), total: parseInt(max)};
+        }
+
+        // Strategy 2: aria-setsize + aria-posinset on step items
+        const steps = doc.querySelectorAll('[aria-setsize]');
+        for (const s of steps) {
+            const pos = s.getAttribute('aria-posinset');
+            const total = s.getAttribute('aria-setsize');
+            if (pos && total) return {current: parseInt(pos), total: parseInt(total)};
+        }
+
+        // Strategy 3: aria-current="step" — count matching elements
+        const current = doc.querySelector('[aria-current="step"]');
+        if (current) {
+            const allSteps = doc.querySelectorAll('[aria-current="step"], [aria-current="false"], [class*="step"], [data-step]');
+            if (allSteps.length > 1) {
+                const idx = Array.from(allSteps).indexOf(current) + 1;
+                return {current: idx, total: allSteps.length};
+            }
+        }
+
+        // Strategy 4: data attributes (generic)
+        const dataStep = doc.querySelector('[data-current-step], [data-step]');
+        if (dataStep) {
+            const v = dataStep.getAttribute('data-current-step') || dataStep.getAttribute('data-step');
+            const allSteps = doc.querySelectorAll('[data-step], [class*="step"]');
+            const total = allSteps.length;
+            if (v && total > 0) return {current: parseInt(v), total: total};
+        }
+
+        // Strategy 5: structured step indicators in the DOM
+        const indicators = doc.querySelectorAll('[class*="step-indicator"], [class*="stepper"], [class*="wizard"], [class*="progress-track"]');
+        if (indicators.length > 0) {
+            const active = doc.querySelector('[class*="active"], [class*="current"]');
+            if (active && active.closest('[class*="step-indicator"], [class*="stepper"]')) {
+                const idx = Array.from(indicators[0].querySelectorAll('[class*="step"], li, [data-index]')).indexOf(active) + 1;
+                if (idx > 0 && indicators.length > 0) return {current: idx, total: indicators.length};
+            }
+        }
+
+        // Strategy 6: text-based (broader patterns)
+        const patterns = [
+            /(?:step|page|question)\s*(\d+)\s*(?:of|\/|—|-|–)\s*(\d+)/i,
+            /(\d+)\s*\/\s*(\d+)\s*(?:steps?|pages?|questions?)/i,
+            /(\d+)\s+of\s+(\d+)\s*(?:steps?|pages?|questions?)/i,
+        ];
+        for (const pat of patterns) {
+            const m = text.match(pat);
+            if (m) return {current: parseInt(m[1]), total: parseInt(m[2])};
+        }
+
+        return null;
+    }""")
+    # Always compute has_unfilled_required (needed for button selection regardless of step_info)
+    has_unfilled_required = any(
+        f.get("required") and not f.get("value")
+        for f in ps.get("fields", [])
+    )
+    if step_info:
+        state["_page"] = step_info["current"]
+        state["_page_total"] = step_info["total"]
+        save_state(state)
+    else:
+        # Infer page from unfilled fields if no step indicator found
+        state.pop("_page_total", None)
+        if has_unfilled_required and state.get("_page", 1) == 1:
+            pass  # already on page 1, no update needed
+        elif has_unfilled_required:
+            # Fields are still unfilled even after advancing — likely still on current page
+            pass
+        else:
+            state["_page"] = state.get("_page", 0) + 1  # assume advanced
+
     # If candidate was specified, click it directly
     if candidate is not None:
         if candidate < len(all_candidates):
@@ -1102,21 +1273,40 @@ def cmd_next(jid, candidate=None):
         return
 
     candidates = [c for c in all_candidates if not c.get("disabled")]
-    print("CANDIDATES:", file=sys.stderr)
-    for i, c in enumerate(candidates[:8]):
-        print(f"  [{i}] '{c['text'][:40]}' score={c.get('score','?')}", file=sys.stderr)
-
     target = None
-    if candidates:
-        best = ButtonIntentClassifier.pick(candidates, "submit")
-        if not best:
-            best = ButtonIntentClassifier.pick(candidates, "advance")
-        if best:
-            target = candidates[best["index"]]
-    if not target and candidates and candidates[0]["score"] >= 4:
+
+    # Categorize by intent
+    advance_cands = []
+    submit_cands = []
+    for c in candidates:
+        intent, _ = ButtonIntentClassifier.classify(c["text"])
+        if intent == "advance":
+            advance_cands.append(c)
+        elif intent == "submit":
+            submit_cands.append(c)
+
+    # Phase 1: if on an early page, only advance (never submit)
+    on_early_page = step_info and step_info["current"] < step_info["total"]
+
+    if advance_cands and (on_early_page or has_unfilled_required):
+        # Prefer "Next" / "Continue" over "Review" when there are unfilled fields
+        score_key = lambda c: 3 if c["text"].lower() in ("next", "continue") else (
+                             2 if c["text"].lower() == "review" else 1)
+        target = max(advance_cands, key=score_key)
+    elif advance_cands and not has_unfilled_required and not on_early_page:
+        # Last page, all filled — advance to review/submit
+        target = advance_cands[0]
+    elif submit_cands and not has_unfilled_required:
+        # No advance buttons, all filled — safe to submit
+        target = submit_cands[0]
+    elif candidates and not has_unfilled_required and candidates[0].get("score", 0) >= 4:
         target = candidates[0]
 
     if not target and candidates:
+        print("CANDIDATES:", file=sys.stderr)
+        for i, c in enumerate(candidates[:8]):
+            intent, conf = ButtonIntentClassifier.classify(c["text"])
+            print(f"  [{i}] '{c['text'][:40]}' ({intent}) score={c.get('score','?')}", file=sys.stderr)
         print("CHOOSE: act --next <jid> --candidate N", file=sys.stderr)
         emit_next("model_choice")
         save_state(state)
@@ -1344,11 +1534,11 @@ def cmd_submit(jid, confirm=False, candidate=None):
         text += " " + msg.lower()
     # Check for success signals first (handles AJAX submit where form stays visible)
     for signal in [
-        "thank you",
-        "submitted",
-        "your application",
+        "your application has been",
+        "your application was",
         "has been sent",
         "application received",
+        "you have applied",
     ]:
         if signal in text:
             get_conn().execute(
@@ -1374,7 +1564,26 @@ def cmd_submit(jid, confirm=False, candidate=None):
     if has_error and has_form:
         state["_last_submit"] = "validation_error"
         save_state(state)
-        emit_status("validation_errors", "form still present")
+        # Field-level diagnostics — wait briefly for animated errors to render
+        try:
+            page.wait_for_selector('[aria-invalid="true"]', timeout=3000)
+        except Exception:
+            pass
+        errs = scan_errors(page)
+        if errs:
+            for e in errs:
+                lbl = e.get("label", "?")
+                txt = e.get("error_text", "")
+                if txt:
+                    print(f"  FIELD_ERROR: {lbl} — {txt}", file=sys.stderr)
+                else:
+                    print(f"  FIELD_ERROR: {lbl} (invalid)", file=sys.stderr)
+            state["_fields_with_errors"] = [e["label"] for e in errs if e.get("label")]
+        else:
+            print("  FIELD_ERROR: (validation errors detected, no field-level detail)", file=sys.stderr)
+            state.pop("_fields_with_errors", None)
+        save_state(state)
+        emit_status("validation_errors", f"{len(errs)} field(s) with errors")
         emit_next("act --fill")
     elif (
         not page.evaluate("() => document.querySelector('[role=\"dialog\"]')")
@@ -1447,7 +1656,7 @@ def run(args):
     if args.inspect:
         cmd_inspect(args.jid, args.candidate)
     elif args.fill:
-        cmd_fill(args.jid, args.answers, args.candidate)
+        cmd_fill(args.jid, args.answers, args.candidate, args.dry_run)
     elif args.next:
         cmd_next(args.jid, args.candidate)
     elif args.back:
