@@ -18,7 +18,7 @@ from typing import Optional
 
 # ─── Paths (anchored to profile.json directory) ──────────────────────
 
-_JI_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_JI_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _LABEL_MAP_PATH = os.path.join(
     os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), "label_map.json"
 )
@@ -26,7 +26,6 @@ _SESSION_CACHE_PATH = os.path.join(
     os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), "session_cache.json"
 )
 _DECISIONS_PATH = os.path.join(_JI_DIR, "decisions.md")
-_PROFILE_PATH = os.path.join(_JI_DIR, "profile.json")
 
 
 # ─── Resolution result ───────────────────────────────────────────────
@@ -165,11 +164,9 @@ def resolve(
             if val is not None:
                 return Resolution(val, entry["key"], label, "label_map", False)
 
-    # Step 4: ephemeral exact match
+    # Step 4: ephemeral exact match (deterministic, no persistence needed)
     for key, (val, _source) in ephemeral.items():
         if nf(key.replace("_", " ")) == norm:
-            label_map[norm] = {"key": key, "provenance": "direct_match",
-                               "created": time.strftime("%Y-%m-%d"), "hit_count": 1}
             return Resolution(val, key, label, "ephemeral", False)
 
     # Step 5: --answers override
@@ -182,15 +179,15 @@ def resolve(
     result = _llm_select(label, keys_list)
     if result:
         if result.startswith("new:"):
-            # LLM suggests a new key=value from decisions.md: "new:key|value"
             parts = result[4:].split("|", 1)
             if len(parts) == 2:
                 new_key, new_val = parts[0].strip(), parts[1].strip()
                 if new_key and new_val:
-                    # Save to ephemeral for this run
                     ephemeral[new_key] = (new_val, "md_derived")
+                    # Persist immediately — LLM-derived decision, not deterministic
                     label_map[norm] = {"key": new_key, "provenance": "md_derived",
                                        "created": time.strftime("%Y-%m-%d"), "hit_count": 1}
+                    _save_json(_LABEL_MAP_PATH, label_map)
                     return Resolution(new_val, new_key, label, "md_derived", False)
 
         elif result in ephemeral:
@@ -253,7 +250,7 @@ def _llm_select(label: str, available_keys: list) -> Optional[str]:
 
 # ─── Post-verify promotion ──────────────────────────────────────────
 
-def promote_session_cache(profile: Optional[dict] = None) -> int:
+def promote_session_cache() -> int:
     """Promote session_cache entries that passed the two-encounter rule to label_map.
     Called after verify confirms submission. Returns count of new entries."""
     sc = _load_json(_SESSION_CACHE_PATH, {})
