@@ -59,71 +59,21 @@ def normalize(label: str) -> str:
     return re.sub(r"[^a-z0-9+#]+", " ", (label or "").lower()).strip()
 
 
-# ─── Evaluator ────────────────────────────────────────────────────────
+# ─── Derivations (computed in Python, not in JSON) ─────────────────────
 
-_BUILTINS = {
-    "concat": lambda *args: " ".join(str(a) for a in args),
-    "field": lambda val, idx: (
-        [x.strip() for x in val.split(",")][idx]
-        if isinstance(val, str) and "," in val
-        else val.strip() if isinstance(val, str) else val
-    ),
-}
-
-_DESCRIPTOR_RE = re.compile(r"^\$(facts|answers)/(.+)$")
-
-def _resolve_ref(ref: str, facts: dict, answers: dict) -> str:
-    """Resolve a JSON reference like '$facts/country' or '$answers/sponsorship'."""
-    m = _DESCRIPTOR_RE.match(ref)
-    if not m:
-        return ref
-    section, key = m.group(1), m.group(2)
-    return {"facts": facts, "answers": answers}.get(section, {}).get(key, ref)
-
-
-def _eval_derivations(facts: dict, derivations: list) -> dict:
-    """Evaluate derivation expressions against facts. Returns {key: value} dict."""
-    result = {}
-    for d in derivations:
-        fn = _BUILTINS.get(d["fn"])
-        if fn is None:
-            continue
-        args = [(_resolve_ref(a, facts, {}) if isinstance(a, str) else a) for a in d.get("args", [])]
-        try:
-            result[d["key"]] = fn(*args)
-        except Exception:
-            pass
-    return result
-
-
-def _eval_rules(decisions: dict, job_context: dict, facts: dict, answers: dict) -> dict:
-    """Evaluate decision rules against job context. Returns {rule_name: value} dict."""
-    result = {}
-    for rule in decisions.get("rules", []):
-        for case in rule.get("cases", []):
-            matched = True
-            if "if" in case:
-                for field, expected in case["if"].items():
-                    actual = job_context.get(field) or facts.get(field)
-                    if isinstance(expected, dict) and "$eq" in expected:
-                        expected_val = _resolve_ref(expected["$eq"], facts, answers)
-                        if str(actual or "").lower() != str(expected_val or "").lower():
-                            matched = False
-                            break
-                    elif str(actual or "").lower() != str(expected or "").lower():
-                        matched = False
-                        break
-            if matched:
-                then_val = case.get("then", case.get("else", {}))
-                if isinstance(then_val, dict):
-                    if "$ref" in then_val:
-                        result[rule.get("name", "unknown")] = _resolve_ref(
-                            then_val["$ref"], facts, answers
-                        )
-                    elif "value" in then_val:
-                        result[rule.get("name", "unknown")] = then_val["value"]
-                break
-    return result
+def _derive_location(location: str) -> dict:
+    """Extract city, state_province, country from 'Ottawa, Ontario, Canada'."""
+    if not location or "," not in location:
+        return {}
+    parts = [p.strip() for p in location.split(",")]
+    d = {}
+    if len(parts) >= 1:
+        d["city"] = parts[0]
+    if len(parts) >= 2:
+        d["state_province"] = parts[1]
+    if len(parts) >= 3:
+        d["country"] = parts[-1]
+    return d
 
 
 # ─── Load / Save helpers ──────────────────────────────────────────────
@@ -146,37 +96,56 @@ def _save_json(path: str, data):
 
 # ─── Ephemeral answer builder ─────────────────────────────────────────
 
-def _build_ephemeral(profile: dict, job_context: dict) -> dict:
-    """Build the full ephemeral answer dict from profile data + job context.
-    Order: facts → derivations → rules → static answers.
-    Returns {key: value} dict where each value is a tuple (value, source)."""
-    facts = profile.get("facts", {})
-    derivations = profile.get("derivations", [])
-    answers = profile.get("answers", {})
-    decisions = profile.get("decisions", {})
+_PROFILE_KEYS = {
+    "first_name", "last_name", "email", "phone",
+    "linkedin_url", "github_url", "portfolio_url",
+    "resume_path", "location",
+}
 
+def _build_ephemeral(profile: dict) -> dict:
+    """Build {key: (value, source)} from profile top-level keys + answers + derivations."""
     ephemeral = {}
 
-    # Facts
-    for k, v in facts.items():
+    # Top-level profile keys
+    for k in _PROFILE_KEYS:
+        v = profile.get(k)
         if v:
-            ephemeral[k] = (v, "fact")
+            ephemeral[k] = (v, "profile")
 
-    # Derivations
-    for k, v in _eval_derivations(facts, derivations).items():
+    # Derive full_name
+    fn, ln = profile.get("first_name", ""), profile.get("last_name", "")
+    if fn and ln:
+        ephemeral["full_name"] = (f"{fn} {ln}", "derived")
+    elif fn or ln:
+        ephemeral["full_name"] = (fn or ln, "derived")
+
+    # Derive location parts
+    loc = profile.get("location", "")
+    if loc and "," in loc:
+        derived_loc = _derive_location(loc)
+        for k, v in derived_loc.items():
+            if v:
+                ephemeral[k] = (v, "derived")
+
+    # Profile-level synonym keys (backward compat for common_answers migration)
+    for old_key in ("city", "country", "state", "zip", "website"):
+        v = profile.get(old_key)
         if v:
-            ephemeral[k] = (v, "derived")
+            ephemeral.pop(old_key, None)  # prefer derived over stale
 
-    # Static answers
-    for k, v in answers.items():
-        val = v.get("value") if isinstance(v, dict) else v
-        if val:
-            ephemeral[k] = (val, "static")
+    # Static answers (new schema)
+    answers = profile.get("answers", {})
+    if isinstance(answers, dict):
+        for k, v in answers.items():
+            if isinstance(v, dict):
+                v = v.get("value")
+            if v:
+                ephemeral[k] = (v, "static")
 
-    # Decision rules
-    for k, v in _eval_rules(decisions, job_context, facts, answers).items():
-        if v:
-            ephemeral[k] = (v, "rule")
+    # Backward compat: old common_answers keys that don't conflict with answers
+    for k, v in profile.get("common_answers", {}).items():
+        if k not in ephemeral and v:
+            ephemeral[k] = (v, "static")
 
     return ephemeral
 
@@ -186,26 +155,10 @@ def _build_ephemeral(profile: dict, job_context: dict) -> dict:
 def resolve(
     label: str,
     profile: dict,
-    job_context: Optional[dict] = None,
     session_cache: Optional[dict] = None,
     label_map: Optional[dict] = None,
     answers_override: Optional[dict] = None,
 ) -> Resolution:
-    """Resolve a field label to an answer value.
-
-    Steps (strict order, returns on first hit):
-      1. session_cache hit
-      2. label_map hit (persistent cache, version-checked)
-      3. prefix match (handles 60-char truncation)
-      4. ephemeral exact match (facts, derivations, rules, static)
-      5. LLM selection (session-cached only, not persistent)
-      6. --answers override (user-provided)
-
-    After verify passes, call commit_resolutions() to persist session entries
-    that passed the two-encounter rule.
-    """
-    if job_context is None:
-        job_context = {}
     if session_cache is None:
         session_cache = {}
     if label_map is None:
@@ -219,8 +172,7 @@ def resolve(
 
     nf = lambda s: normalize(s)  # noqa: E731
 
-    # Build ephemeral once — reused by exact match and LLM selection
-    ephemeral = _build_ephemeral(profile, job_context)
+    ephemeral = _build_ephemeral(profile)
 
     # ── Step 1: session_cache ──
     sc_entry = session_cache.get(norm)
@@ -370,14 +322,11 @@ def commit_resolutions(
             continue
 
         if res.provenance == "user_typed" and res.value and res.key == "answers_override":
-            # User typed this via --answers. LLM suggests key name for persistence.
             key_name = _llm_suggest_key(res.label)
             if key_name:
-                # Save to profile.answers
                 answers = profile.setdefault("answers", {})
                 if key_name not in answers:
-                    answers[key_name] = {"value": res.value, "source": "user_saved", "v": 1}
-                    # Also persist to label_map
+                    answers[key_name] = res.value
                     label_map[norm] = {
                         "key": key_name, "provenance": "user_confirmed",
                         "created": now, "hit_count": 1, "version": 1,
@@ -440,15 +389,12 @@ def resolution_for_fill(
     label: str,
     profile: dict,
     answers_override: Optional[dict] = None,
-    job_context: Optional[dict] = None,
 ) -> Resolution:
-    """Single-call entry point for act.py _fill_text and EEO handler.
-    Loads label_map and session_cache from disk, resolves, returns result.
-    """
+    """Single-call entry point for act.py. Loads cache from disk, resolves, returns result."""
     label_map = _load_json(_LABEL_MAP_PATH, {})
     session_cache = _load_json(_SESSION_CACHE_PATH, {})
     return resolve(
-        label, profile, job_context=job_context,
+        label, profile,
         session_cache=session_cache, label_map=label_map,
         answers_override=answers_override,
     )
