@@ -77,7 +77,7 @@ detect <jid> → [navigate] → act --fill → act --next (repeat) → act --sub
 |------|-------------|
 | `detect <jid>` | Pre-flight: DB stage, PDF, classify type (easy_apply / external / ats_direct / already_applied / login_wall). Outputs `TYPE:` + `NEXT:`. |
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS |
-| `act --fill <jid> [--answers '{}'] [--dry-run]` | Resolve via 6-step chain: session_cache → label_map → prefix → exact → --answers → LLM w/ decisions.md context. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
+| `act --fill <jid> [--answers '{}'] [--dry-run]` | Resolve via 6-step chain: session_cache → label_map → prefix → exact (profile + derivations + answers + hash-gated derived_answers) → --answers → LLM w/ decisions.md context. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
 | `act --submit <jid> --confirm` | Submit. **`--confirm` req'd** — dry-run w/o. Checks validation errors, CAPTCHA, success text. |
@@ -89,7 +89,7 @@ detect <jid> → [navigate] → act --fill → act --next (repeat) → act --sub
 - `--answers` — normalized exact match (case/punctuation insensitive). Overrides automatic resolution for one run.
 - `--candidate N` — picks from CANDIDATES list. Works on --fill/--next/--submit/--inspect.
 - `--dry-run` on `--fill` shows resolved answers without DOM modification. Validates field detection first.
-- Resolution order: session_cache → label_map → prefix → exact (profile facts + derivations + answers) → --answers → LLM (selects key or suggests new:key|value from decisions.md)
+- Resolution order: session_cache → label_map → prefix → exact (profile facts + derivations + answers + hash-gated derived_answers) → --answers → LLM (selects key or suggests new:key|value from decisions.md). LLM-derived values persist to `derived_answers` and auto-refresh when decisions.md hash changes.
 - Two-encounter rule: LLM guesses only become permanent after same label → same key on 2 separate jobs.
 - Multi-page: fill → next → fill → ... until Submit appears or verify passes.
 - Guest apply: auto-clicks "continue without signing in" when available.
@@ -171,7 +171,7 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 - **JI_TAILOR**: `"agent"` (default) = SLM writes `script.py`, `admit` confirms. `"gem"` = Gemini Web gem.
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
 - **LinkedIn title dedup**: Cards repeat title — `linkedin.py` deduplicates by matching repeated half.
-- **Resolve chain**: `resolve.py` — 6-step cascading resolution (session_cache → label_map → prefix → exact → --answers → LLM). LLM selects from existing keys only, never generates values. `new:key|value` supported for decisions.md-derived answers. Two-encounter rule prevents single bad LLM guess from persisting.
+- **Resolve chain**: `resolve.py` — 6-step cascading resolution (session_cache → label_map → prefix → exact → --answers → LLM). LLM selects from existing keys only, never generates values. `new:key|value` supported for decisions.md-derived answers, persisted to `derived_answers` (hash-gated: auto-refreshes when decisions.md changes). Two-encounter rule prevents single bad LLM guess from persisting.
 - **decisions.md**: included as context in every LLM selection call. No parsing, no seed step. User edits plain markdown, LLM reads it live when needed.
 - **Common_answers**: `--answers` exact → `answers` dict (profile.json). Old `common_answers` migrated, no backward compat needed.
 - **EEO detection**: Uses decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic, zero false positives. Saved under `answers` keys for reuse.
