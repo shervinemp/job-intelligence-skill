@@ -30,7 +30,7 @@ from apply.common.output import (
 )
 from apply.common.page_manager import PageManager
 from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
-from apply.common.answer_matcher import match_answer
+from apply.common.resolve import resolution_for_fill, commit_resolutions, Resolution
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 
@@ -43,29 +43,18 @@ def _domain(url):
 
 
 _KNOWN_PROFILE_KEYS = {
-    "first_name",
-    "last_name",
-    "email",
-    "phone",
-    "linkedin_url",
-    "github_url",
-    "portfolio_url",
-    "website",
-    "address",
-    "city",
-    "state",
-    "zip",
-    "country",
-    "authorized_to_work",
-    "visa_status",
-    "requires_sponsorship",
-    "expected_salary",
-    "salary_currency",
-    "work_preference",
-    "remote_preference",
-    "start_date",
-    "pronouns",
+    "first_name", "last_name", "email", "phone",
+    "linkedin_url", "github_url", "portfolio_url", "website",
+    "address", "city", "state", "zip", "country",
+    "authorized_to_work", "visa_status", "requires_sponsorship",
+    "expected_salary", "salary_currency",
+    "work_preference", "remote_preference", "start_date", "pronouns",
     "common_answers",
+    # New schema (resolve.py v2)
+    "_version", "_schema",
+    "facts", "derivations", "answers", "decisions", "source",
+    "resume_path", "location", "work_experience", "education",
+    "skills", "languages", "certifications",
 }
 
 
@@ -91,33 +80,10 @@ def _match_word(needle, haystack):
     )
 
 
-def _save_answer(label, value, profile_path):
-    """Normalize a field label to a common_answers key and save to profile.json."""
-    try:
-        with open(profile_path) as f:
-            profile = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return
-    norm = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")[:80]
-    words = [w for w in norm.split("_") if len(w) > 2]
-    key = "_".join(words[:4]) if len(words) >= 3 else norm
-    ca = profile.setdefault("common_answers", {})
-    if key not in ca or ca[key] != value:
-        ca[key] = value
-        try:
-            tmp_path = profile_path + ".tmp"
-            with open(tmp_path, "w") as f:
-                json.dump(profile, f, indent=2)
-            os.replace(tmp_path, profile_path)
-        except OSError:
-            pass
-
-
 def _find_answer(label, label_norm, answers, ca, profile, required=False):
-    """Find answer from --answers, common_answers, or profile. Delegates to answer_matcher."""
-    return match_answer(
-        label, answers=answers, common_answers=ca, profile=profile, required=required
-    )
+    """Find answer via resolve chain. Ignores ca (old common_answers) — resolve reads profile directly."""
+    res = resolution_for_fill(label, profile, answers_override=answers)
+    return res.value
 
 
 def _page_hash(page):
@@ -986,36 +952,14 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         for o in f.get("options", [])
     )]
     if eeo_unfilled:
-        from apply.common.answer_matcher import match_answer as _ma
-        eeo_saved = ca.get("eeo", {})
-        new_saves = {}
         for ef in eeo_unfilled:
-            lbl = ef["label"]
-            lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
-            ans = _ma(lbl, answers=answers, common_answers={"eeo": eeo_saved}, profile=profile, required=False)
-            if ans:
-                new_saves[lbl_norm] = ans
-                nf, _ = _fill_text(page, [ef], {lbl: ans}, ca, profile, jid, state)
+            res = resolution_for_fill(ef["label"], profile, answers_override=answers)
+            if res.value:
+                nf, _ = _fill_text(page, [ef], {ef["label"]: res.value}, ca, profile, jid, state)
                 filled += nf
-                print(f"  EEO: {lbl[:50]} -> {ans[:40]}", file=sys.stderr)
+                print(f"  EEO: {ef['label'][:50]} -> {res.value[:40]} ({res.provenance})", file=sys.stderr)
             else:
-                print(f"  EEO_UNANSWERED: {lbl[:50]} (options: {[o[:30] for o in ef.get('options', [])[:4]]})", file=sys.stderr)
-        if new_saves:
-            merged = {**eeo_saved, **new_saves}
-            ca["eeo"] = merged
-            # Persist under common_answers.eeo sub-key (not flat namespace — avoids
-            # collisions with regular answers that share label keywords like "race")
-            try:
-                with open(profile_path) as f:
-                    p = json.load(f)
-                p.setdefault("common_answers", {})["eeo"] = merged
-                tmp = profile_path + ".tmp"
-                with open(tmp, "w") as f:
-                    json.dump(p, f, indent=2)
-                os.replace(tmp, profile_path)
-            except OSError:
-                pass
-        # Don't remove from unfilled — LLM sees them and can provide answers via --answers
+                print(f"  EEO_UNANSWERED: {ef['label'][:50]} (options: {[o[:30] for o in ef.get('options', [])[:4]]})", file=sys.stderr)
 
     # Unfollow company/social update checkboxes (always)
     page.evaluate(
@@ -1102,10 +1046,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         state.pop("_fields_with_errors", None)
         read_and_save(page, state)
 
-    # Save new answers to profile common_answers for future use
-    if filled > 0 and answers:
-        for label, val in answers.items():
-            _save_answer(label, val, profile_path)
+    # Save ephemeral resolutions after verify (handled by caller on success).
+    # --answers values are saved to profile.answers via resolve's commit flow.
 
     page_num = state.get("_page", "?")
     emit_fill_report(filled, unfilled, page_num, profile if unfilled else None)

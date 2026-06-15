@@ -1,70 +1,77 @@
 {
-  "resume_path": "C:\\\\Users\\\\sherv\\\\Downloads\\\\Shervin_Naseri_Resume.pdf",
-  "first_name": "Shervin",
-  "last_name": "Naseri",
-  "email": "shervin.naseri@gmail.com",
-  "location": "Ottawa, Ontario, Canada",
-  "work_experience": [
-    {
-      "title": "",
-      "company": "",
-      "start_date": "",
-      "end_date": "",
-      "current": true,
-      "description": ""
-    }
-  ],
-  "education": [
-    {
-      "degree": "",
-      "school": "",
-      "graduation": ""
-    }
-  ],
-  "skills": [],
-  "languages": [],
-  "certifications": [],
-  "common_answers": {
+  "_version": 2,
+  "_schema": "ji-skill/profile-v2",
+
+  "facts": {
+    "first_name": "Shervin",
+    "last_name": "Naseri",
+    "email": "shervin.naseri@gmail.com",
     "phone": "+1 (343) 558-1744",
+    "location": "Ottawa, Ontario, Canada",
+    "resume_path": "C:\\Users\\sherv\\Downloads\\Shervin_Naseri_Resume.pdf",
     "linkedin_url": "https://www.linkedin.com/in/shervin-naseri-b3a016b0",
     "portfolio_url": "https://shervinemp.github.io/portfolio",
-    "github_url": "https://github.com/shervinemp",
-    "website_url": "https://shervinemp.github.io/portfolio",
-    "work_authorization": "No, I do not require work permit sponsorship to work in Canada",
-    "years_of_experience": "5",
-    "gender": "Prefer not to say",
-    "veteran_status": "I am not a protected veteran",
-    "disability_status": "I do not have a disability",
-    "how_did_you_hear": "LinkedIn",
-    "willing_to_relocate": "Yes",
-    "authorized_to_work": "Yes",
-    "current_ctc": "",
-    "expected_ctc": "",
-    "notice_period": "",
-    "cover_letter_intro": "",
-    "previously_employed": "No",
-    "willing_to_commute": "Yes",
-    "email": "shervin.naseri@gmail.com",
-    "phone_number": "+1 (343) 558-1744",
-    "have_you_ever_been": "No",
-    "full_name": "Shervin Naseri",
-    "linkedin_profile_link": "https://www.linkedin.com/in/shervin-naseri-b3a016b0",
-    "will_require_sponsorship": "Yes",
-    "sponsorship": "Yes",
-    "yes_consent_receiving_text": "No - I do not consent to receiving text messages",
-    "office_preference": "Yes, in the Toronto office",
-    "communicationconsent": "notGiven",
-    "visa_sponsorship": "No, I do not require work permit sponsorship to work in Canada",
-    "office": "Yes, in the Toronto office",
-    "yes": "Yes",
-    "no": "No, I do not require work permit sponsorship to work in Canada",
-    "yes_the_san_francisco": "Yes, in the Toronto office",
-    "not_require_visa_sponsorship": "No, I do not require work permit sponsorship to work in Canada",
-    "hired_which_country_wil": "Canada",
-    "upload_file": "C:\\Users\\sherv\\Downloads\\Shervin_Naseri_Resume.pdf",
-    "phone_country_code": "Canada (+1)",
-    "mobile_phone_number": "+1 (343) 558-1744",
-    "phone_country_codephone_country": "Canada (+1)",
-    "how_many_years_work": "3+"
+    "github_url": "https://github.com/shervinemp"
+  },
+
+  "derivations": [
+    {"key": "full_name",      "fn": "concat", "args": ["$facts/first_name", "$facts/last_name"]},
+    {"key": "city",           "fn": "field",  "args": ["$facts/location", 0]},
+    {"key": "state_province", "fn": "field",  "args": ["$facts/location", 1]},
+    {"key": "country",        "fn": "field",  "args": ["$facts/location", -1]}
+  ],
+
+  "answers": {
+    "how_did_you_hear":    { "value": "LinkedIn",                   "source": "static", "v": 1 },
+    "gender":              { "value": "Prefer not to say",          "source": "static", "v": 1 },
+    "veteran_status":      { "value": "I am not a protected veteran","source": "static", "v": 1 },
+    "disability_status":   { "value": "I do not have a disability",  "source": "static", "v": 1 },
+    "willing_to_relocate": { "value": "Yes",                        "source": "static", "v": 1 },
+    "willing_to_commute":  { "value": "Yes",                        "source": "static", "v": 1 },
+    "years_of_experience": { "value": "5",                          "source": "static", "v": 1 },
+    "previously_employed": { "value": "No",                         "source": "static", "v": 1 },
+    "have_you_ever_been":  { "value": "No",                         "source": "static", "v": 1 },
+    "notice_period":       { "value": "Immediately",                "source": "static", "v": 1 },
+    "consent_text_messages": {"value": "No",                        "source": "static", "v": 1 },
+    "office_preference":   { "value": "Yes, in the Toronto office", "source": "static", "v": 1 },
+    "authorized_to_work":  { "value": "Yes",                        "source": "static", "v": 1 }
+  },
+
+  "decisions": {
+    "rules": [
+      {
+        "name": "sponsorship",
+        "cases": [
+          {"if": {"job.country": {"$eq": "$facts/country"}}, "then": {"value": "No, I do not require work permit sponsorship to work in Canada"}},
+          {"else": {"value": "Yes, I require sponsorship"}}
+        ]
+      },
+      {
+        "name": "work_authorization",
+        "cases": [
+          {"if": {"job.country": "Canada"}, "then": {"value": "Yes, I am legally authorized to work in Canada"}},
+          {"if": {"job.country": "United States"}, "then": {"value": "Yes, I am authorized to work in the United States"}},
+          {"else": {"value": "Yes"}}
+        ]
+      },
+      {
+        "name": "commute",
+        "cases": [
+          {"if": {"job.country": "Canada"}, "then": {"value": "Yes"}},
+          {"if": {"job.country": "United States"}, "then": {"value": "Yes, with visa sponsorship"}},
+          {"else": {"value": "Yes"}}
+        ]
+      }
+    ],
+    "imported_from": "decisions.md",
+    "last_import": "2026-06-15"
+  },
+
+  "source": {
+    "work_experience": [],
+    "education": [],
+    "skills": [],
+    "languages": [],
+    "certifications": []
   }
 }
