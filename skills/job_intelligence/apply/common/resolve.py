@@ -1,82 +1,53 @@
-"""resolve.py — Label→value resolution with cascading strategy, two-encounter rule,
-derivation evaluator, and decision rule engine.
+"""resolve.py — Label→value resolution chain with two-encounter rule and decisions.md context.
 
-No answer values are hardcoded in Python. All facts, derivations, rules, and
-static answers live in profile.json. The LLM never generates answer values —
-it only selects from pre-approved keys or suggests key names for user confirmation.
+No answer values hardcoded in Python. All facts, derivations, and static answers
+live in profile.json. decisions.md is a plain markdown the user edits.
 
-Resolution order (strict, no fallthrough to fuzzy):
-  1. session_cache  (LLM guesses from current run, ephemeral)
-  2. label_map      (persistent cache from prior two-encounter confirmations)
-  3. prefix match   (handles 60-char field_reader truncation)
-  4. ephemeral      (facts + derivations + decision rules + static answers)
-  5. LLM selection  (constrained to ephemeral keys, session-cached only)
-  6. --answers prompt (user provides, then LLM suggests key name for persistence)
+Resolution order (strict):
+  1. session_cache      (LLM guesses from current run, ephemeral)
+  2. label_map          (persistent cache from prior confirmations)
+  3. prefix match       (handles 60-char field_reader truncation)
+  4. ephemeral exact    (profile facts + derivations + answers dict)
+  5. --answers          (user override for this run)
+  6. LLM selection      (selects among existing keys OR suggests new:key|value from .md)
 """
 from __future__ import annotations
 
 import json, os, re, time
-from dataclasses import dataclass, field
 from typing import Optional
 
-# ─── Paths ───────────────────────────────────────────────────────────
+# ─── Paths (anchored to profile.json directory) ──────────────────────
+
+_JI_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LABEL_MAP_PATH = os.path.join(
     os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), "label_map.json"
 )
 _SESSION_CACHE_PATH = os.path.join(
     os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), "session_cache.json"
 )
+_DECISIONS_PATH = os.path.join(_JI_DIR, "decisions.md")
+_PROFILE_PATH = os.path.join(_JI_DIR, "profile.json")
 
-# ─── Data structures ──────────────────────────────────────────────────
 
-@dataclass
-class LabelMapEntry:
-    key: str
-    provenance: str        # direct_match | encountered_twice | user_confirmed
-    created: str           # ISO date
-    hit_count: int = 0
-    version: int = 1       # bumped when target key's version changes
+# ─── Resolution result ───────────────────────────────────────────────
 
-@dataclass
-class SessionEntry:
-    key: str
-    value: str
-    encounter_count: int   # 1 = first session, 2+ = seen across sessions
-    previous_result: Optional[str] = None  # key from prior session, for two-encounter rule
-
-@dataclass
 class Resolution:
-    value: Optional[str]
-    key: Optional[str]
-    label: str
-    provenance: str        # session_cache | label_map | prefix | fact | derived | rule | static | llm_selected | user_typed
-    ephemeral_only: bool   # True = not written to label_map (llm_selected on first encounter)
+    __slots__ = ("value", "key", "label", "provenance", "ephemeral_only")
+    def __init__(self, value, key, label, provenance, ephemeral_only):
+        self.value = value
+        self.key = key
+        self.label = label
+        self.provenance = provenance
+        self.ephemeral_only = ephemeral_only
 
 
-# ─── Normalization ─────────────────────────────────────────────────────
+# ─── Normalization ───────────────────────────────────────────────────
 
 def normalize(label: str) -> str:
     return re.sub(r"[^a-z0-9+#]+", " ", (label or "").lower()).strip()
 
 
-# ─── Derivations (computed in Python, not in JSON) ─────────────────────
-
-def _derive_location(location: str) -> dict:
-    """Extract city, state_province, country from 'Ottawa, Ontario, Canada'."""
-    if not location or "," not in location:
-        return {}
-    parts = [p.strip() for p in location.split(",")]
-    d = {}
-    if len(parts) >= 1:
-        d["city"] = parts[0]
-    if len(parts) >= 2:
-        d["state_province"] = parts[1]
-    if len(parts) >= 3:
-        d["country"] = parts[-1]
-    return d
-
-
-# ─── Load / Save helpers ──────────────────────────────────────────────
+# ─── Load / Save helpers ─────────────────────────────────────────────
 
 def _load_json(path: str, default=None):
     try:
@@ -94,7 +65,15 @@ def _save_json(path: str, data):
     os.replace(tmp, path)
 
 
-# ─── Ephemeral answer builder ─────────────────────────────────────────
+def _load_decisions_md() -> str:
+    try:
+        with open(_DECISIONS_PATH, encoding="utf-8") as f:
+            return f.read().strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+# ─── Ephemeral answer builder ───────────────────────────────────────
 
 _PROFILE_KEYS = {
     "first_name", "last_name", "email", "phone",
@@ -103,54 +82,44 @@ _PROFILE_KEYS = {
 }
 
 def _build_ephemeral(profile: dict) -> dict:
-    """Build {key: (value, source)} from profile top-level keys + answers + derivations."""
     ephemeral = {}
 
-    # Top-level profile keys
     for k in _PROFILE_KEYS:
         v = profile.get(k)
         if v:
             ephemeral[k] = (v, "profile")
 
-    # Derive full_name
     fn, ln = profile.get("first_name", ""), profile.get("last_name", "")
     if fn and ln:
         ephemeral["full_name"] = (f"{fn} {ln}", "derived")
     elif fn or ln:
         ephemeral["full_name"] = (fn or ln, "derived")
 
-    # Derive location parts
     loc = profile.get("location", "")
     if loc and "," in loc:
-        derived_loc = _derive_location(loc)
-        for k, v in derived_loc.items():
-            if v:
-                ephemeral[k] = (v, "derived")
+        parts = [p.strip() for p in loc.split(",")]
+        if len(parts) >= 1 and parts[0]:
+            ephemeral["city"] = (parts[0], "derived")
+        if len(parts) >= 2 and parts[1]:
+            ephemeral["state_province"] = (parts[1], "derived")
+        if len(parts) >= 3 and parts[-1]:
+            ephemeral["country"] = (parts[-1], "derived")
 
-    # Profile-level synonym keys (backward compat for common_answers migration)
-    for old_key in ("city", "country", "state", "zip", "website"):
-        v = profile.get(old_key)
-        if v:
-            ephemeral.pop(old_key, None)  # prefer derived over stale
-
-    # Static answers (new schema)
     answers = profile.get("answers", {})
     if isinstance(answers, dict):
         for k, v in answers.items():
-            if isinstance(v, dict):
-                v = v.get("value")
             if v:
                 ephemeral[k] = (v, "static")
-
-    # Backward compat: old common_answers keys that don't conflict with answers
-    for k, v in profile.get("common_answers", {}).items():
-        if k not in ephemeral and v:
-            ephemeral[k] = (v, "static")
 
     return ephemeral
 
 
-# ─── Resolution chain ─────────────────────────────────────────────────
+def _find_ephemeral_value(key: str, ephemeral: dict) -> Optional[str]:
+    entry = ephemeral.get(key)
+    return entry[0] if entry else None
+
+
+# ─── Resolution chain ────────────────────────────────────────────────
 
 def resolve(
     label: str,
@@ -168,233 +137,158 @@ def resolve(
 
     norm = normalize(label)
     if not norm:
-        return Resolution(None, None, label, "no_match", ephemeral_only=False)
+        return Resolution(None, None, label, "no_match", False)
 
-    nf = lambda s: normalize(s)  # noqa: E731
-
+    nf = lambda s: normalize(s)
     ephemeral = _build_ephemeral(profile)
 
-    # ── Step 1: session_cache ──
-    sc_entry = session_cache.get(norm)
-    if sc_entry:
-        key = sc_entry.get("key")
-        val = _find_ephemeral_value(key, ephemeral)
+    # Step 1: session_cache
+    sc = session_cache.get(norm)
+    if sc:
+        val = _find_ephemeral_value(sc["key"], ephemeral)
         if val is not None:
-            return Resolution(val, key, label, "session_cache", ephemeral_only=False)
+            return Resolution(val, sc["key"], label, "session_cache", False)
 
-    # ── Step 2: label_map (persistent cache) ──
-    lm_entry = label_map.get(norm)
-    if lm_entry:
-        key = lm_entry["key"]
-        val = _find_ephemeral_value(key, ephemeral)
+    # Step 2: label_map
+    lm = label_map.get(norm)
+    if lm:
+        val = _find_ephemeral_value(lm["key"], ephemeral)
         if val is not None:
-            # Version check — if target key's version changed, entry is stale
-            lm_entry["hit_count"] = lm_entry.get("hit_count", 0) + 1
-            return Resolution(val, key, label, "label_map", ephemeral_only=False)
-        else:
-            # Key no longer exists in ephemeral — stale entry, remove
-            label_map.pop(norm, None)
+            lm["hit_count"] = lm.get("hit_count", 0) + 1
+            return Resolution(val, lm["key"], label, "label_map", False)
+        label_map.pop(norm, None)
 
-    # ── Step 3: prefix match (truncation) ──
-    # Check if norm starts with any cached entry's key
-    for cached_norm, entry in session_cache.items():
+    # Step 3: prefix match (field_reader truncation)
+    for cached_norm, entry in dict(session_cache, **label_map).items():
         if norm.startswith(cached_norm):
-            key = entry.get("key")
-            val = _find_ephemeral_value(key, ephemeral)
+            val = _find_ephemeral_value(entry.get("key", ""), ephemeral)
             if val is not None:
-                return Resolution(val, key, label, "session_cache", ephemeral_only=False)
-    for cached_norm, entry in label_map.items():
-        if norm.startswith(cached_norm):
-            key = entry["key"]
-            val = _find_ephemeral_value(key, ephemeral)
-            if val is not None:
-                entry["hit_count"] = entry.get("hit_count", 0) + 1
-                return Resolution(val, key, label, "label_map", ephemeral_only=False)
+                return Resolution(val, entry["key"], label, "label_map", False)
 
-    # ── Step 4: ephemeral exact match ──
-    for key, (val, source) in ephemeral.items():
+    # Step 4: ephemeral exact match
+    for key, (val, _source) in ephemeral.items():
         if nf(key.replace("_", " ")) == norm:
-            # Save to label_map immediately (deterministic, no LLM needed)
-            label_map[norm] = LabelMapEntry(
-                key=key, provenance="direct_match",
-                created=time.strftime("%Y-%m-%d"), hit_count=1, version=1
-            ).__dict__
-            return Resolution(val, key, label, source, ephemeral_only=False)
+            label_map[norm] = {"key": key, "provenance": "direct_match",
+                               "created": time.strftime("%Y-%m-%d"), "hit_count": 1}
+            return Resolution(val, key, label, "ephemeral", False)
 
-    # ── Step 5: --answers override ──
+    # Step 5: --answers override
     for k, v in answers_override.items():
         if nf(k) == norm:
-            return Resolution(v, "answers_override", label, "user_typed", ephemeral_only=False)
+            return Resolution(v, "answers_override", label, "user_typed", False)
 
-    # ── Step 6: LLM selection (session-cached only) ──
-    # LLM selects from ephemeral keys. Never generates values.
-    # Session-cached — does NOT persist to label_map until two-encounter rule passes.
+    # Step 6: LLM selection (with decisions.md context)
     keys_list = list(ephemeral.keys())
-    selected = _llm_select_key(label, keys_list)
-    if selected and selected in ephemeral:
-        val, source = ephemeral[selected]
-        enc_count = 1
-        prev = None
-        # Check if this label was seen in a prior session
-        existing = session_cache.get(norm)
-        if existing:
-            prev = existing.get("key")
-            if prev == selected:
-                enc_count = existing.get("encounter_count", 1) + 1
-            else:
-                enc_count = 1  # different selection → reset
+    result = _llm_select(label, keys_list)
+    if result:
+        if result.startswith("new:"):
+            # LLM suggests a new key=value from decisions.md: "new:key|value"
+            parts = result[4:].split("|", 1)
+            if len(parts) == 2:
+                new_key, new_val = parts[0].strip(), parts[1].strip()
+                if new_key and new_val:
+                    # Save to ephemeral for this run
+                    ephemeral[new_key] = (new_val, "md_derived")
+                    label_map[norm] = {"key": new_key, "provenance": "md_derived",
+                                       "created": time.strftime("%Y-%m-%d"), "hit_count": 1}
+                    return Resolution(new_val, new_key, label, "md_derived", False)
 
-        session_cache[norm] = {
-            "key": selected,
-            "value": val,
-            "encounter_count": enc_count,
-            "previous_result": prev,
-        }
-        _save_json(_SESSION_CACHE_PATH, session_cache)
-        return Resolution(val, selected, label, "llm_selected", ephemeral_only=(enc_count < 2))
+        elif result in ephemeral:
+            val, source = ephemeral[result]
+            enc_count = 1
+            prev = None
+            existing = session_cache.get(norm)
+            if existing:
+                prev = existing.get("key")
+                if prev == result:
+                    enc_count = existing.get("encounter_count", 1) + 1
+                else:
+                    enc_count = 1
+            session_cache[norm] = {"key": result, "value": val,
+                                   "encounter_count": enc_count, "previous_result": prev}
+            _save_json(_SESSION_CACHE_PATH, session_cache)
+            return Resolution(val, result, label, "llm_selected", enc_count < 2)
 
-    return Resolution(None, None, label, "no_match", ephemeral_only=False)
+    return Resolution(None, None, label, "no_match", False)
 
 
-def _find_ephemeral_value(key: str, ephemeral: dict) -> Optional[str]:
-    """Look up a key in the ephemeral dict."""
-    entry = ephemeral.get(key)
-    if entry:
-        return entry[0]  # (value, source) tuple
-    return None
+# ─── LLM selection ──────────────────────────────────────────────────
 
-
-def _llm_select_key(label: str, available_keys: list) -> Optional[str]:
-    """LLM selects among available keys. Never generates new keys or values."""
+def _llm_select(label: str, available_keys: list) -> Optional[str]:
     if not available_keys:
         return None
+    md = _load_decisions_md()
 
-    keys_json = json.dumps(available_keys)
     prompt = (
-        f"Available answer keys: {keys_json}\n"
-        f"Form label: \"{label}\"\n\n"
-        "Which SINGLE key's value answers this label?\n"
-        "Return only the key name, or \"no_match\" if none fit.\n"
-        "NEVER create a new key. NEVER guess a value."
+        f"Available answer keys: {json.dumps(available_keys)}\n"
+        f"Form label: \"{label}\"\n"
+    )
+    if md:
+        prompt += f"\nUser's rules (decisions.md):\n{md[:2000]}\n"
+
+    prompt += (
+        "\nReturn one of:\n"
+        "- A key name from the above list → fill with that key's value\n"
+        "- \"new:key_name|value\" → suggest a new answer derived from decisions.md\n"
+        "- \"no_match\" → answer not found anywhere\n\n"
+        "If the existing key's value is stale (decisions.md rules changed), "
+        "use \"new:\" to suggest the correct new value.\n"
+        "NEVER make up a value. Base it only on decisions.md."
     )
 
-    try:
-        from lib.ask_api import _text, _load_config  # noqa: N402
-        reply, err = _text(prompt, temperature=0.1, max_tokens=32, cfg=_load_config())
-        if err:
-            return None
-        key = (reply or "").strip().strip('"').strip("'")
-        if key in available_keys:
-            return key
-    except Exception:
-        pass
-
-    return None
-
-
-# ─── Commit (post-verify) ─────────────────────────────────────────────
-
-def commit_resolutions(
-    resolutions: list[Resolution],
-    profile: dict,
-    session_cache: Optional[dict] = None,
-    label_map: Optional[dict] = None,
-    answers_override: Optional[dict] = None,
-) -> list[str]:
-    """Run after verify passes. Persists LLM selections that passed the
-    two-encounter rule, and saves user-typed answers to profile.json.
-
-    Returns list of newly persisted label_map entries for logging.
-    """
-    if session_cache is None:
-        session_cache = _load_json(_SESSION_CACHE_PATH, {})
-    if label_map is None:
-        label_map = _load_json(_LABEL_MAP_PATH, {})
-    if answers_override is None:
-        answers_override = {}
-
-    now = time.strftime("%Y-%m-%d")
-    new_entries = []
-
-    for res in resolutions:
-        norm = normalize(res.label)
-        if not norm:
-            continue
-
-        if res.provenance == "user_typed" and res.value and res.key == "answers_override":
-            key_name = _llm_suggest_key(res.label)
-            if key_name:
-                answers = profile.setdefault("answers", {})
-                if key_name not in answers:
-                    answers[key_name] = res.value
-                    label_map[norm] = {
-                        "key": key_name, "provenance": "user_confirmed",
-                        "created": now, "hit_count": 1, "version": 1,
-                    }
-                    new_entries.append(norm)
-                _save_profile(profile)
-
-        elif res.provenance == "llm_selected" and not res.ephemeral_only:
-            # Two-encounter rule passed: same LLM selection across 2+ sessions
-            label_map[norm] = {
-                "key": res.key, "provenance": "encountered_twice",
-                "created": now, "hit_count": 1, "version": 1,
-            }
-            new_entries.append(norm)
-
-    if new_entries:
-        _save_json(_LABEL_MAP_PATH, label_map)
-        # Clear session cache entries that were promoted
-        for norm in new_entries:
-            session_cache.pop(norm, None)
-        _save_json(_SESSION_CACHE_PATH, session_cache)
-
-    return new_entries
-
-
-def _llm_suggest_key(label: str) -> Optional[str]:
-    """LLM suggests a key name for a user-typed answer."""
-    prompt = (
-        f"Form label: \"{label}\"\n\n"
-        "Suggest a short, descriptive key name (snake_case, 1-3 words) "
-        "to save this answer for reuse on future jobs. "
-        "Return only the key name, nothing else."
-    )
     try:
         from lib.ask_api import _text, _load_config
-        reply, err = _text(prompt, temperature=0.1, max_tokens=32, cfg=_load_config())
-        if err:
+        reply, err = _text(prompt, 0.1, 64, _load_config())
+        if err or not reply:
             return None
-        key = (reply or "").strip().strip('"').strip("'")
-        if key and len(key) < 60:
-            return key
+        result = (reply or "").strip().strip('"').strip("'")
+        if result in available_keys:
+            return result
+        if result.startswith("new:") and "|" in result[4:]:
+            return result
     except Exception:
         pass
     return None
 
 
-def _save_profile(profile: dict):
-    """Save profile.json updates."""
-    profile_path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "profile.json"
-    )
-    # Only save if it exists and we're not running from ji-skill
-    if os.path.exists(profile_path):
-        _save_json(profile_path, profile)
+# ─── Post-verify promotion ──────────────────────────────────────────
+
+def promote_session_cache(profile: Optional[dict] = None) -> int:
+    """Promote session_cache entries that passed the two-encounter rule to label_map.
+    Called after verify confirms submission. Returns count of new entries."""
+    sc = _load_json(_SESSION_CACHE_PATH, {})
+    if not sc:
+        return 0
+    lm = _load_json(_LABEL_MAP_PATH, {})
+    now = time.strftime("%Y-%m-%d")
+    promoted = 0
+
+    for norm, entry in dict(sc).items():
+        if entry.get("encounter_count", 1) >= 2 and norm not in lm:
+            lm[norm] = {
+                "key": entry["key"],
+                "provenance": "encountered_twice",
+                "created": now,
+                "hit_count": 1,
+            }
+            sc.pop(norm, None)
+            promoted += 1
+
+    if promoted:
+        _save_json(_LABEL_MAP_PATH, lm)
+        _save_json(_SESSION_CACHE_PATH, sc)
+
+    return promoted
 
 
-# ─── Entry point for act.py ───────────────────────────────────────────
+# ─── Entry point for act.py ─────────────────────────────────────────
 
 def resolution_for_fill(
     label: str,
     profile: dict,
     answers_override: Optional[dict] = None,
 ) -> Resolution:
-    """Single-call entry point for act.py. Loads cache from disk, resolves, returns result."""
     label_map = _load_json(_LABEL_MAP_PATH, {})
     session_cache = _load_json(_SESSION_CACHE_PATH, {})
-    return resolve(
-        label, profile,
-        session_cache=session_cache, label_map=label_map,
-        answers_override=answers_override,
-    )
+    return resolve(label, profile, session_cache=session_cache,
+                   label_map=label_map, answers_override=answers_override)
