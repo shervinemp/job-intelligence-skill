@@ -49,12 +49,8 @@ _KNOWN_PROFILE_KEYS = {
     "authorized_to_work", "visa_status", "requires_sponsorship",
     "expected_salary", "salary_currency",
     "work_preference", "remote_preference", "start_date", "pronouns",
-    "common_answers",
-    # New schema (resolve.py v2)
-    "_version", "_schema",
-    "facts", "derivations", "answers", "decisions", "source",
-    "resume_path", "location", "work_experience", "education",
-    "skills", "languages", "certifications",
+    "common_answers", "answers",
+    "resume_path", "location",
 }
 
 
