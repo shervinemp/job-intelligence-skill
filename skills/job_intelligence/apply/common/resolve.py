@@ -184,10 +184,12 @@ def resolve(
                 new_key, new_val = parts[0].strip(), parts[1].strip()
                 if new_key and new_val:
                     ephemeral[new_key] = (new_val, "md_derived")
-                    # Persist immediately — LLM-derived decision, not deterministic
                     label_map[norm] = {"key": new_key, "provenance": "md_derived",
                                        "created": time.strftime("%Y-%m-%d"), "hit_count": 1}
                     _save_json(_LABEL_MAP_PATH, label_map)
+                    p = _load_json(os.path.join(_JI_DIR, "profile.json"))
+                    p.setdefault("answers", {})[new_key] = new_val
+                    _save_json(os.path.join(_JI_DIR, "profile.json"), p)
                     return Resolution(new_val, new_key, label, "md_derived", False)
 
         elif result in ephemeral:
