@@ -9,6 +9,7 @@ from lib.db import get_conn
 from lib.chrome_manager import connect
 from apply.common.page_helpers import load_state
 from apply.common.output import emit_next, emit_status, emit_error
+from apply.common.resolve import commit_resolutions
 
 
 def run(jid):
@@ -177,3 +178,8 @@ def _mark_applied(jid):
         "UPDATE jobs SET stage=?, updated_at=? WHERE id=?",
         ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid),
     ).connection.commit()
+    # Promote session-cached LLM selections that passed the two-encounter rule
+    try:
+        commit_resolutions([], {})
+    except Exception:
+        pass
