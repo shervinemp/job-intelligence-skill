@@ -18,18 +18,22 @@ def pre_fill(page):
 
 def post_fill(page):
     """After native value setter fills combobox INPUTs, notify SAP SF's juic
-    framework by dispatching 'change' and 'blur' events on all filled comboboxes.
+    framework by dispatching 'change' and 'blur' events one at a time.
     This triggers the widget's internal state update so form validation passes."""
     page.evaluate("""() => {
-        const evt = new Event('change', { bubbles: true });
-        const blr = new Event('blur', { bubbles: true });
-        for (const el of document.querySelectorAll('input[role="combobox"]')) {
+        const boxes = document.querySelectorAll('input[role="combobox"]');
+        boxes.forEach((el, i) => {
             if (el.value && el.value.length > 0) {
-                el.dispatchEvent(evt);
-                el.dispatchEvent(blr);
+                setTimeout(() => {
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                }, i * 100);
             }
-        }
+        });
     }""")
+    import time
+    count = page.evaluate("() => document.querySelectorAll('input[role=\"combobox\"]').length")
+    time.sleep(count * 0.15 + 0.5)
 
 
 def pre_submit(page):
