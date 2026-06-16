@@ -1087,6 +1087,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
             if match:
                 nf, _ = _fill_text(page, [match], answers, ca, profile, jid, state)
                 filled += nf
+        if registry and registry.has_hook("post_fill"):
+            registry.call_hook("post_fill", page)
         state.pop("_fields_with_errors", None)
         read_and_save(page, state)
 
