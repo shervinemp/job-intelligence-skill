@@ -245,7 +245,54 @@ def run(jid):
 
         reg = resolve_registry(url)
         if page_state and page_state["fieldCount"] > 0:
-            page_owner = False  # keep page open for act --fill
+            # Full flow: modal is open with fields — fill and submit now (one process)
+            from apply.common.resolve import resolution_for_fill
+            profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
+            profile = {}
+            if os.path.exists(profile_path):
+                try: profile = json.load(open(profile_path))
+                except: pass
+            for f in page_state["fields"]:
+                lbl = f.get("label", "")
+                if not lbl or not f.get("required") or f.get("value", "").strip():
+                    continue
+                ans = resolution_for_fill(lbl, profile)
+                if ans.value:
+                    sel = f'[id="{f["id"]}"]' if f.get("id") else (f'[name="{f["name"]}"]' if f.get("name") else None)
+                    if sel:
+                        try: p.locator(sel).fill(ans.value)
+                        except: pass
+            # Navigate through screens
+            for _ in range(8):
+                time.sleep(1)
+                text = (p.evaluate("document.body.innerText") or "").lower()
+                if any(w in text for w in ["your application has been", "your application was", "has been sent", "thank you for", "successfully applied"]):
+                    _merge_state({"jid": jid, "external_url": p.url})
+                    conn = get_conn()
+                    conn.execute("UPDATE jobs SET stage='applied',applied_at=datetime('now') WHERE id=?", (jid,))
+                    conn.commit()
+                    emit_type("easy_apply", "submitted")
+                    emit_next("none")
+                    sys.exit(0)
+                dialog = p.evaluate("() => document.querySelector('[role=\"dialog\"]')")
+                if not dialog:
+                    break
+                for kw in ["Next", "Review", "Submit application", "Submit", "Done"]:
+                    clicked = p.evaluate(f"""() => {{
+                        const d = document.querySelector('[role="dialog"]');
+                        if (!d) return false;
+                        for (const el of d.querySelectorAll('button, a, [role="button"]')) {{
+                            if (el.offsetParent !== null && (el.textContent || '').trim().toLowerCase() === '{kw.lower()}') {{
+                                el.click(); return true;
+                            }}
+                        }}
+                        return false;
+                    }}""")
+                    if clicked:
+                        time.sleep(1)
+                        break
+            # Fallback: modal closed or flow completed — hand to --fill for remaining
+            page_owner = False
             tag_page(p, jid)
             _merge_state({"jid": jid, "_detect_fields": page_state, "external_url": p.url})
             emit_type("easy_apply")
