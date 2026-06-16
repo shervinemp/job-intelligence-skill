@@ -337,7 +337,7 @@ def _probe_fields(page, fields):
                         const triggers = parent.querySelectorAll('button, [role="button"], i, span.glyphicon, [class*="icon"], [class*="sapUiIcon"], [tabindex]');
                         for (const t of triggers) {{
                             if (t !== el && t.offsetParent !== null) {{
-                                if (t.id) return '#' + CSS.escape(t.id);
+                                if (t.id) return '[id="' + t.id + '"]';
                                 return null; // no stable selector — use fallback
                             }}
                         }}
@@ -713,7 +713,7 @@ def _fill_field_deterministic(page, f, ans):
         # Use trigger selector if found (for hidden INPUT + visible trigger pattern)
         click_sel = f.get("_trigger_sel", sel)
         if click_sel != sel:
-            _click_widget_trigger(page, click_sel)
+            page.evaluate(f"document.querySelector('{click_sel}')?.dispatchEvent(new MouseEvent('click', {{bubbles:true, cancelable:true}}))")
             time.sleep(0.5)
         return bool(_try_combobox(page, el, ans) or _try_native_setter(page, sel, ans))
 
