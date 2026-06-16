@@ -2,73 +2,58 @@
 import json, time
 
 
-def _find_click_target(page, sel):
-    """Find a clickable element: input itself, or nearest visible sibling/icon
-    (hidden input + visible icon pattern used by many widget frameworks).
-    Returns selector string or None."""
-    return page.evaluate(f"""() => {{
-        const el = document.querySelector('{sel}');
-        if (!el) return null;
-
-        // If element is visible, use it directly
-        const style = window.getComputedStyle(el);
-        if (style.display !== 'none' && style.visibility !== 'hidden' && el.offsetParent !== null)
-            return '{sel}';
-
-        // Hidden input: find visible sibling/icon in same parent
-        const parent = el.parentElement;
-        if (!parent) return null;
-
-        for (const child of parent.children) {{
-            if (child === el) continue;
-            const cs = window.getComputedStyle(child);
-            if (cs.display === 'none' || cs.visibility === 'hidden') continue;
-            if (child.offsetParent === null) continue;
-            if (child.id) return '[id="' + child.id + '"]';
-        }}
-
-        // Use parent element itself (common for event delegation)
-        if (parent.id) return '[id="' + parent.id + '"]';
-        if (parent.parentElement && parent.parentElement.id) return '[id="' + parent.parentElement.id + '"]';
-
-        // Last resort: search broader container
-        const container = parent.closest('[class*="ComboBox"], [class*="Dropdown"], [class*="Select"], [class*="widget"]');
-        if (container) {{
-            for (const child of container.children) {{
-                const cs = window.getComputedStyle(child);
-                if (cs.display === 'none' || cs.visibility === 'hidden') continue;
-                if (child.id) return '[id="' + child.id + '"]';
-            }}
-            if (container.id) return '[id="' + container.id + '"]';
-        }}
-
-        return '{sel}';
-    }}""")
-
-
-def fill(page, f, ans):
-    """Fill a combobox/dropdown widget via cascading strategy.
-    Returns True if filled."""
-    sel = f.get("_sel", "")
-    if not sel:
-        return False
-    from apply.strategies import text as _text
-
-    # Find the right element to click (input itself or visible sibling trigger)
-    click_sel = _find_click_target(page, sel) or sel
-
+def _try_open_dropdown(page, sel):
+    """Click the element at `sel`. If dropdown opens (visible [role="option"]), return True.
+    Returns None if click fails, else True/False for opened/not opened."""
     try:
-        page.locator(click_sel).click(force=True, timeout=5000)
+        page.locator(sel).click(force=True, timeout=5000)
     except Exception:
-        return bool(_text.native_setter(page, sel, ans))
-    opt = None
-    url_before = page.url
+        return None
+    time.sleep(0.5)
+    return len(page.locator('[role="option"]').all()) > 0
+
+
+def _find_any_trigger(page, sel):
+    """Click chain: input → siblings → parent → container.
+    Returns selector that successfully opened the dropdown, or None."""
+    orig = sel
+    # 1. Try the input itself
+    opened = _try_open_dropdown(page, sel)
+    if opened:
+        return sel
+
+    # 2. Try each visible sibling in the same parent
+    siblings = page.evaluate(f"""() => {{
+        const el = document.querySelector('{sel}');
+        if (!el || !el.parentElement) return [];
+        const ids = [];
+        for (const c of el.parentElement.children) {{
+            if (c === el) continue;
+            const s = window.getComputedStyle(c);
+            if (s.display !== 'none' && s.visibility !== 'hidden' && c.offsetParent !== null && c.id)
+                ids.push('[id="' + c.id + '"]');
+        }}
+        return ids;
+    }}""")
+    for sib in siblings:
+        opened = _try_open_dropdown(page, sib)
+        if opened:
+            return sib
+
+    # 3. Try parent
+    parent_id = page.evaluate(f"document.querySelector('{sel}')?.parentElement?.id || ''")
+    if parent_id:
+        opened = _try_open_dropdown(page, f'[id="{parent_id}"]')
+        if opened:
+            return f'[id="{parent_id}"]'
+
+    return orig
+
+
+def _select_option(page, ans):
+    """Poll for option matching `ans`, click it. Returns True if selected."""
     for _ in range(20):
         time.sleep(0.25)
-        if page.url != url_before:
-            page.goto(url_before, wait_until="domcontentloaded", timeout=15000)
-            time.sleep(2)
-            break
         opt = page.evaluate(f"""() => {{
             const a = {json.dumps(ans)};
             const sel = '[role="option"], li, [role="menuitem"], [class*="option"], [class*="item"]';
@@ -80,38 +65,37 @@ def fill(page, f, ans):
             return m ? (m.id ? '[id="' + m.id + '"]' : m.textContent.trim().slice(0, 30)) : null;
         }}""")
         if opt:
-            break
-    if opt:
-        try:
-            if opt.startswith("["):
-                page.locator(opt).click(force=True, timeout=3000)
-            else:
-                page.locator(f'[role="option"]:has-text("{opt}")').first.click(force=True, timeout=3000)
-            time.sleep(0.3)
-            return True
-        except Exception:
-            pass
-    try:
-        container = page.evaluate(f"""() => {{
-            const el = document.querySelector('{sel}');
-            if (!el) return '';
-            const c = el.closest('[class*="ComboBox"], [class*="Dropdown"], [class*="Select"], [class*="widget"], .fieldComponentInput');
-            if (c && c.id) return '[id="' + c.id + '"]';
-            if (c && el.parentElement && el.parentElement.id) return '[id="' + el.parentElement.id + '"]';
-            return '';
-        }}""")
-        if container:
-            page.locator(container).click(force=True, timeout=3000)
-            time.sleep(0.5)
-            opt = page.evaluate(f"""() => {{
-                const a = {json.dumps(ans)};
-                const m = Array.from(document.querySelectorAll('[role="option"], li, [role="menuitem"]')).find(o => o.offsetParent !== null && o.textContent.trim().toLowerCase().includes(a.toLowerCase()));
-                return m ? (m.id ? '[id="' + m.id + '"]' : null) : null;
-            }}""")
-            if opt:
-                page.locator(opt).click(force=True, timeout=3000)
+            try:
+                if opt.startswith("["):
+                    page.locator(opt).click(force=True, timeout=3000)
+                else:
+                    page.locator(f'[role="option"]:has-text("{opt}")').first.click(force=True, timeout=3000)
                 time.sleep(0.3)
                 return True
+            except Exception:
+                pass
+    return False
+
+
+def fill(page, f, ans):
+    """Fill a combobox/dropdown widget via cascading strategy."""
+    sel = f.get("_sel", "")
+    if not sel:
+        return False
+    from apply.strategies import text as _text
+
+    click_sel = _find_any_trigger(page, sel)
+    try:
+        page.locator(click_sel).click(force=True, timeout=5000)
     except Exception:
-        pass
+        return bool(_text.native_setter(page, sel, ans))
+
+    url_before = page.url
+    if _select_option(page, ans):
+        return True
+
+    # URL changed — navigate back
+    if page.url != url_before:
+        page.goto(url_before, wait_until="domcontentloaded", timeout=15000)
+
     return bool(_text.native_setter(page, sel, ans))
