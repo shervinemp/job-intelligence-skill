@@ -1496,7 +1496,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
         )
     else:
         try:
-            b_loc.first.click(timeout=5000)
+            b_loc.first.click(timeout=5000, force=True)
         except Exception as e:
             print(f"  Submit warning: click failed — {e}", file=sys.stderr)
     # Wait for either a page transition OR visible error text
