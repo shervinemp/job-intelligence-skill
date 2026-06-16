@@ -752,12 +752,11 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         lbl_norm = _normalize_label(lbl)
         _seen_labels.add(lbl)
 
-        # Skip pre-filled fields with valid data
+        # Skip pre-filled fields with valid data (any non-empty value is filled,
+        # even if display text differs from answer — widget may translate codes)
         current_val = f.get("value", "")
         if current_val and len(current_val.strip()) > 1:
-            ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False), available_options=f.get("options"))
-            if ans_check is None or ans_check.lower() == current_val.lower():
-                continue
+            continue
 
         ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False), available_options=f.get("options"))
         if ans is None:
