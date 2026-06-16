@@ -474,7 +474,7 @@ def _try_combobox(page, el, ans):
     if el.get_attribute("role") != "combobox":
         return
     try:
-        el.click()
+        el.click(force=True)
         time.sleep(0.5)
         opt = page.locator(f'[role="option"]:has-text("{ans}")')
         if opt.count():
@@ -1000,6 +1000,10 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
                 print(f"  EEO: {ef['label'][:50]} -> {res.value[:40]} ({res.provenance})", file=sys.stderr)
             else:
                 print(f"  EEO_UNANSWERED: {ef['label'][:50]} (options: {[o[:30] for o in ef.get('options', [])[:4]]})", file=sys.stderr)
+
+    # Platform post-fill hook (e.g. notify widget frameworks of DOM changes)
+    if registry and registry.has_hook("post_fill"):
+        registry.call_hook("post_fill", page)
 
     # Unfollow company/social update checkboxes (always)
     page.evaluate(
