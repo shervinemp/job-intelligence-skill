@@ -3,26 +3,38 @@ import json, time
 
 
 def _try_open_dropdown(page, sel):
-    """Click the element at `sel`. If dropdown opens (visible [role="option"]), return True.
-    Returns None if click fails, else True/False for opened/not opened."""
+    """Click the element at `sel`. Returns True if dropdown opened, None if click failed."""
     try:
         page.locator(sel).click(force=True, timeout=5000)
     except Exception:
         return None
-    time.sleep(0.5)
-    return len(page.locator('[role="option"]').all()) > 0
+    # Poll for options (dynamic SAP SF listboxes need up to 1s)
+    for _ in range(4):
+        time.sleep(0.25)
+        if _dropdown_opened(page):
+            return True
+    return False
+
+
+def _dropdown_opened(page):
+    """Check if any [role="option"] is now visible in the page."""
+    return page.evaluate("() => Array.from(document.querySelectorAll('[role=\"option\"]')).some(o => o.offsetParent !== null)")
 
 
 def _find_any_trigger(page, sel):
-    """Click chain: input → siblings → parent → container.
-    Returns selector that successfully opened the dropdown, or None."""
+    """Click chain: visible siblings → parent → input.
+    Skips the input if it's display:none (saves time on widget-type combos)."""
     orig = sel
-    # 1. Try the input itself
-    opened = _try_open_dropdown(page, sel)
-    if opened:
-        return sel
 
-    # 2. Try each visible sibling in the same parent
+    # Check if input is visible — skip if hidden (widget pattern)
+    is_hidden = page.evaluate(f"() => {{ const el = document.querySelector('{sel}'); if (!el) return true; const s = window.getComputedStyle(el); return s.display === 'none' || s.visibility === 'hidden'; }}")
+
+    if not is_hidden:
+        opened = _try_open_dropdown(page, sel)
+        if opened:
+            return sel
+
+    # Try each visible sibling
     siblings = page.evaluate(f"""() => {{
         const el = document.querySelector('{sel}');
         if (!el || !el.parentElement) return [];
@@ -40,12 +52,14 @@ def _find_any_trigger(page, sel):
         if opened:
             return sib
 
-    # 3. Try parent
+    # Try parent
     parent_id = page.evaluate(f"document.querySelector('{sel}')?.parentElement?.id || ''")
     if parent_id:
         opened = _try_open_dropdown(page, f'[id="{parent_id}"]')
         if opened:
             return f'[id="{parent_id}"]'
+
+    return orig
 
     return orig
 
