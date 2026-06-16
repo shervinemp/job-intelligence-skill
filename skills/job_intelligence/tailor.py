@@ -398,12 +398,12 @@ def cmd_reset(job_id=None, states=None, stages=None):
             print(f"No matching jobs.", file=sys.stderr)
             return
     elif job_id == "--all":
-        targets = list(state["jobs"].items())
+        targets = list(s["jobs"].items())
     elif job_id:
-        if job_id not in state["jobs"]:
+        if job_id not in s["jobs"]:
             print(f"Job not found: {job_id}", file=sys.stderr)
             return
-        targets = [(job_id, state["jobs"][job_id])]
+        targets = [(job_id, s["jobs"][job_id])]
     else:
         print("Usage: python3 tailor.py reset <jid> [--all]", file=sys.stderr)
         return
