@@ -974,14 +974,14 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
 
     # Click "Easy Apply" on LinkedIn if present (before login wall check)
     is_easy_apply = page.evaluate("""() => {
-        for (const el of document.querySelectorAll('button, a')) {
+        for (const el of document.querySelectorAll('button, a, [role="button"]')) {
             if ((el.textContent || '').trim().toLowerCase() === 'easy apply') return true;
         }
         return false;
     }""")
     if is_easy_apply:
         page.evaluate("""() => {
-            for (const el of document.querySelectorAll('button, a')) {
+            for (const el of document.querySelectorAll('button, a, [role="button"]')) {
                 if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
             }
         }""")
