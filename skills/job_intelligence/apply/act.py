@@ -972,6 +972,23 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
             )
             return
 
+    # Click "Easy Apply" on LinkedIn if present (before login wall check)
+    is_easy_apply = page.evaluate("""() => {
+        for (const el of document.querySelectorAll('button, a')) {
+            if ((el.textContent || '').trim().toLowerCase() === 'easy apply') return true;
+        }
+        return false;
+    }""")
+    if is_easy_apply:
+        page.evaluate("""() => {
+            for (const el of document.querySelectorAll('button, a')) {
+                if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
+            }
+        }""")
+        time.sleep(3)
+        ps = read_page(page)
+        print(f"EASY_APPLY: clicked → {ps['fieldCount']} fields", file=sys.stderr)
+
     # Check for login wall — try guest apply first, then abort
     text = page_text(page) or ""
     plat = state.get("platform", "")
