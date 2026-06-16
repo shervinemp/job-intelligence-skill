@@ -146,6 +146,4 @@ def fill(page, f, ans):
     if page.url != url_before:
         page.goto(url_before, wait_until="domcontentloaded", timeout=15000)
 
-    # Don't use native setter for comboboxes — it sets the DOM value but
-    # the widget state isn't updated. Better to leave unfilled.
-    return False
+    return bool(_text.native_setter(page, sel, ans))
