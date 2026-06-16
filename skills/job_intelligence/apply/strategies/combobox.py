@@ -64,6 +64,36 @@ def _find_any_trigger(page, sel):
     return orig
 
 
+def _parse_number(s):
+    """Extract numeric value from a string like '$150,001' or '150000'."""
+    import re
+    digits = re.sub(r'[^0-9]', '', s)
+    return int(digits) if digits else None
+
+
+def _match_option(ans, opt_text):
+    """Check if answer matches option text. Returns True if match.
+    Strategies: exact, contains, word-level, then numeric range."""
+    a = ans.lower()
+    o = opt_text.lower().strip()
+    if o == a or o == "no selection":
+        return o == a  # exact match (but not "No Selection" default)
+    if o == a or o.startswith(a) or a in o:
+        return True
+    # Word-level: all significant answer words appear in option
+    words = [w for w in a.split() if len(w) > 2]
+    if words and all(w in o for w in words):
+        return True
+    # Numeric range: if both answer and option contain numbers,
+    # check if answer number falls within option's numeric range
+    ans_num = _parse_number(a)
+    if ans_num is not None:
+        opt_nums = [n for n in [_parse_number(t) for t in o.replace('-', ' ').replace('to', ' ').split()] if n is not None]
+        if len(opt_nums) >= 2:
+            return opt_nums[0] <= ans_num <= opt_nums[-1]
+    return False
+
+
 def _select_option(page, sel, ans):
     """Poll for option matching `ans` within the combobox's own listbox.
     Returns selector string for Playwright to click (trusted event)."""
@@ -77,21 +107,28 @@ def _select_option(page, sel, ans):
             const root = owns ? document.getElementById(owns) : document;
             if (!root) return null;
             const opts = Array.from(root.querySelectorAll('[role="option"], li, [role="menuitem"]'));
-            const found = opts.find(o =>
-                o.textContent.trim().toLowerCase() === a.toLowerCase() ||
-                o.textContent.trim().toLowerCase().includes(a.toLowerCase()) ||
-                a.split(' ').filter(w => w.length > 2).every(w => o.textContent.trim().toLowerCase().includes(w))
-            );
-            if (found && found.id) return '[id="' + found.id + '"]';
-            return null;
+            // Python-side matching is used below — return all option texts for client-side match
+            const texts = opts.map(o => o.textContent.trim()).filter(Boolean);
+            return texts;
         }}""")
         if opt_sel:
-            try:
-                page.locator(opt_sel).click(force=True, timeout=3000)
-                time.sleep(0.3)
-                return True
-            except Exception:
-                pass
+            # Client-side matching with _match_option
+            for ot in opt_sel:
+                if _match_option(ans, ot):
+                    # Find the element ID for this option and click it via Playwright
+                    oid = page.evaluate(f"""() => {{
+                        const opts = Array.from(document.querySelectorAll('[role="option"], li, [role="menuitem"]'));
+                        const match = opts.find(o => o.textContent.trim() === {json.dumps(ot)});
+                        return match && match.id ? '[id="' + match.id + '"]' : null;
+                    }}""")
+                    if oid:
+                        try:
+                            page.locator(oid).click(force=True, timeout=3000)
+                            time.sleep(0.3)
+                            return True
+                        except Exception:
+                            pass
+                    return False
     return False
 
 
