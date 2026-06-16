@@ -594,6 +594,19 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                             )
                             filled += 1
                         elif f["tag"] in ("INPUT", "TEXTAREA"):
+                            # Combobox widget — click to open, then select matching option
+                            if f.get("role") == "combobox":
+                                try:
+                                    el.click()
+                                    time.sleep(0.5)
+                                    opt = page.locator(f'[role="option"]:has-text("{ans}")')
+                                    if opt.count():
+                                        opt.first.click(force=True, timeout=3000)
+                                        time.sleep(0.3)
+                                        filled += 1
+                                        continue
+                                except Exception:
+                                    pass
                             # Check maxlength and truncate if needed
                             try:
                                 ml = el.get_attribute("maxlength")
