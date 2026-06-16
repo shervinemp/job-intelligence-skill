@@ -2,7 +2,7 @@
 """linkedin.py — Scrape LinkedIn jobs into the pipeline.
 
 Usage:
-  python3 linkedin.py [--url <url>] [--max N] [--max-pages N] [--list]
+  python3 linkedin.py [--url <url>] [--count N] [--max-pages N] [--list]
 
 Scrapes job cards, clicks each for full description, paginates for more.
 Adds to DB as 'extracted' with description pre-saved (skips enrich.py).
@@ -214,7 +214,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(prog="linkedin.py", description="Scrape LinkedIn jobs")
     parser.add_argument("--url", default=DEFAULT_URL, help="LinkedIn search URL")
-    parser.add_argument("--max", type=int, default=None, help="Max jobs to scrape")
+    parser.add_argument("--count", type=int, default=None, help="Max jobs to scrape")
     parser.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES, help="Max pages")
     parser.add_argument("--list", action="store_true", help="List jobs without scraping")
     args = parser.parse_args()
@@ -222,4 +222,4 @@ if __name__ == "__main__":
     if args.list:
         cmd_list()
     else:
-        scrape_linkedin(args.url, args.max, args.max_pages)
+        scrape_linkedin(args.url, args.count, args.max_pages)

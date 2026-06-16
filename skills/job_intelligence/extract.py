@@ -153,24 +153,6 @@ def cmd_reject(*jids):
         print(f"REJECT:{count}", file=sys.stderr)
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
-
-def cmd_review(count):
-    pending_ids = set(setting_get(EXTRACTED_IDS_KEY, []))
-    all_staged = stage_list_all()
-    pending = [(tid, content) for tid, content in all_staged if tid not in pending_ids]
-    if not pending:
-        print("ALL_EXTRACTED", file=sys.stderr)
-        return
-    pending = pending[:count]
-    for tid, content in pending:
-        print(f"FILE {tid}", file=sys.stderr)
-        print(f"---BEGIN EMAIL---", file=sys.stderr)
-        print(content, file=sys.stderr)
-        print(f"---END EMAIL---", file=sys.stderr)
-    print("\n---\nRead the FILE content above. Identify job URLs, then call:", file=sys.stderr)
-    print("  python3 extract.py submit [<tid>] '<json>'", file=sys.stderr)
-
-
 def cmd_submit(tid, jobs_json=None):
     if jobs_json is None:
         jobs_json = tid
@@ -310,7 +292,6 @@ def cmd_help():
     print("                                              --notes optional for context.", file=sys.stderr)
     print("  reject <jid> [jid...]                      Skip", file=sys.stderr)
     print("  submit [<tid>] '<json>'                    JSON must include 'category'", file=sys.stderr)
-    print("  review [--count N]                         Show emails for manual picking", file=sys.stderr)
     print("  status                                     Pipeline state", file=sys.stderr)
     print("  reset <jid> [jid...]                       Delete specific job, re-extract on next run", file=sys.stderr)
     print("  reset (no args, requires --confirm)         DANGER: deletes ALL jobs, results, and pipeline state", file=sys.stderr)
@@ -328,7 +309,6 @@ def cmd_help():
 def main():
     import argparse
     parser = argparse.ArgumentParser(prog="extract.py", description="Extract job URLs from staged emails")
-    parser.add_argument("--count", type=int, default=3, help="Jobs to review (default 3)")
     
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("auto", help="Auto-extract URLs from staged emails")
@@ -344,7 +324,6 @@ def main():
     admit_p.add_argument("--category", help="Job category (required on first admit)")
     admit_p.add_argument("--notes", help="Job notes/context")
     sub.add_parser("reject", help="Reject an extracted job").add_argument("jids", nargs="+")
-    sub.add_parser("review", help="Review extracted jobs for admit/reject")
     sub.add_parser("help", help="This message")
 
     args = parser.parse_args()
@@ -364,8 +343,6 @@ def main():
         cmd_admit(*args.jids, category=args.category, notes=args.notes)
     elif args.command == "reject":
         cmd_reject(*args.jids)
-    elif args.command == "review":
-        cmd_review(args.count)
     elif args.command == "auto" or args.command is None:
         cmd_auto()
     elif args.command == "help":

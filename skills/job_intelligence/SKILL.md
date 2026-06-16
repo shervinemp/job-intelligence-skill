@@ -13,7 +13,7 @@ Before running pipeline, read these:
 |-------|------|
 | `stage_emails.py [--days N]` | Auto |
 | `extract.py` | `admit --category <name> <jid>` / reject |
-| `linkedin.py [--url] [--max N]` | admit/reject |
+| `linkedin.py [--url] [--count N]` | admit/reject |
 | `enrich.py` | admit/reject/flag |
 | `tailor.py [--auto]` | admit/reject/undo/retry. See tailoring section |
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
@@ -27,7 +27,6 @@ Before running pipeline, read these:
 | `extract.py admit --category tech/general <jid> [--notes]` | Accept w/ category |
 | `extract.py reject <jid>` | Skip |
 | `extract.py reset <jid>` | Delete + re-extract |
-| `extract.py review [--count N]` | Browse staged emails |
 | `extract.py submit <tid> '<json>'` | Manually add URLs |
 | `enrich.py admit/reject/flag <jid>` | Accept / skip / auth wall |
 | `enrich.py retry` | Retry failed |
