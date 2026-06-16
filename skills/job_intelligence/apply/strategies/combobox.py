@@ -96,33 +96,28 @@ def _match_option(ans, opt_text):
 
 def _select_option(page, sel, ans):
     """Poll for option matching `ans` within the combobox's own listbox.
-    All matching in JS (atomic). Returns True if selected."""
+    Returns True if Playwright trusted click succeeded."""
     for _ in range(20):
         time.sleep(0.25)
-        clicked = page.evaluate(f"""() => {{
+        oid = page.evaluate(f"""() => {{
             const a = {json.dumps(ans)};
             const input = document.querySelector('{sel}');
-            if (!input) return false;
+            if (!input) return '';
             const owns = input.getAttribute('aria-owns');
             const root = owns ? document.getElementById(owns) : document;
-            if (!root) return false;
+            if (!root) return '';
 
-            // Helper: extract number from string
             function parseNum(s) {{
                 const d = s.replace(/[^0-9]/g, '');
                 return d ? parseInt(d, 10) : null;
             }}
-
-            // Helper: check if answer matches option text
             function match(aText, optText) {{
                 const aLow = aText.toLowerCase().trim();
                 const oLow = optText.trim().toLowerCase();
                 if (oLow === aLow) return true;
                 if (oLow.includes(aLow) || aLow.includes(oLow)) return true;
-                // Word-level: all significant answer words appear in option
                 const words = aLow.split(' ').filter(w => w.length > 2);
                 if (words.length && words.every(w => oLow.includes(w))) return true;
-                // Numeric range
                 const aNum = parseNum(aLow);
                 if (aNum !== null) {{
                     const parts = oLow.replace(/-/g, ' ').replace(/to/g, ' ').split(' ');
@@ -134,12 +129,15 @@ def _select_option(page, sel, ans):
 
             const opts = Array.from(root.querySelectorAll('[role="option"], li, [role="menuitem"]'));
             const found = opts.find(o => match(a, o.textContent.trim()));
-            if (found) {{ found.click(); return true; }}
-            return false;
+            return (found && found.id) ? '[id="' + found.id + '"]' : '';
         }}""")
-        if clicked:
-            time.sleep(0.3)
-            return True
+        if oid:
+            try:
+                page.locator(oid).click(force=True, timeout=3000)
+                time.sleep(0.3)
+                return True
+            except Exception:
+                pass
     return False
 
 
