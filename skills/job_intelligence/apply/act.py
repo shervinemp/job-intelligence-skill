@@ -933,9 +933,9 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         time.sleep(1)
         ps = read_page(page)
 
-    # Upload tailored resume if platform has custom upload widget and no standard file inputs
-    if registry and registry.has_hook("upload_resume") and not ps.get("hasFileInput"):
-        registry.call_hook("upload_resume", page, jid)
+    # Upload tailored documents if platform has custom upload widget
+    if registry and registry.has_hook("upload_documents") and not ps.get("hasFileInput"):
+        registry.call_hook("upload_documents", page, jid)
         time.sleep(1)
         ps = read_page(page)
 
@@ -1641,6 +1641,17 @@ def cmd_submit(jid, confirm=False, candidate=None):
             w in current_text for w in ["error", "required", "invalid"]
         ):
             break
+
+    # If error text was detected, don't trust it yet — poll for success signals
+    # which may arrive after validation errors (SAP SF async pattern).
+    success_signals = ["your application has been", "your application was",
+                       "has been sent", "application received", "you have applied",
+                       "successfully applied", "thank you for"]
+    for _ in range(10):
+        current_text = (page_text(page) or "").lower()
+        if any(s in current_text for s in success_signals + _alerts):
+            break
+        time.sleep(0.5)
 
     # Check for CAPTCHA triggered by submission
     handle_session_timeout(page)
