@@ -314,368 +314,368 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
     return filled, unfilled
 
 
+def _normalize_label(lbl):
+    return re.sub(r"[^a-z0-9+#]+", " ", lbl.lower()).strip()
+
+
+def _fill_file_upload(page, f, results_dir, jid, state):
+    """Upload resume PDF to a file input. Returns 'skip', 'filled', 'unfilled', or None."""
+    lbl_lower = (f.get("label", "") or "").lower()
+    if not os.path.isdir(results_dir) or not any("Resume" in fn and fn.endswith(".pdf") for fn in os.listdir(results_dir)):
+        return "unfilled"
+    candidates = []
+    for fn in os.listdir(results_dir):
+        if "Resume" in fn and fn.lower().endswith(".pdf"):
+            score = 0
+            if (state.get("title") or "").split(" ")[0].lower() in fn.lower():
+                score += 2
+            if state.get("company", "").lower() in fn.lower():
+                score += 1
+            candidates.append((score, fn))
+    candidates.sort(key=lambda x: -x[0])
+    if not candidates:
+        return None
+    pdf_path = os.path.join(results_dir, candidates[0][1])
+    try:
+        if os.path.getsize(pdf_path) < 512:
+            print(f"WARN: {candidates[0][1]} is {os.path.getsize(pdf_path)} bytes — skipping empty PDF", file=sys.stderr)
+            return "unfilled"
+    except OSError:
+        return None
+    try:
+        resume_inputs = [fi for fi in page.query_selector_all('input[type="file"]') if "resume" in (page.evaluate(f'(el) => el.closest("div,fieldset,section")?.textContent || ""', fi) or "").lower()]
+        fi = resume_inputs[0] if resume_inputs else page.query_selector('input[type="file"]')
+        if fi:
+            fi.set_input_files(pdf_path)
+            return "filled"
+    except Exception:
+        pass
+    return None
+
+
+def _try_drag_drop(page, results_dir):
+    """Fallback: drag-and-drop zone with no visible file input."""
+    candidates = [fn for fn in os.listdir(results_dir) if "Resume" in fn and fn.lower().endswith(".pdf")]
+    if not candidates:
+        return False
+    pdf_path = os.path.join(results_dir, candidates[0])
+    import base64
+    with open(pdf_path, "rb") as fh:
+        b64 = base64.b64encode(fh.read()).decode()
+    data_url = f"data:application/pdf;base64,{b64}"
+    try:
+        return page.evaluate(f"""(dataUrl) => {{
+            const dz = document.querySelector('.dropzone, [ondrop], [class*="file-upload"], [class*="drag-drop"], [class*="upload-resume"]');
+            if (!dz) return false;
+            return fetch(dataUrl).then(r => r.blob()).then(blob => {{
+                const file = new File([blob], 'Resume.pdf', {{type: 'application/pdf'}});
+                const dt = new DataTransfer();
+                dt.items.add(file);
+                ['dragenter', 'dragover'].forEach(t => {{
+                    dz.dispatchEvent(new DragEvent(t, {{dataTransfer: dt, bubbles: true, cancelable: true}}));
+                }});
+                return dz.dispatchEvent(new DragEvent('drop', {{dataTransfer: dt, bubbles: true, cancelable: true}}));
+            }}).catch(() => false);
+        }}""", data_url)
+    except Exception:
+        return False
+
+
+def _resolve_selector(page, f):
+    """Resolve a CSS selector for a field element."""
+    if f.get("id"):
+        return f'[id="{f["id"]}"]'
+    if f.get("name"):
+        return f'[name="{f["name"]}"]'
+    if f.get("data_automation_id"):
+        return f'[data-automation-id="{f["data_automation_id"]}"]'
+    if f.get("placeholder"):
+        return f'[placeholder="{f["placeholder"]}"]'
+    if f.get("label"):
+        try:
+            return (
+                page.evaluate(
+                    """(lbl) => {
+                    const labels = document.querySelectorAll('label');
+                    for (const l of labels) {
+                        if (l.textContent.trim().toLowerCase() === lbl.toLowerCase()) {
+                            const forId = l.getAttribute('for');
+                            if (forId && document.getElementById(forId)) return '#' + CSS.escape(forId);
+                            const inp = l.querySelector('input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable]');
+                            if (inp && inp.id) return '#' + CSS.escape(inp.id);
+                        }
+                    }
+                    const all = document.querySelectorAll('[aria-labelledby]');
+                    for (const el of all) {
+                        const ref = document.getElementById(el.getAttribute('aria-labelledby'));
+                        if (ref && ref.textContent.trim().toLowerCase() === lbl.toLowerCase() && el.id) return '#' + CSS.escape(el.id);
+                    }
+                    return '';
+                }""",
+                    f["label"],
+                )
+                or ""
+            )
+        except Exception:
+            pass
+    return ""
+
+
+def _try_select_tag(el, f, ans):
+    """Fill a <select> element."""
+    if f["tag"] != "SELECT":
+        return
+    try:
+        values = ans if isinstance(ans, list) else [ans]
+        selected = [next((o for o in f.get("options", []) if v.lower() == o.lower()), v) for v in values]
+        el.select_option(selected if len(selected) > 1 else selected[0])
+        return True
+    except Exception:
+        return False
+
+
+def _try_dropdown(page, f, ans):
+    """Click custom dropdown trigger, select matching option."""
+    if f["tag"] != "DROPDOWN":
+        return
+    sel = None
+    if f.get("id"):
+        sel = f'[id="{f["id"]}"]'
+    elif f.get("data_automation_id"):
+        sel = f'[data-automation-id="{f["data_automation_id"]}"]'
+    elif f.get("name"):
+        sel = f'[name="{f["name"]}"]'
+    if not sel:
+        return
+    try:
+        btn = page.locator(sel)
+        if btn.count() == 0:
+            return
+        btn.first.click(force=True, timeout=5000)
+        time.sleep(1)
+        opt = page.locator(f'[role="option"]:has-text("{ans}")')
+        if opt.count() > 0:
+            opt.first.click(force=True, timeout=3000)
+            time.sleep(0.5)
+            return True
+        lb = page.locator(f'[role="listbox"]:has-text("{ans}")')
+        if lb.count() > 0:
+            lb.first.click(force=True, timeout=3000)
+            time.sleep(0.5)
+            return True
+        btn.first.click(force=True, timeout=5000)
+    except Exception:
+        pass
+    return
+
+
+def _try_combobox(page, el, ans):
+    """Click combobox input, select matching option."""
+    if el.get_attribute("role") != "combobox":
+        return
+    try:
+        el.click()
+        time.sleep(0.5)
+        opt = page.locator(f'[role="option"]:has-text("{ans}")')
+        if opt.count():
+            opt.first.click(force=True, timeout=3000)
+            time.sleep(0.3)
+            return True
+    except Exception:
+        pass
+    return
+
+
+def _try_flatpickr(page, sel, ans):
+    """Fill a flatpickr datepicker widget."""
+    try:
+        page.evaluate(
+            """(args) => {
+            var sel = args[0], val = args[1];
+            var el = document.querySelector(sel);
+            if (!el) return;
+            if (el._flatpickr) { el._flatpickr.setDate(val, true); return; }
+            var fp = el.closest('.flatpickr');
+            if (fp && fp._flatpickr) { fp._flatpickr.setDate(val, true); }
+        }""",
+            [sel, ans],
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _try_contenteditable(page, sel, ans):
+    """Fill a contenteditable div."""
+    try:
+        page.evaluate(
+            """(sel, val) => {
+            const el = document.querySelector(sel);
+            if (el) { el.textContent = val; el.dispatchEvent(new Event('input', {bubbles:true})); }
+        }""",
+            [sel, ans],
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _try_autocomplete(page, el, ans):
+    """Type into autocomplete/multiselect with press_sequentially."""
+    try:
+        el.click()
+        time.sleep(0.3)
+        el.press_sequentially(ans, delay=random.randint(40, 90))
+        time.sleep(0.5)
+        return True
+    except Exception:
+        return False
+
+
+def _try_visible_fill(el, ans):
+    """Standard Playwright fill on a visible, enabled, editable element."""
+    try:
+        if el.is_visible():
+            el.fill(ans)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _try_native_setter(page, sel, ans):
+    """Set value via native JS value setter (bypasses visibility checks)."""
+    try:
+        page.evaluate(
+            """(args) => {
+            var ans = args[0], sel = args[1];
+            var el = document.querySelector(sel);
+            if (!el) return;
+            el.focus();
+            var n = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+            n.call(el, ans);
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+        }""",
+            [ans, sel],
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _fill_text(page, fields, answers, ca, profile, jid, state):
-    """Fill text/select/textarea fields. Returns filled count + unfilled list."""
+    """Fill text/select/textarea fields via strategy cascade. Returns filled count + unfilled list."""
     filled = 0
     unfilled = []
     file_uploaded = False
+    _RESUME_DIR = None
 
     for f in fields:
         prev_filled = filled
         if f["type"] == "radio":
             continue
-        if f["tag"] == "INPUT" and f["type"] == "file":
-            from lib.config import RESULTS_DIR as _RD
 
-            results_dir = os.path.join(_RD, jid)
+        # File upload (resume PDF)
+        if f["tag"] == "INPUT" and f["type"] == "file":
             lbl_lower = (f.get("label", "") or "").lower()
-            # Skip optional uploads after the first file is placed (unless it's a distinct field like Cover Letter)
+            # Skip optional uploads after the first file is placed
             if file_uploaded and not f.get("required", False):
-                # Only skip if not a distinct secondary upload (cover letter vs resume)
-                if (
-                    "cover" not in lbl_lower
-                    and "letter" not in lbl_lower
-                    and "discovery" not in lbl_lower
-                ):
+                if "cover" not in lbl_lower and "letter" not in lbl_lower and "discovery" not in lbl_lower:
                     continue
-            if not os.path.isdir(results_dir) or not any(
-                "Resume" in fn and fn.endswith(".pdf") for fn in os.listdir(results_dir)
-            ):
-                if f.get("required", False):
-                    unfilled.append(
-                        {"label": "Resume Upload", "options": [], "tag": "FILE"}
-                    )
+            if _RESUME_DIR is None:
+                from lib.config import RESULTS_DIR as _RD
+                _RESUME_DIR = os.path.join(_RD, jid)
+            res = _fill_file_upload(page, f, _RESUME_DIR, jid, state)
+            if res == "skip":
                 continue
-            candidates = []
-            for fn in os.listdir(results_dir):
-                if "Resume" in fn and fn.lower().endswith(".pdf"):
-                    score = 0
-                    if (state.get("title") or "").split(" ")[0].lower() in fn.lower():
-                        score += 2
-                    if state.get("company", "").lower() in fn.lower():
-                        score += 1
-                    candidates.append((score, fn))
-            candidates.sort(key=lambda x: -x[0])
-            if not candidates:
+            elif res == "filled":
+                file_uploaded = True
+                filled += 1
                 continue
-            pdf_path = os.path.join(results_dir, candidates[0][1])
-            try:
-                if os.path.getsize(pdf_path) < 512:
-                    print(
-                        f"WARN: {candidates[0][1]} is {os.path.getsize(pdf_path)} bytes — skipping empty PDF",
-                        file=sys.stderr,
-                    )
-                    if f.get("required", False):
-                        unfilled.append(
-                            {"label": "Resume Upload", "options": [], "tag": "FILE"}
-                        )
-                    continue
-            except OSError:
+            elif res == "unfilled":
+                if f.get("required"):
+                    unfilled.append({"label": "Resume Upload", "options": [], "tag": "FILE"})
                 continue
-            try:
-                resume_inputs = [
-                    fi
-                    for fi in page.query_selector_all('input[type="file"]')
-                    if "resume"
-                    in (
-                        (
-                            page.evaluate(
-                                f'(el) => el.closest("div,fieldset,section")?.textContent || ""',
-                                fi,
-                            )
-                            or ""
-                        ).lower()
-                    )
-                ]
-                fi = (
-                    resume_inputs[0]
-                    if resume_inputs
-                    else page.query_selector('input[type="file"]')
-                )
-                if fi:
-                    fi.set_input_files(pdf_path)
+            # Try drag-and-drop fallback
+            if not file_uploaded:
+                if _try_drag_drop(page, _RESUME_DIR):
                     file_uploaded = True
                     filled += 1
-                    continue
-            except Exception:
-                pass
-            # Fallback: drag-and-drop zone with no visible file input
-            if not file_uploaded:
-                try:
-                    import base64
-
-                    with open(pdf_path, "rb") as fh:
-                        b64 = base64.b64encode(fh.read()).decode()
-                    data_url = f"data:application/pdf;base64,{b64}"
-                    dropped = page.evaluate(
-                        f"""(dataUrl) => {{
-                        const dz = document.querySelector('.dropzone, [ondrop], [class*="file-upload"], [class*="drag-drop"], [class*="upload-resume"]');
-                        if (!dz) return false;
-                        return fetch(dataUrl).then(r => r.blob()).then(blob => {{
-                            const file = new File([blob], 'Resume.pdf', {{type: 'application/pdf'}});
-                            const dt = new DataTransfer();
-                            dt.items.add(file);
-                            ['dragenter', 'dragover'].forEach(t => {{
-                                dz.dispatchEvent(new DragEvent(t, {{dataTransfer: dt, bubbles: true, cancelable: true}}));
-                            }});
-                            return dz.dispatchEvent(new DragEvent('drop', {{dataTransfer: dt, bubbles: true, cancelable: true}}));
-                        }}).catch(() => false);
-                    }}""",
-                        data_url,
-                    )
-                    if dropped:
-                        file_uploaded = True
-                        filled += 1
-                except Exception:
-                    pass
             continue
 
-        # Custom dropdown (e.g. Workday province selectors)
-        if f["tag"] == "DROPDOWN":
-            current = f.get("value", "")
-            if current and current != "Select One" and current != "Select...":
-                # Check if current value matches the answer — overwrite if different
-                lbl = f["label"]
-                lbl_norm = re.sub(r"[^a-z0-9+#]+", " ", lbl.lower()).strip()
-                ans_check = _find_answer(
-                    lbl,
-                    lbl_norm,
-                    answers,
-                    ca,
-                    profile,
-                    required=f.get("required", False),
-                )
-                if ans_check and ans_check.lower() != current.lower():
-                    pass  # will overwrite below
-                else:
-                    continue  # already filled correctly
-            lbl = f["label"]
-            lbl_norm = re.sub(r"[^a-z0-9+#]+", " ", lbl.lower()).strip()
-            ans = _find_answer(
-                lbl, lbl_norm, answers, ca, profile, required=f.get("required", False)
-            )
-            if ans:
-                sel = None
-                if f.get("id"):
-                    sel = f'[id="{f["id"]}"]'
-                elif f.get("data_automation_id"):
-                    sel = f'[data-automation-id="{f["data_automation_id"]}"]'
-                elif f.get("name"):
-                    sel = f'[name="{f["name"]}"]'
-                if sel:
-                    try:
-                        btn = page.locator(sel)
-                        if btn.count() > 0:
-                            btn.first.click(force=True, timeout=5000)
-                            time.sleep(1)
-                            opt = page.locator(f'[role="option"]:has-text("{ans}")')
-                            if opt.count() > 0:
-                                opt.first.click(force=True, timeout=3000)
-                                time.sleep(0.5)
-                                filled += 1
-                            else:
-                                # Try listbox instead of option (Workday variant)
-                                lb = page.locator(f'[role="listbox"]:has-text("{ans}")')
-                                if lb.count() > 0:
-                                    lb.first.click(force=True, timeout=3000)
-                                    time.sleep(0.5)
-                                    filled += 1
-                                else:
-                                    # Close dropdown by clicking trigger again (safe toggle, won't close modal)
-                                    btn.first.click(force=True, timeout=5000)
-                    except Exception as e:
-                        print(f"  DROPDOWN: {lbl[:40]} — {e}", file=sys.stderr)
-            elif f.get("required"):
-                unfilled.append({"label": lbl[:60], "options": [], "tag": "DROPDOWN"})
-            continue
-
+        # Standard text/select/dropdown field
         lbl = f["label"]
-        lbl_norm = re.sub(r"[^a-z0-9+#]+", " ", lbl.lower()).strip()
+        lbl_norm = _normalize_label(lbl)
 
         # Skip pre-filled fields with valid data
         current_val = f.get("value", "")
         if current_val and len(current_val.strip()) > 1:
-            ans_check = _find_answer(
-                lbl, lbl_norm, answers, ca, profile, required=f.get("required", False)
-            )
+            ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
             if ans_check is None or ans_check.lower() == current_val.lower():
                 continue
 
-        ans = _find_answer(
-            lbl, lbl_norm, answers, ca, profile, required=f.get("required", False)
-        )
-        if ans is not None:
-            sel = ""
-            if f["id"]:
-                sel = f'[id="{f["id"]}"]'
-            elif f["name"]:
-                sel = f'[name="{f["name"]}"]'
-            elif f.get("placeholder"):
-                sel = f'[placeholder="{f["placeholder"]}"]'
-            if not sel and f.get("label"):
-                try:
-                    sel = (
-                        page.evaluate(
-                            """(lbl) => {
-                        const labels = document.querySelectorAll('label');
-                        for (const l of labels) {
-                            if (l.textContent.trim().toLowerCase() === lbl.toLowerCase()) {
-                                const forId = l.getAttribute('for');
-                                if (forId && document.getElementById(forId)) return '#' + CSS.escape(forId);
-                                const inp = l.querySelector('input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable]');
-                                if (inp && inp.id) return '#' + CSS.escape(inp.id);
-                            }
-                        }
-                        const all = document.querySelectorAll('[aria-labelledby]');
-                        for (const el of all) {
-                            const ref = document.getElementById(el.getAttribute('aria-labelledby'));
-                            if (ref && ref.textContent.trim().toLowerCase() === lbl.toLowerCase() && el.id) return '#' + CSS.escape(el.id);
-                        }
-                        return '';
-                    }""",
-                            f["label"],
-                        )
-                        or ""
-                    )
-                except Exception as e:
-                    print(f"  SELECTOR_JS: {f.get('label','?')[:40]} — {e}", file=sys.stderr)
-            if sel:
-                try:
-                    el = page.query_selector(sel)
-                    if el:
-                        if f["tag"] == "SELECT":
-                            try:
-                                values = ans if isinstance(ans, list) else [ans]
-                                selected = [
-                                    next(
-                                        (
-                                            o
-                                            for o in f["options"]
-                                            if v.lower() == o.lower()
-                                        ),
-                                        v,
-                                    )
-                                    for v in values
-                                ]
-                                el.select_option(
-                                    selected if len(selected) > 1 else selected[0]
-                                )
-                                filled += 1
-                            except Exception:
-                                if f.get("required"):
-                                    unfilled.append(
-                                        {
-                                            "label": lbl[:60],
-                                            "options": f.get("options", []),
-                                            "tag": "SELECT",
-                                        }
-                                    )
-                                continue
-                        elif f.get("datepicker") == "flatpickr":
-                            page.evaluate(
-                                """(args) => {
-                                var sel = args[0], val = args[1];
-                                var el = document.querySelector(sel);
-                                if (!el) return;
-                                if (el._flatpickr) { el._flatpickr.setDate(val, true); return; }
-                                var fp = el.closest('.flatpickr');
-                                if (fp && fp._flatpickr) { fp._flatpickr.setDate(val, true); }
-                            }""",
-                                [sel, ans],
-                            )
-                            filled += 1
-                        elif f["tag"] == "DIV" or f.get("contenteditable"):
-                            page.evaluate(
-                                f"""(sel, val) => {{
-                                const el = document.querySelector(sel);
-                                if (el) {{ el.textContent = val; el.dispatchEvent(new Event('input', {{bubbles:true}})); }}
-                            }}""",
-                                [sel, ans],
-                            )
-                            filled += 1
-                        elif f["tag"] in ("INPUT", "TEXTAREA"):
-                            # Combobox widget — click to open, then select matching option
-                            if f.get("role") == "combobox":
-                                try:
-                                    el.click()
-                                    time.sleep(0.5)
-                                    opt = page.locator(f'[role="option"]:has-text("{ans}")')
-                                    if opt.count():
-                                        opt.first.click(force=True, timeout=3000)
-                                        time.sleep(0.3)
-                                        filled += 1
-                                        continue
-                                except Exception:
-                                    pass
-                            # Check maxlength and truncate if needed
-                            try:
-                                ml = el.get_attribute("maxlength")
-                                if ml and ans and len(ans) > int(ml):
-                                    ans = ans[: int(ml)]
-                            except Exception:
-                                pass
-                            # Check if this is an autocomplete field (multiselect widget)
-                            is_ac = False
-                            try:
-                                if f.get("placeholder") == "Search" or f.get(
-                                    "data_automation_id", ""
-                                ):
-                                    is_ac = True
-                            except Exception:
-                                pass
-                            if is_ac:
-                                # Use press_sequentially for autocomplete (triggers dropdown, suggests options)
-                                try:
-                                    el.click()
-                                    time.sleep(0.3)
-                                    el.press_sequentially(
-                                        ans, delay=random.randint(40, 90)
-                                    )
-                                except Exception:
-                                    # Fallback: native value setter
-                                    page.evaluate(
-                                        """(args) => {
-                                        var ans = args[0], sel = args[1];
-                                        var el = document.querySelector(sel);
-                                        if (!el) return;
-                                        el.focus();
-                                        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                                        nativeInputValueSetter.call(el, ans);
-                                        el.dispatchEvent(new Event("input", { bubbles: true }));
-                                        el.dispatchEvent(new Event("change", { bubbles: true }));
-                                    }""",
-                                        [ans, sel],
-                                    )
-                                time.sleep(0.5)
-                            else:
-                                if el.is_visible():
-                                    el.fill(ans)
-                                else:
-                                    # Element not visible (collapsed section, custom widget) —
-                                    # use native value setter which bypasses visibility checks
-                                    page.evaluate(
-                                        """(args) => {
-                                        var ans = args[0], sel = args[1];
-                                        var el = document.querySelector(sel);
-                                        if (!el) return;
-                                        el.focus();
-                                        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                                        nativeInputValueSetter.call(el, ans);
-                                        el.dispatchEvent(new Event("input", { bubbles: true }));
-                                        el.dispatchEvent(new Event("change", { bubbles: true }));
-                                    }""",
-                                        [ans, sel],
-                                    )
-                            filled += 1
-                except Exception as e:
-                    print(f"  FILL_FAILED: {lbl[:40]} — {e}", file=sys.stderr)
-        elif f.get("required"):
-            unfilled.append(
-                {"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]}
-            )
-        # Brief random delay if a field was filled (masks automation speed)
+        ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
+        if ans is None:
+            if f.get("required"):
+                unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
+            continue
+
+        sel = _resolve_selector(page, f)
+        if not sel:
+            if f.get("required"):
+                unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
+            continue
+
+        el = page.query_selector(sel)
+        if not el:
+            if f.get("required"):
+                unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
+            continue
+
+        # Strategy cascade: try each method, fall through on failure
+        if _try_select_tag(el, f, ans):
+            filled += 1
+        elif _try_dropdown(page, f, ans):
+            filled += 1
+        elif _try_combobox(page, el, ans):
+            filled += 1
+        elif f.get("datepicker") == "flatpickr" and _try_flatpickr(page, sel, ans):
+            filled += 1
+        elif f["tag"] == "DIV" or f.get("contenteditable"):
+            if _try_contenteditable(page, sel, ans):
+                filled += 1
+            elif f.get("required"):
+                unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
+        elif f["tag"] in ("INPUT", "TEXTAREA"):
+            # Truncate to maxlength
+            try:
+                ml = el.get_attribute("maxlength")
+                if ml and ans and len(ans) > int(ml):
+                    ans = ans[: int(ml)]
+            except Exception:
+                pass
+            is_ac = False
+            try:
+                if f.get("placeholder") == "Search" or f.get("data_automation_id", ""):
+                    is_ac = True
+            except Exception:
+                pass
+            if is_ac:
+                if _try_autocomplete(page, el, ans):
+                    filled += 1
+                elif _try_native_setter(page, sel, ans):
+                    filled += 1
+            else:
+                if _try_visible_fill(el, ans) or _try_native_setter(page, sel, ans):
+                    filled += 1
+
+        if filled == prev_filled and f.get("required"):
+            unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
+
         if filled > prev_filled:
             time.sleep(random.uniform(0.15, 0.4))
+
     return filled, unfilled
 
 
