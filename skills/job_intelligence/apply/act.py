@@ -1028,9 +1028,13 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
                 clicked = page.evaluate("""(kws) => {
                     const dialog = document.querySelector('[role="dialog"]');
                     if (!dialog) return false;
+                    const btns = dialog.querySelectorAll('button, a, [role="button"]');
                     for (const kw of kws) {
-                        const btn = dialog.querySelector('button:has-text("' + kw + '"), a:has-text("' + kw + '"), [role="button"]:has-text("' + kw + '")');
-                        if (btn && btn.offsetParent !== null) { btn.click(); return true; }
+                        for (const btn of btns) {
+                            if (btn.offsetParent !== null && (btn.textContent || '').trim().toLowerCase() === kw.toLowerCase()) {
+                                btn.click(); return true;
+                            }
+                        }
                     }
                     return false;
                 }""", [["Next", "Review", "Submit application", "Submit", "Done"]])
