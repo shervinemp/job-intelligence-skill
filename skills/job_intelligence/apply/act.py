@@ -160,7 +160,7 @@ def _click_candidate(page, c, state=None):
         if not clicked:
             # Fallback: Playwright locator with more flexible text matching
             try:
-                loc = page.locator(f'button:has-text("{c["text"]}")')
+                loc = page.locator(f'button:has-text("{c["text"]}"), [role="button"]:has-text("{c["text"]}")')
                 if loc.count() > 0:
                     loc.first.click(force=True, timeout=5000)
                 else:
@@ -1471,7 +1471,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
     )
 
     before_hash = _page_hash(page)
-    b_loc = page.locator(f'button:has-text("{target["text"]}")')
+    b_loc = page.locator(f'button:has-text("{target["text"]}"), [role="button"]:has-text("{target["text"]}")')
     if b_loc.count() == 0:
         print(
             f"  Submit warning: button '{target['text']}' not found on page",
