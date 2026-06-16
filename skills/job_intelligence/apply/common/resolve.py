@@ -137,6 +137,7 @@ def resolve(
     session_cache: Optional[dict] = None,
     label_map: Optional[dict] = None,
     answers_override: Optional[dict] = None,
+    available_options: Optional[list] = None,
 ) -> Resolution:
     if session_cache is None:
         session_cache = {}
@@ -185,9 +186,9 @@ def resolve(
         if nf(k) == norm:
             return Resolution(v, "answers_override", label, "user_typed", False)
 
-    # Step 6: LLM selection (with decisions.md context)
+    # Step 6: LLM selection (with decisions.md context + available options)
     keys_list = list(ephemeral.keys())
-    result = _llm_select(label, keys_list)
+    result = _llm_select(label, keys_list, available_options or [])
     if result:
         if result.startswith("new:"):
             parts = result[4:].split("|", 1)
@@ -225,8 +226,8 @@ def resolve(
 
 # ─── LLM selection ──────────────────────────────────────────────────
 
-def _llm_select(label: str, available_keys: list) -> Optional[str]:
-    if not available_keys:
+def _llm_select(label: str, available_keys: list, available_options: list = None) -> Optional[str]:
+    if not available_keys and not available_options:
         return None
     md = _load_decisions_md()
 
@@ -234,12 +235,15 @@ def _llm_select(label: str, available_keys: list) -> Optional[str]:
         f"Available answer keys: {json.dumps(available_keys)}\n"
         f"Form label: \"{label}\"\n"
     )
+    if available_options:
+        prompt += f"Available options for this field: {json.dumps(available_options[:15])}\n"
     if md:
         prompt += f"\nUser's rules (decisions.md):\n{md[:2000]}\n"
 
     prompt += (
         "\nReturn one of:\n"
         "- A key name from the above list → fill with that key's value\n"
+        "- A direct value from Available options (copy exactly as shown)\n"
         "- \"new:key_name|value\" → suggest a new answer derived from decisions.md\n"
         "- \"no_match\" → answer not found anywhere\n\n"
         "If the existing key's value is stale (decisions.md rules changed), "
@@ -256,6 +260,8 @@ def _llm_select(label: str, available_keys: list) -> Optional[str]:
         if result in available_keys:
             return result
         if result.startswith("new:") and "|" in result[4:]:
+            return result
+        if available_options and result in available_options:
             return result
     except Exception:
         pass
@@ -298,8 +304,10 @@ def resolution_for_fill(
     label: str,
     profile: dict,
     answers_override: Optional[dict] = None,
+    available_options: Optional[list] = None,
 ) -> Resolution:
     label_map = _load_json(_LABEL_MAP_PATH, {})
     session_cache = _load_json(_SESSION_CACHE_PATH, {})
     return resolve(label, profile, session_cache=session_cache,
-                   label_map=label_map, answers_override=answers_override)
+                   label_map=label_map, answers_override=answers_override,
+                   available_options=available_options)
