@@ -89,7 +89,7 @@ def _page_hash(page):
         return page.evaluate(
             """() => {
             const inputs = document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
-            const btns = document.querySelectorAll('button');
+            const btns = document.querySelectorAll('button, [role="button"]');
             const btnTexts = Array.from(btns).filter(b => b.offsetParent).map(b => b.textContent.trim()).slice(0, 5).join('|');
             return inputs.length + ':' + btnTexts;
         }"""
@@ -494,12 +494,12 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
 
         # Skip pre-filled fields with valid data
         current_val = f.get("value", "")
-        if (
-            current_val
-            and len(current_val.strip()) > 1
-            and not f.get("required", False)
-        ):
-            continue
+        if current_val and len(current_val.strip()) > 1:
+            ans_check = _find_answer(
+                lbl, lbl_norm, answers, ca, profile, required=f.get("required", False)
+            )
+            if ans_check is None or ans_check.lower() == current_val.lower():
+                continue
 
         ans = _find_answer(
             lbl, lbl_norm, answers, ca, profile, required=f.get("required", False)
@@ -1377,7 +1377,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
     all_buttons = (
         page.evaluate(
             """() => {
-        return Array.from(document.querySelectorAll('button'))
+        return Array.from(document.querySelectorAll('button, [role="button"]'))
             .filter(b => b.offsetParent)
             .map(b => ({text: (b.textContent||'').trim().slice(0,30), disabled: b.disabled}));
     }"""

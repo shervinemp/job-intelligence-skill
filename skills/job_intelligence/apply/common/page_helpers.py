@@ -264,7 +264,7 @@ def scan_actions(page, keywords, exclude=None):
     result = page.evaluate("""((args) => {
         const kws = args[0], excl = new Set(args[1].map(e => e.toLowerCase()));
         const currentUrl = location.href.replace(/\\/$/, '').toLowerCase();
-        const all = document.querySelectorAll('button, a');
+        const all = document.querySelectorAll('button, a, [role="button"]');
         const candidates = [];
         for (const el of all) {
             if (el.offsetParent === null) continue;

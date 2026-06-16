@@ -93,7 +93,7 @@ def run(jid):
         if apply_matches:
             txt = apply_matches[0]["text"]
             clicked = ep.evaluate(f"""(target) => {{
-                for (const el of document.querySelectorAll('button, a.btn, a[role="button"], a')) {{
+                for (const el of document.querySelectorAll('button, a.btn, [role="button"], a')) {{
                     if (el.offsetParent === null) continue;
                     if ((el.textContent || '').trim() === target) {{
                         el.click();
