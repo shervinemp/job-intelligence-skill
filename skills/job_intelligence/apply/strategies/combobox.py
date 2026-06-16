@@ -96,39 +96,50 @@ def _match_option(ans, opt_text):
 
 def _select_option(page, sel, ans):
     """Poll for option matching `ans` within the combobox's own listbox.
-    Returns selector string for Playwright to click (trusted event)."""
+    All matching in JS (atomic). Returns True if selected."""
     for _ in range(20):
         time.sleep(0.25)
-        opt_sel = page.evaluate(f"""() => {{
+        clicked = page.evaluate(f"""() => {{
             const a = {json.dumps(ans)};
             const input = document.querySelector('{sel}');
-            if (!input) return null;
+            if (!input) return false;
             const owns = input.getAttribute('aria-owns');
             const root = owns ? document.getElementById(owns) : document;
-            if (!root) return null;
+            if (!root) return false;
+
+            // Helper: extract number from string
+            function parseNum(s) {{
+                const d = s.replace(/[^0-9]/g, '');
+                return d ? parseInt(d, 10) : null;
+            }}
+
+            // Helper: check if answer matches option text
+            function match(aText, optText) {{
+                const aLow = aText.toLowerCase();
+                const oLow = optText.trim().toLowerCase();
+                if (oLow === aLow || oLow === 'no selection') return oLow === aLow;
+                if (aLow.startsWith(oLow) || oLow.startsWith(aLow) || oLow.includes(aLow) || aLow.includes(oLow)) return true;
+                // Word-level: all significant words in answer appear in option
+                const words = aLow.split(' ').filter(w => w.length > 2);
+                if (words.length && words.every(w => oLow.includes(w))) return true;
+                // Numeric range
+                const aNum = parseNum(aLow);
+                if (aNum !== null) {{
+                    const parts = oLow.replace(/-/g, ' ').replace(/to/g, ' ').split(' ');
+                    const nums = parts.map(p => parseNum(p)).filter(n => n !== null);
+                    if (nums.length >= 2 && nums[0] <= aNum && aNum <= nums[nums.length - 1]) return true;
+                }}
+                return false;
+            }}
+
             const opts = Array.from(root.querySelectorAll('[role="option"], li, [role="menuitem"]'));
-            // Python-side matching is used below — return all option texts for client-side match
-            const texts = opts.map(o => o.textContent.trim()).filter(Boolean);
-            return texts;
+            const found = opts.find(o => match(a, o.textContent.trim()));
+            if (found) {{ found.click(); return true; }}
+            return false;
         }}""")
-        if opt_sel:
-            # Client-side matching with _match_option
-            for ot in opt_sel:
-                if _match_option(ans, ot):
-                    # Find the element ID for this option and click it via Playwright
-                    oid = page.evaluate(f"""() => {{
-                        const opts = Array.from(document.querySelectorAll('[role="option"], li, [role="menuitem"]'));
-                        const match = opts.find(o => o.textContent.trim() === {json.dumps(ot)});
-                        return match && match.id ? '[id="' + match.id + '"]' : null;
-                    }}""")
-                    if oid:
-                        try:
-                            page.locator(oid).click(force=True, timeout=3000)
-                            time.sleep(0.3)
-                            return True
-                        except Exception:
-                            pass
-                    return False
+        if clicked:
+            time.sleep(0.3)
+            return True
     return False
 
 
