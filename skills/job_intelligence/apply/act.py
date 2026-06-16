@@ -1019,6 +1019,24 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         if not guest_clicked:
             emit_status("login_wall", "sign in required — retry after login")
             emit_next("retry after login")
+    # Click "Easy Apply" on LinkedIn if present (before field reading)
+    if not guest_clicked:
+        is_easy_apply = page.evaluate("""() => {
+            for (const el of document.querySelectorAll('button, a')) {
+                if ((el.textContent || '').trim().toLowerCase() === 'easy apply') return true;
+            }
+            return false;
+        }""")
+        if is_easy_apply:
+            page.evaluate("""() => {
+                for (const el of document.querySelectorAll('button, a')) {
+                    if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
+                }
+            }""")
+            time.sleep(3)
+            ps = read_page(page)
+            print(f"EASY_APPLY: clicked → {ps['fieldCount']} fields", file=sys.stderr)
+
     # If no fields detected, use model-assisted action finding
     if ps["fieldCount"] == 0:
         apply_kws = [
