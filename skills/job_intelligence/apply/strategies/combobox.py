@@ -98,7 +98,7 @@ def _select_option(page, sel, ans):
                 if (words.length) {{
                     const matchCount = words.filter(w => oLow.includes(w)).length;
                     if (matchCount === words.length) return true;
-                    if (matchCount / words.length >= 0.75) return true;
+                    if (matchCount / words.length >= 0.6) return true;
                 }}
                 const aNum = parseNum(aLow);
                 if (aNum !== null) {{
