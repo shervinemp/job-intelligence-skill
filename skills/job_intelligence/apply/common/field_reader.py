@@ -288,6 +288,16 @@ _ERROR_SCAN_JS = """() => {
             if (text && text.length > 5 && text.length < 300) {
                 const lower = text.toLowerCase();
                 if (lower.includes('upload') || lower.includes('loading') || lower.includes('saving')) return;
+                // Skip stale banners: if the mentioned field has aria-invalid="false", it's no longer an error
+                const m = text.match(/^["*]?\\s*(.+?)\\s+(is required|is invalid|must be|required)/i);
+                if (m) {
+                const fn = m[1].replace(/[*\\s]/g, '').toLowerCase();
+                const inp = Array.from(document.querySelectorAll('input, select, textarea')).find(el => {
+                    const al = (el.getAttribute('aria-label') || '').toLowerCase().replace(/[*\\s]/g, '');
+                        return al.includes(fn) || al === fn;
+                    });
+                    if (inp && inp.getAttribute('aria-invalid') === 'false') return;
+                }
                 errors.push({label: '(form)', error_text: text.slice(0, 120)});
             }
         });
