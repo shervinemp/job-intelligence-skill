@@ -376,6 +376,9 @@ def _probe_fields(page, fields):
             except Exception:
                 pass
     return fields
+
+
+def _normalize_label(lbl):
     return re.sub(r"[^a-z0-9+#]+", " ", lbl.lower()).strip()
 
 
