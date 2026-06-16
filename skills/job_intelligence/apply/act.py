@@ -696,48 +696,9 @@ def _fill_text_field(page, f, ans, sel, el):
 
 
 def _fill_field_deterministic(page, f, ans):
-    """Fill a single field using the strategy matching its type.
-    Dispatch only — no platform-specific logic."""
-    sel = f.get("_sel", "")
-    if not sel:
-        return False
-
-    # Agreement checkbox — check it
-    if f["tag"] == "INPUT" and f.get("type") == "checkbox":
-        lbl = (f.get("label") or "").lower()
-        if any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm", "understand"]):
-            try:
-                cb = page.locator(sel)
-                if cb.count() and not cb.is_checked():
-                    cb.check(force=True)
-                    return True
-            except Exception:
-                pass
-        return False
-
-    # Select element
-    if f["tag"] == "SELECT":
-        el = page.query_selector(sel)
-        return bool(el and _try_select_tag(el, f, ans))
-
-    # Combobox / custom dropdown
-    if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
-        return _fill_combobox(page, f, ans)
-
-    # Datepicker
-    if f.get("datepicker") == "flatpickr":
-        return bool(_try_flatpickr(page, sel, ans))
-
-    # Contenteditable
-    if f["tag"] == "DIV" or f.get("contenteditable"):
-        return bool(_try_contenteditable(page, sel, ans))
-
-    # Text input / textarea
-    if f["tag"] in ("INPUT", "TEXTAREA"):
-        el = page.query_selector(sel) if sel else None
-        return _fill_text_field(page, f, ans, sel, el)
-
-    return False
+    """Dispatch to canonical strategy module."""
+    from apply.strategies import field_deterministic as _fd
+    return _fd(page, f, ans)
 
 
 def _fill_text(page, fields, answers, ca, profile, jid, state):
