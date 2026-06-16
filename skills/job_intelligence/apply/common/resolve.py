@@ -138,7 +138,6 @@ def resolve(
     label_map: Optional[dict] = None,
     answers_override: Optional[dict] = None,
     available_options: Optional[list] = None,
-    required: bool = False,
 ) -> Resolution:
     if session_cache is None:
         session_cache = {}
@@ -178,9 +177,12 @@ def resolve(
                 return Resolution(val, entry["key"], label, "label_map", False)
 
     # Step 4: --answers override (explicit user/assistant override, highest priority)
-    # Use prefix match to handle truncated labels in --answers
     for k, v in answers_override.items():
-        if nf(k) == norm or norm.startswith(nf(k)):
+        nk = nf(k)
+        if nk == norm:
+            return Resolution(v, "answers_override", label, "user_typed", False)
+        # Prefix match for truncated labels — only when key is clearly truncated (< 40 chars)
+        if len(nk) >= 10 and norm.startswith(nk):
             return Resolution(v, "answers_override", label, "user_typed", False)
 
     # Step 5: ephemeral exact match (profile.json answers, deterministic)

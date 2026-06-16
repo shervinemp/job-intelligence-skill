@@ -78,7 +78,7 @@ def _match_word(needle, haystack):
     )
 
 
-def _find_answer(label, label_norm, answers, ca, profile, required=False, available_options=None):
+def _find_answer(label, label_norm, answers, ca, profile, available_options=None):
     """Find answer via resolve chain. Ignores ca (old common_answers) — resolve reads profile directly."""
     res = resolution_for_fill(label, profile, answers_override=answers, available_options=available_options)
     return res.value
@@ -287,7 +287,7 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
         q_label = opts[0].split(" - ")[0] if " - " in opts[0] else opts[0]
         q_norm = re.sub(r"[^a-z0-9+#]+", " ", q_label.lower()).strip()
 
-        ans = _find_answer(q_label, q_norm, answers, ca, profile, required=True)
+        ans = _find_answer(q_label, q_norm, answers, ca, profile)
         if ans:
             ans_lower = ans.lower()
             matched = False
@@ -755,13 +755,16 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         # Skip pre-filled fields with valid data (any non-empty value is filled,
         # even if display text differs from answer — widget may translate codes)
         current_val = f.get("value", "")
-        if current_val and len(current_val.strip()) > 1:
+        current_stripped = current_val.strip()
+        # Never skip placeholder/"no selection" values
+        if current_stripped.lower() in ("no selection", "select one", "select...", ""):
+            pass
+        elif current_stripped and len(current_stripped) > 1:
             # For required fields, still check if answer contradicts the current value
             if f.get("required"):
-                ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, required=True, available_options=f.get("options"))
+                ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, available_options=f.get("options"))
                 if ans_check:
-                    # If answer shares no words with current value, overwrite
-                    cw = current_val.lower().split()
+                    cw = current_stripped.lower().split()
                     aw = ans_check.lower().split()
                     if not any(w in cw for w in aw):
                         pass  # will overwrite below
@@ -772,7 +775,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             else:
                 continue
 
-        ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False), available_options=f.get("options"))
+        ans = _find_answer(lbl, lbl_norm, answers, ca, profile, available_options=f.get("options"))
         if ans is None:
             if f.get("required"):
                 unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
