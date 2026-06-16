@@ -281,6 +281,9 @@ _ERROR_SCAN_JS = """() => {
     errorBanners.forEach(el => {
         const text = el.textContent.trim();
         if (text && text.length > 5 && text.length < 300) {
+            // Skip status/progress messages (not validation errors)
+            const lower = text.toLowerCase();
+            if (lower.includes('upload') || lower.includes('loading') || lower.includes('saving')) return;
             errors.push({label: '(form)', error_text: text.slice(0, 120)});
         }
     });
