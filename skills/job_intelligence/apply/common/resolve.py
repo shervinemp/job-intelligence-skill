@@ -138,6 +138,7 @@ def resolve(
     label_map: Optional[dict] = None,
     answers_override: Optional[dict] = None,
     available_options: Optional[list] = None,
+    required: bool = False,
 ) -> Resolution:
     if session_cache is None:
         session_cache = {}
@@ -186,9 +187,10 @@ def resolve(
         if nf(k) == norm:
             return Resolution(v, "answers_override", label, "user_typed", False)
 
-    # Step 6: LLM selection (with decisions.md context + available options)
-    keys_list = list(ephemeral.keys())
-    result = _llm_select(label, keys_list, available_options or [])
+    # Step 6: LLM selection (disabled — assistant provides answers via --answers Step 5)
+    # keys_list = list(ephemeral.keys())
+    # result = _llm_select(label, keys_list, available_options or [])
+    result = None
     if result:
         if result.startswith("new:"):
             parts = result[4:].split("|", 1)
