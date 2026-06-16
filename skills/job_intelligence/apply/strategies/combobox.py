@@ -67,7 +67,12 @@ def _select_option(page, sel, ans):
             if (!match) return false;
             // Find the option with matching text
             const opts = Array.from(root.querySelectorAll('[role="option"], li, [role="menuitem"]'));
-            const found = opts.find(o => o.offsetParent !== null && (o.textContent.trim().toLowerCase() === a.toLowerCase() || o.textContent.trim().toLowerCase().includes(a.toLowerCase())));
+            const found = opts.find(o => o.offsetParent !== null && (
+                o.textContent.trim().toLowerCase() === a.toLowerCase() ||
+                o.textContent.trim().toLowerCase().includes(a.toLowerCase()) ||
+                // Word-level: all answer words appear in the option
+                a.split(' ').filter(w => w.length > 2).every(w => o.textContent.trim().toLowerCase().includes(w))
+            ));
             if (found) {{ found.click(); return true; }}
             return false;
         }}""")
