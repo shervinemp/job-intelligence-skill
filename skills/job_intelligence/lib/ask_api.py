@@ -42,8 +42,8 @@ def available():
         return False
 
 
-def ask(image_path, prompt, temperature=0.3, max_tokens=2048):
-    """Send image file + prompt to vision API. Returns (reply, error)."""
+def ask(image_path, prompt, temperature=0.3, max_tokens=2048, file_path=None):
+    """Send image file + prompt (optionally with file context) to vision API. Returns (reply, error)."""
     try:
         with open(image_path, "rb") as f:
             image_data = f.read()
@@ -51,15 +51,24 @@ def ask(image_path, prompt, temperature=0.3, max_tokens=2048):
         return None, f"image not found: {image_path}"
     except Exception as e:
         return None, f"reading image: {e}"
-    return ask_bytes(image_data, prompt, temperature, max_tokens)
+    content = []
+    if file_path:
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                file_content = f.read()
+            content.append({"type": "text", "text": f"Context from {os.path.basename(file_path)}:\n{file_content[:3000]}"})
+        except Exception as e:
+            pass
+    content.append({"type": "text", "text": prompt})
+    return ask_bytes(image_data, content, temperature, max_tokens)
 
 
-def ask_bytes(image_data, prompt, temperature=0.3, max_tokens=2048):
-    """Send raw image bytes + prompt to vision API. No temp files needed. Returns (reply, error)."""
+def ask_bytes(image_data, prompt_or_content, temperature=0.3, max_tokens=2048):
+    """Send raw image bytes + prompt/content to vision API. Returns (reply, error)."""
     cfg = _load_config()
     if not cfg["url"]:
         return None, "LLM_API_URL not set"
-    return _vision(image_data, prompt, temperature, max_tokens, cfg)
+    return _vision(image_data, prompt_or_content, temperature, max_tokens, cfg)
 
 
 def ask_chunked(image_data, prompt, temperature=0.3, max_tokens=2048,
@@ -155,13 +164,17 @@ def _payload(messages, temperature, max_tokens, cfg, timeout=60):
         return None, str(e)
 
 
-def _vision(image_data, prompt, temperature, max_tokens, cfg):
-    """Send image bytes + text to vision API."""
+def _vision(image_data, prompt_or_content, temperature, max_tokens, cfg):
+    """Send image bytes + text/content to vision API."""
     b64 = base64.b64encode(image_data).decode()
-    # Detect MIME from magic bytes
     mime = "image/jpeg" if image_data[:2] == b"\xff\xd8" else "image/png"
-    content = [{"type": "text", "text": prompt},
-               {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}]
+    if isinstance(prompt_or_content, str):
+        content = [{"type": "text", "text": prompt_or_content},
+                   {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}]
+    else:
+        # content is already a list — append image
+        content = list(prompt_or_content)
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
     return _payload([{"role": "user", "content": content}], temperature, max_tokens, cfg)
 
 
@@ -177,10 +190,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--img", help="Path to image file (optional — text-only if omitted)")
     parser.add_argument("--prompt", required=True, help="Question about the image")
+    parser.add_argument("--file", help="Path to context file (HTML, text, etc.) to include as context")
     parser.add_argument("--temperature", type=float, default=0.3)
     args = parser.parse_args()
 
-    reply, err = ask(args.img, args.prompt, temperature=args.temperature)
+    reply, err = ask(args.img, args.prompt, temperature=args.temperature, file_path=args.file)
     if err:
         print(err)
     else:
