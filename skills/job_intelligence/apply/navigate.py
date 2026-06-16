@@ -111,20 +111,10 @@ def run(jid):
                 if has_password or ("sign in" in body_text and "apply" not in body_text):
                     mark_auth_wall(jid, ep.url, title or "", company or "")
                     print(f"AUTH_WALL: {jid} — {title} @ {company}", file=sys.stderr)
-                    print("  Browser is open on the sign-in page. Log in, then press Enter.", file=sys.stderr)
-                    print("  Type 'flag' and press Enter to skip.", file=sys.stderr)
-                    sys.stderr.flush()
-                    try:
-                        inp = input().strip().lower()
-                    except (EOFError, KeyboardInterrupt):
-                        inp = "flag"
-                    if inp == "flag":
-                        save_state({"jid": jid, "external_url": external_url, "page": page_state})
-                        emit_next("apply.py detect")
-                        sys.exit(0)
-                    # User says they logged in — re-read page and continue
-                    time.sleep(2)
-                    page_state = read_page(ep)
+                    print("  Browser is on the sign-in page. Log in, then run again.", file=sys.stderr)
+                    save_state({"jid": jid, "external_url": external_url, "page": page_state})
+                    emit_next("apply.py detect")
+                    sys.exit(0)
 
     pm = PageManager(ctx, jid)
     pm.cleanup_all()
