@@ -23,12 +23,12 @@ def _find_any_trigger(page, sel):
     if not is_hidden:
         return sel
 
-    # Try first visible sibling
+    # Try first sibling with an ID (SAP SF button may have offsetParent===null)
     siblings = page.evaluate(f"""() => {{
         const el = document.querySelector('{sel}');
         if (!el || !el.parentElement) return [];
         return Array.from(el.parentElement.children)
-            .filter(c => c !== el && c.offsetParent !== null && c.id)
+            .filter(c => c !== el && c.id)
             .map(c => '[id="' + c.id + '"]');
     }}""")
     if siblings:
