@@ -75,8 +75,8 @@ def _match_option(ans, opt_text):
 def _select_option(page, sel, ans):
     """Poll for option matching `ans` within the combobox's own listbox.
     Returns True if Playwright trusted click succeeded."""
-    for _ in range(20):
-        time.sleep(0.25)
+    for _ in range(15):
+        time.sleep(0.5)
         oid = page.evaluate(f"""() => {{
             const a = {json.dumps(ans)};
             const input = document.querySelector('{sel}');
@@ -127,8 +127,10 @@ def fill(page, f, ans):
     from apply.strategies import text as _text
 
     click_sel = _find_any_trigger(page, sel)
+    # JS click works on hidden elements (Playwright locator requires visibility).
+    # SAP SF's juic.fire() doesn't check event.isTrusted — untrusted clicks work.
     try:
-        page.locator(click_sel).click(force=True, timeout=5000)
+        page.evaluate(f"document.querySelector('{click_sel}')?.click()")
     except Exception:
         return bool(_text.native_setter(page, sel, ans))
 
