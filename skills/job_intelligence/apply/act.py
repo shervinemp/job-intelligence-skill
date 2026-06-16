@@ -13,6 +13,7 @@ from apply.common.page_helpers import (
     save_state,
     read_page,
     handle_captcha,
+    handle_session_timeout,
     scan_actions,
     read_and_save,
     DEFAULT_EXCLUDED_BUTTONS as _EXCLUDED_BUTTONS,
@@ -634,7 +635,24 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                                     )
                                 time.sleep(0.5)
                             else:
-                                el.fill(ans)
+                                if el.is_visible():
+                                    el.fill(ans)
+                                else:
+                                    # Element not visible (collapsed section, custom widget) —
+                                    # use native value setter which bypasses visibility checks
+                                    page.evaluate(
+                                        """(args) => {
+                                        var ans = args[0], sel = args[1];
+                                        var el = document.querySelector(sel);
+                                        if (!el) return;
+                                        el.focus();
+                                        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                                        nativeInputValueSetter.call(el, ans);
+                                        el.dispatchEvent(new Event("input", { bubbles: true }));
+                                        el.dispatchEvent(new Event("change", { bubbles: true }));
+                                    }""",
+                                        [ans, sel],
+                                    )
                             filled += 1
                 except Exception as e:
                     print(f"  FILL_FAILED: {lbl[:40]} — {e}", file=sys.stderr)
@@ -669,10 +687,17 @@ def _check_already_submitted(state, jid):
 def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
     answers = {}
     if answers_json:
-        try:
-            answers = json.loads(answers_json)
-        except Exception:
-            print("ERROR: --answers must be valid JSON", file=sys.stderr)
+        if answers_json.startswith("@"):
+            try:
+                with open(answers_json[1:], encoding="utf-8") as f:
+                    answers = json.load(f)
+            except Exception as e:
+                print(f"ERROR: could not read answers file: {e}", file=sys.stderr)
+        else:
+            try:
+                answers = json.loads(answers_json)
+            except Exception:
+                print("ERROR: --answers must be valid JSON or @file.json", file=sys.stderr)
 
     state = load_state()
     if state.get("jid") != jid:
@@ -716,6 +741,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
             else:
                 print("ERROR: no page found and no external URL", file=sys.stderr)
                 return
+    handle_session_timeout(page)
+    handle_session_timeout(page)
     if handle_captcha(page, state):
         emit_next("retry after solving CAPTCHA")
         return
@@ -767,6 +794,12 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
             ifr2 = probe_iframe_navigate(page)
             if ifr2.field_count > ps.get("fieldCount", 0):
                 ps = ifr2.to_dict()
+
+    # Platform pre-fill hooks (e.g. expand collapsed sections before filling)
+    if registry and registry.has_hook("pre_fill"):
+        registry.call_hook("pre_fill", page)
+        time.sleep(1)
+        ps = read_page(page)
 
     # Guard: if this page was already filled, warn but proceed
     last_fingerprint = state.get("page_fingerprint", "")
@@ -845,8 +878,6 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         if not guest_clicked:
             emit_status("login_wall", "sign in required — retry after login")
             emit_next("retry after login")
-            return
-
     # If no fields detected, use model-assisted action finding
     if ps["fieldCount"] == 0:
         apply_kws = [
@@ -1106,6 +1137,7 @@ def cmd_next(jid, candidate=None):
             return
 
     ps = read_page(page)
+    handle_session_timeout(page)
     if handle_captcha(page, state):
         emit_next("retry after solving CAPTCHA")
         return
@@ -1331,6 +1363,8 @@ def cmd_submit(jid, confirm=False, candidate=None):
             emit_next("detect or navigate first")
             return
 
+    handle_session_timeout(page)
+
     if handle_captcha(page, state):
         emit_next("retry after solving CAPTCHA")
         return
@@ -1459,6 +1493,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
             break
 
     # Check for CAPTCHA triggered by submission
+    handle_session_timeout(page)
     if handle_captcha(page, state):
         print("*** Solve the CAPTCHA above, then retry submit ***", file=sys.stderr)
         state["_last_submit"] = "captcha"
