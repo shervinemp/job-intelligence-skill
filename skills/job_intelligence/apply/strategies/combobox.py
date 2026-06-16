@@ -2,6 +2,48 @@
 import json, time
 
 
+def _find_click_target(page, sel):
+    """Find a clickable element: input itself, or nearest visible sibling/icon
+    (hidden input + visible icon pattern used by many widget frameworks)."""
+    target = page.evaluate(f"""() => {{
+        const el = document.querySelector('{sel}');
+        if (!el) return null;
+
+        // If element is visible, click it directly
+        const style = window.getComputedStyle(el);
+        if (style.display !== 'none' && style.visibility !== 'hidden' && el.offsetParent !== null)
+            return {{sel: '{sel}', tag: el.tagName}};
+
+        // Hidden input: find visible sibling icon/button in same container
+        const parent = el.parentElement;
+        if (!parent) return null;
+
+        // Check siblings for visible clickable elements
+        for (const child of parent.children) {{
+            if (child === el) continue;
+            const cs = window.getComputedStyle(child);
+            if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+            if (child.offsetParent === null) continue;
+            // Found a visible element — use it if it looks like a widget trigger
+            if (child.id) return {{sel: '[id="' + child.id + '"]', tag: child.tagName}};
+        }}
+
+        // Check parent container for visible clickable children
+        const container = parent.closest('[class*="ComboBox"], [class*="Dropdown"], [class*="Select"], [class*="widget"]');
+        if (container) {{
+            for (const child of container.children) {{
+                const cs = window.getComputedStyle(child);
+                if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+                if (child.offsetParent === null) continue;
+                if (child.id) return {{sel: '[id="' + child.id + '"]', tag: child.tagName}};
+            }}
+        }}
+
+        return null;
+    }}""")
+    return target
+
+
 def fill(page, f, ans):
     """Fill a combobox/dropdown widget via cascading strategy.
     Returns True if filled."""
@@ -9,8 +51,13 @@ def fill(page, f, ans):
     if not sel:
         return False
     from apply.strategies import text as _text
+
+    # Find the right element to click (input itself or visible sibling trigger)
+    target = _find_click_target(page, sel)
+    click_sel = target["sel"] if target else sel
+
     try:
-        page.locator(sel).click(force=True, timeout=5000)
+        page.locator(click_sel).click(force=True, timeout=5000)
     except Exception:
         return bool(_text.native_setter(page, sel, ans))
     opt = None
