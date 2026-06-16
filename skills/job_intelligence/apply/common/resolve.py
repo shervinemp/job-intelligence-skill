@@ -177,17 +177,17 @@ def resolve(
             if val is not None:
                 return Resolution(val, entry["key"], label, "label_map", False)
 
-    # Step 4: ephemeral exact match (deterministic, no persistence needed)
-    for key, (val, _source) in ephemeral.items():
-        if nf(key.replace("_", " ")) == norm:
-            return Resolution(val, key, label, "ephemeral", False)
-
-    # Step 5: --answers override
+    # Step 4: --answers override (explicit user/assistant override, highest priority)
     for k, v in answers_override.items():
         if nf(k) == norm:
             return Resolution(v, "answers_override", label, "user_typed", False)
 
-    # Step 6: LLM selection (disabled — assistant provides answers via --answers Step 5)
+    # Step 5: ephemeral exact match (profile.json answers, deterministic)
+    for key, (val, _source) in ephemeral.items():
+        if nf(key.replace("_", " ")) == norm:
+            return Resolution(val, key, label, "ephemeral", False)
+
+    # Step 6: LLM selection (disabled — assistant provides answers via --answers)
     # keys_list = list(ephemeral.keys())
     # result = _llm_select(label, keys_list, available_options or [])
     result = None
