@@ -349,27 +349,18 @@ def _probe_fields(page, fields):
             except Exception:
                 pass
 
-        # Combobox: probe available options by opening dropdown
+        # Combobox: probe available options by reading visible [role="option"]
+        # (dropdown must already be open by the page; otherwise empty is fine —
+        #  Pass 2 opens it via trusted Playwright click and reads options there)
         if f.get("role") == "combobox" and not f.get("options"):
             try:
-                trigger = f.get("_trigger_sel", sel)
                 opts = page.evaluate(f"""() => {{
-                    const el = document.querySelector('{trigger}') || document.querySelector('{sel}');
-                    if (!el) return [];
-                    try {{
-                        el.dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true}}));
-                    }} catch(e) {{ return []; }}
-                    return new Promise(resolve => {{
-                        setTimeout(() => {{
-                            const items = Array.from(document.querySelectorAll('[role="option"]'))
-                                .filter(o => o.offsetParent !== null)
-                                .map(o => o.textContent.trim())
-                                .filter(Boolean)
-                                .slice(0, 30);
-                            document.body.dispatchEvent(new KeyboardEvent('keydown', {{key: 'Escape', bubbles: true}}));
-                            resolve(items);
-                        }}, 400);
-                    }});
+                    const items = Array.from(document.querySelectorAll('[role="option"]'))
+                        .filter(o => o.offsetParent !== null)
+                        .map(o => o.textContent.trim())
+                        .filter(Boolean)
+                        .slice(0, 30);
+                    return items;
                 }}""")
                 if opts:
                     f["options"] = opts
@@ -710,11 +701,19 @@ def _fill_field_deterministic(page, f, ans):
             match = next((o for o in f["options"] if ans.lower() in o.lower() or o.lower() in ans.lower()), None)
             if not match:
                 return _try_native_setter(page, sel, ans)
-        # Use trigger selector if found (for hidden INPUT + visible trigger pattern)
-        click_sel = f.get("_trigger_sel", sel)
-        if click_sel != sel:
-            page.evaluate(f"document.querySelector('{click_sel}')?.dispatchEvent(new MouseEvent('click', {{bubbles:true, cancelable:true}}))")
-            time.sleep(0.5)
+        # Click the visible trigger if found (trusted event — SAP SF needs isTrusted=true)
+        click_sel = f.get("_trigger_sel")
+        if click_sel:
+            try:
+                page.locator(click_sel).click(force=True, timeout=5000)
+                time.sleep(0.5)
+                opt = page.locator(f'[role="option"]:has-text("{ans}")')
+                if opt.count():
+                    opt.first.click(force=True, timeout=3000)
+                    time.sleep(0.3)
+                    return True
+            except Exception:
+                pass
         return bool(_try_combobox(page, el, ans) or _try_native_setter(page, sel, ans))
 
     if f.get("datepicker") == "flatpickr":
