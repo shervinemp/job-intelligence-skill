@@ -1624,7 +1624,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
     )
 
     before_hash = _page_hash(page)
-    b_loc = page.locator(f'button:has-text("{target["text"]}"), [role="button"]:has-text("{target["text"]}")')
+    b_loc = page.locator(f'button:has-text("{target["text"]}"), a:has-text("{target["text"]}"), [role="button"]:has-text("{target["text"]}")')
     if b_loc.count() == 0:
         print(
             f"  Submit warning: button '{target['text']}' not found on page",
