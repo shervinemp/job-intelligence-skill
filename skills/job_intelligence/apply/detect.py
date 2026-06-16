@@ -239,6 +239,13 @@ def run(jid):
             page_owner = False  # keep page open for act --fill
             tag_page(p, jid)
             _merge_state({"jid": jid, "_detect_fields": page_state, "external_url": p.url})
+            # Click "Easy Apply" if available — modal fields will be picked up by --fill
+            p.evaluate("""() => {
+                for (const el of document.querySelectorAll('button, a, [role="button"]')) {
+                    if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
+                }
+            }""")
+            time.sleep(3)
             emit_type("easy_apply")
             if reg:
                 reg.emit_notes()
