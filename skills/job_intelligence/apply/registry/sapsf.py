@@ -2,27 +2,25 @@
 
 
 def pre_fill(page):
-    """Expand all sections before filling — click each section header individually."""
-    # Click "Expand all sections" link (works on most SAP SF pages)
-    page.evaluate("""() => {
-        for (const el of document.querySelectorAll('a, button, [role="button"]')) {
-            const t = (el.textContent || '').trim().toLowerCase();
-            if (t.includes('expand all')) { el.click(); return; }
-        }
-    }""")
+    """Expand all sections before filling."""
     import time
-    time.sleep(1)
-    # Click each collapsed section header (red bar with + icon)
-    page.evaluate("""() => {
-        for (const el of document.querySelectorAll('button, [role="button"]')) {
-            const t = (el.textContent || '').trim();
-            const sections = ['Profile Information', 'Language Skills', 'Job-Specific Information'];
-            if (sections.includes(t)) {
-                el.click();
-            }
-        }
-    }""")
-    time.sleep(1)
+    # Click each visible section header to expand it
+    for section in ["Profile Information", "Language Skills", "Job-Specific Information"]:
+        try:
+            btn = page.locator(f'button:has-text("{section}")')
+            if btn.count():
+                btn.first.click(timeout=3000)
+                time.sleep(0.5)
+        except Exception:
+            pass
+    # Also try "Expand all sections" link if present
+    try:
+        link = page.locator('a:has-text("Expand all sections"), button:has-text("Expand all sections")')
+        if link.count():
+            link.first.click(timeout=3000)
+            time.sleep(1)
+    except Exception:
+        pass
 
 
 def post_fill(page):
