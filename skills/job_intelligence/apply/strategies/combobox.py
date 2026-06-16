@@ -115,11 +115,11 @@ def _select_option(page, sel, ans):
 
             // Helper: check if answer matches option text
             function match(aText, optText) {{
-                const aLow = aText.toLowerCase();
+                const aLow = aText.toLowerCase().trim();
                 const oLow = optText.trim().toLowerCase();
-                if (oLow === aLow || oLow === 'no selection') return oLow === aLow;
-                if (aLow.startsWith(oLow) || oLow.startsWith(aLow) || oLow.includes(aLow) || aLow.includes(oLow)) return true;
-                // Word-level: all significant words in answer appear in option
+                if (oLow === aLow) return true;
+                if (oLow.includes(aLow) || aLow.includes(oLow)) return true;
+                // Word-level: all significant answer words appear in option
                 const words = aLow.split(' ').filter(w => w.length > 2);
                 if (words.length && words.every(w => oLow.includes(w))) return true;
                 // Numeric range
