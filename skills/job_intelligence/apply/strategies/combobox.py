@@ -50,30 +50,30 @@ def _find_any_trigger(page, sel):
     return orig
 
 
-def _select_option(page, ans):
-    """Poll for option matching `ans`, click it. Returns True if selected."""
+def _select_option(page, sel, ans):
+    """Poll for option matching `ans` within the combobox's own listbox,
+    click it via JS. Returns True if selected."""
     for _ in range(20):
         time.sleep(0.25)
-        opt = page.evaluate(f"""() => {{
+        clicked = page.evaluate(f"""() => {{
             const a = {json.dumps(ans)};
-            const sel = '[role="option"], li, [role="menuitem"], [class*="option"], [class*="item"]';
-            const all = Array.from(document.querySelectorAll(sel));
-            document.querySelectorAll(':defined').forEach(el => {{
-                if (el.shadowRoot) all.push(...el.shadowRoot.querySelectorAll(sel));
-            }});
-            const m = all.find(o => o.offsetParent !== null && (o.textContent.trim().toLowerCase() === a.toLowerCase() || o.textContent.trim().toLowerCase().includes(a.toLowerCase())));
-            return m ? (m.id ? '[id="' + m.id + '"]' : m.textContent.trim().slice(0, 30)) : null;
+            const input = document.querySelector('{sel}');
+            if (!input) return false;
+            // Scope search to the input's own listbox (aria-owns)
+            const owns = input.getAttribute('aria-owns');
+            const root = owns ? document.getElementById(owns) : document;
+            if (!root) return false;
+            const match = root.querySelector('[role="option"], li, [role="menuitem"]');
+            if (!match) return false;
+            // Find the option with matching text
+            const opts = Array.from(root.querySelectorAll('[role="option"], li, [role="menuitem"]'));
+            const found = opts.find(o => o.offsetParent !== null && (o.textContent.trim().toLowerCase() === a.toLowerCase() || o.textContent.trim().toLowerCase().includes(a.toLowerCase())));
+            if (found) {{ found.click(); return true; }}
+            return false;
         }}""")
-        if opt:
-            try:
-                if opt.startswith("["):
-                    page.locator(opt).click(force=True, timeout=3000)
-                else:
-                    page.locator(f'[role="option"]:has-text("{opt}")').first.click(force=True, timeout=3000)
-                time.sleep(0.3)
-                return True
-            except Exception:
-                pass
+        if clicked:
+            time.sleep(0.3)
+            return True
     return False
 
 
@@ -91,7 +91,7 @@ def fill(page, f, ans):
         return bool(_text.native_setter(page, sel, ans))
 
     url_before = page.url
-    if _select_option(page, ans):
+    if _select_option(page, sel, ans):
         return True
 
     # URL changed — navigate back
