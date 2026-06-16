@@ -314,15 +314,15 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
     return filled, unfilled
 
 
-def _enrich_field_options(page, fields):
-    """Pass 1 recon: enrich every field with available options and constraints.
-    For comboboxes → probe dropdown options.
-    For text inputs → capture validation constraints (pattern, autocomplete, length).
-    For all fields → resolve current value from live DOM."""
+def _probe_fields(page, fields):
+    """Pass 1 probe: enrich every field with selector, available options,
+    validation hints, and current state.
+    Returns a complete recipe for deterministic Pass 2 execution."""
     for f in fields:
         sel = _resolve_selector(page, f)
         if not sel:
             continue
+        f["_sel"] = sel  # store for Pass 2
 
         # Combobox: probe available options by opening dropdown
         if f.get("role") == "combobox" and not f.get("options"):
@@ -625,33 +625,50 @@ def _try_native_setter(page, sel, ans):
         return False
 
 
-def _fill_field_deterministic(page, f, ans, sel, el):
-    """Pass 2 deterministic fill using known field type + captured options + validation.
-    Returns True if filled, False if all strategies failed."""
+def _fill_field_deterministic(page, f, ans):
+    """Pass 2 deterministic fill using recipe from Pass 1 recon.
+    Field dict has _sel (selector), options, validation, role, tag.
+    Returns True if filled."""
+    sel = f.get("_sel", "")
+    if not sel:
+        return False
+
     if f["tag"] == "SELECT":
-        return bool(_try_select_tag(el, f, ans))
+        el = page.query_selector(sel)
+        return bool(el and _try_select_tag(el, f, ans))
+
     if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
+        el = page.query_selector(sel)
+        if not el:
+            return False
         if f.get("options"):
             match = next((o for o in f["options"] if ans.lower() in o.lower() or o.lower() in ans.lower()), None)
             if match:
                 return bool(_try_combobox(page, el, ans) or _try_native_setter(page, sel, ans))
         return bool(_try_combobox(page, el, ans) or _try_native_setter(page, sel, ans))
+
     if f.get("datepicker") == "flatpickr":
         return bool(_try_flatpickr(page, sel, ans))
+
     if f["tag"] == "DIV" or f.get("contenteditable"):
         return bool(_try_contenteditable(page, sel, ans))
+
     if f["tag"] in ("INPUT", "TEXTAREA"):
         # Truncate to maxlength from captured validation hints
         val = f.get("validation", {})
         try:
-            ml = val.get("maxlength") or el.get_attribute("maxlength")
+            ml = val.get("maxlength")
             if ml and ans and len(ans) > int(ml):
                 ans = ans[: int(ml)]
         except Exception:
             pass
+        el = page.query_selector(sel)
+        if not el:
+            return bool(_try_native_setter(page, sel, ans))
         if f.get("placeholder") == "Search" or f.get("data_automation_id", ""):
             return bool(_try_autocomplete(page, el, ans) or _try_native_setter(page, sel, ans))
         return bool(_try_visible_fill(el, ans) or _try_native_setter(page, sel, ans))
+
     return False
 
 
@@ -710,14 +727,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                 unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
             continue
 
-        sel = _resolve_selector(page, f)
-        if not sel or not page.query_selector(sel):
-            if f.get("required"):
-                unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
-            continue
-
-        el = page.query_selector(sel)
-        if _fill_field_deterministic(page, f, ans, sel, el):
+        if _fill_field_deterministic(page, f, ans):
             filled += 1
         elif f.get("required"):
             unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
@@ -991,8 +1001,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
             _validate_profile(profile)
     ca = profile.get("common_answers", {})
 
-    # Pass 1: Reconnaissance — enrich fields with available options and constraints
-    ps["fields"] = _enrich_field_options(page, ps["fields"])
+    # Pass 1: Probe — enrich fields with available options and constraints
+    ps["fields"] = _probe_fields(page, ps["fields"])
 
     # Dry-run: resolve answers without touching DOM, print what would happen
     if dry_run:
