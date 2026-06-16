@@ -88,6 +88,30 @@ def handle_captcha(page, state):
     print(f"  Resuming...", file=sys.stderr)
     return True
 
+
+def handle_session_timeout(page):
+    """Dismiss session timeout dialogs.
+    Checks page title for timeout signals, then looks for the dismissal
+    button. Only returns True if the button was actually clicked."""
+    title = page.evaluate("document.title") or ""
+    has_signal = "session" in title.lower() and ("time out" in title.lower() or "timeout" in title.lower())
+    if not has_signal:
+        return False
+    clicked = page.evaluate("""() => {
+        for (const el of document.querySelectorAll('button')) {
+            const t = (el.textContent || '').trim();
+            if (t === 'Keep Working' || t === 'Continue Session') {
+                el.click(); return true;
+            }
+        }
+        return false;
+    }""")
+    if clicked:
+        time.sleep(2)
+        return True
+    return False
+
+
 def load_state():
     try:
         with open(STATE_PATH, encoding="utf-8") as f:
