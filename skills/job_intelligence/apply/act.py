@@ -315,91 +315,14 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
 
 
 def _probe_fields(page, fields):
-    """Pass 1 probe: enrich every field with selector, trigger selector,
-    available options, validation hints, and current state.
-    Returns a complete recipe for deterministic Pass 2 execution."""
+    """Pass 1: resolve stable selectors for every field.
+    Returns fields enriched with _sel (element selector).
+    No interactive probing — read-only DOM queries, no side effects."""
     for f in fields:
         sel = _resolve_selector(page, f)
         if not sel:
             continue
         f["_sel"] = sel
-
-        # Find visible widget trigger for combobox/hidden inputs
-        if f.get("role") == "combobox" or (f["tag"] == "INPUT" and not f.get("role")):
-            try:
-                trig = page.evaluate(f"""() => {{
-                    const el = document.querySelector('{sel}');
-                    if (!el) return '';
-
-                    // Check siblings for a clickable trigger
-                    const parent = el.parentElement;
-                    if (parent) {{
-                        const triggers = parent.querySelectorAll('button, [role="button"], i, span.glyphicon, [class*="icon"], [class*="sapUiIcon"], [tabindex]');
-                        for (const t of triggers) {{
-                            if (t !== el && t.offsetParent !== null) {{
-                                if (t.id) return '[id="' + t.id + '"]';
-                                return null; // no stable selector — use fallback
-                            }}
-                        }}
-                    }}
-                    return '';
-                }}""")
-                if trig:
-                    f["_trigger_sel"] = trig
-            except Exception:
-                pass
-
-        # Combobox: probe available options by reading visible [role="option"]
-        # (dropdown must already be open by the page; otherwise empty is fine —
-        #  Pass 2 opens it via trusted Playwright click and reads options there)
-        if f.get("role") == "combobox" and not f.get("options"):
-            try:
-                opts = page.evaluate(f"""() => {{
-                    const items = Array.from(document.querySelectorAll('[role="option"]'))
-                        .filter(o => o.offsetParent !== null)
-                        .map(o => o.textContent.trim())
-                        .filter(Boolean)
-                        .slice(0, 30);
-                    return items;
-                }}""")
-                if opts:
-                    f["options"] = opts
-            except Exception:
-                pass
-
-        # Text/inputs: capture validation hints
-        if f.get("role") != "combobox":
-            try:
-                info = page.evaluate(f"""() => {{
-                    const el = document.querySelector('{sel}');
-                    if (!el) return null;
-                    return {{
-                        pattern: el.getAttribute('pattern') || '',
-                        autocomplete: el.getAttribute('autocomplete') || '',
-                        maxlength: el.getAttribute('maxlength') || '',
-                        minlength: el.getAttribute('minlength') || '',
-                        inputmode: el.getAttribute('inputmode') || '',
-                    }};
-                }}""")
-                if info and any(v for v in info.values()):
-                    f["validation"] = info
-            except Exception:
-                pass
-
-        # File input: capture accept attribute
-        if f["tag"] == "INPUT" and f.get("type") == "file":
-            try:
-                accept = page.evaluate(f"document.querySelector('{sel}')?.getAttribute('accept') || ''")
-                if accept:
-                    f["accept"] = accept
-            except Exception:
-                pass
-
-        # Checkbox: detect agreement/consent patterns
-        if f["tag"] == "INPUT" and f.get("type") == "checkbox":
-            lbl = (f.get("label") or "").lower()
-            if any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm", "understand"]):
-                f["_interaction"] = "checkbox_agree"
     return fields
 
 
@@ -670,73 +593,87 @@ def _try_native_setter(page, sel, ans):
         return False
 
 
+def _fill_combobox(page, f, ans):
+    """Fill a combobox/dropdown widget: click the input (trusted click, bubbles
+    to container where widget handler listens), then select matching option.
+    Works on any platform with [role="option"] dropdowns."""
+    sel = f.get("_sel", "")
+    if not sel:
+        return False
+    # Click the input directly — event bubbles to parent container where widget listens
+    try:
+        page.locator(sel).click(force=True, timeout=5000)
+    except Exception:
+        return False
+    time.sleep(0.5)
+    # Find and click the matching option
+    try:
+        opt = page.locator(f'[role="option"]:has-text("{ans}")')
+        if opt.count():
+            opt.first.click(force=True, timeout=3000)
+            time.sleep(0.3)
+            return True
+    except Exception:
+        pass
+    # Fallback: native setter
+    return bool(_try_native_setter(page, sel, ans))
+
+
+def _fill_text_field(page, f, ans, sel, el):
+    """Fill a standard text/textarea field: fill if visible, native setter otherwise."""
+    val = {"maxlength": el.get_attribute("maxlength")} if el else {}
+    try:
+        ml = val.get("maxlength")
+        if ml and ans and len(ans) > int(ml):
+            ans = ans[: int(ml)]
+    except Exception:
+        pass
+    if f.get("placeholder") == "Search" or f.get("data_automation_id", ""):
+        return bool(_try_autocomplete(page, el, ans) or _try_native_setter(page, sel, ans))
+    return bool(_try_visible_fill(el, ans) or _try_native_setter(page, sel, ans))
+
+
 def _fill_field_deterministic(page, f, ans):
-    """Pass 2 deterministic fill using recipe from Pass 1 probe.
-    Field dict has _sel (selector), options, validation, role, tag.
-    Returns True if filled."""
+    """Fill a single field using the strategy matching its type.
+    Dispatch only — no platform-specific logic."""
     sel = f.get("_sel", "")
     if not sel:
         return False
 
-    # Consent/agreement checkbox — click to check
-    if f.get("_interaction") == "checkbox_agree":
-        try:
-            cb = page.locator(sel)
-            if cb.count() and not cb.is_checked():
-                cb.check(force=True)
-                return True
-        except Exception:
-            pass
+    # Agreement checkbox — check it
+    if f["tag"] == "INPUT" and f.get("type") == "checkbox":
+        lbl = (f.get("label") or "").lower()
+        if any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm", "understand"]):
+            try:
+                cb = page.locator(sel)
+                if cb.count() and not cb.is_checked():
+                    cb.check(force=True)
+                    return True
+            except Exception:
+                pass
         return False
 
+    # Select element
     if f["tag"] == "SELECT":
         el = page.query_selector(sel)
         return bool(el and _try_select_tag(el, f, ans))
 
+    # Combobox / custom dropdown
     if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
-        el = page.query_selector(sel)
-        if not el:
-            return False
-        if f.get("options") and ans not in f["options"]:
-            match = next((o for o in f["options"] if ans.lower() in o.lower() or o.lower() in ans.lower()), None)
-            if not match:
-                return _try_native_setter(page, sel, ans)
-        # Click the visible trigger if found (trusted event — SAP SF needs isTrusted=true)
-        click_sel = f.get("_trigger_sel")
-        if click_sel:
-            try:
-                page.locator(click_sel).click(force=True, timeout=5000)
-                time.sleep(0.5)
-                opt = page.locator(f'[role="option"]:has-text("{ans}")')
-                if opt.count():
-                    opt.first.click(force=True, timeout=3000)
-                    time.sleep(0.3)
-                    return True
-            except Exception:
-                pass
-        return bool(_try_combobox(page, el, ans) or _try_native_setter(page, sel, ans))
+        return _fill_combobox(page, f, ans)
 
+    # Datepicker
     if f.get("datepicker") == "flatpickr":
         return bool(_try_flatpickr(page, sel, ans))
 
+    # Contenteditable
     if f["tag"] == "DIV" or f.get("contenteditable"):
         return bool(_try_contenteditable(page, sel, ans))
 
+    # Text input / textarea
     if f["tag"] in ("INPUT", "TEXTAREA"):
-        # Truncate to maxlength from captured validation hints
-        val = f.get("validation", {})
-        try:
-            ml = val.get("maxlength")
-            if ml and ans and len(ans) > int(ml):
-                ans = ans[: int(ml)]
-        except Exception:
-            pass
-        el = page.query_selector(sel)
-        if not el:
-            return bool(_try_native_setter(page, sel, ans))
-        if f.get("placeholder") == "Search" or f.get("data_automation_id", ""):
-            return bool(_try_autocomplete(page, el, ans) or _try_native_setter(page, sel, ans))
-        return bool(_try_visible_fill(el, ans) or _try_native_setter(page, sel, ans))
+        el = page.query_selector(sel) if sel else None
+        return _fill_text_field(page, f, ans, sel, el)
 
     return False
 
