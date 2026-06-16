@@ -975,10 +975,10 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
     # Check for login wall — try guest apply first, then abort
     text = page_text(page) or ""
     plat = state.get("platform", "")
+    guest_clicked = False
     if check_page(text, plat, LOGIN_WALL):
         # Try guest apply buttons
         guest_patterns = GUEST_APPLY.get(plat, []) + GUEST_APPLY["default"]
-        guest_clicked = False
         for gp in guest_patterns:
             btn = page.evaluate(
                 f"""(gp) => {{
