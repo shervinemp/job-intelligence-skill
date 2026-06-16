@@ -234,66 +234,66 @@ def count_fields(page):
 
 
 _ERROR_SCAN_JS = """() => {
-    const root = document.querySelector('[role="dialog"], dialog') || document;
+    const roots = [document.querySelector('[role="dialog"], dialog') || document];
+
+    // Collect shadow roots for scanning
+    document.querySelectorAll(':defined').forEach(el => {
+        if (el.shadowRoot && !roots.includes(el.shadowRoot)) roots.push(el.shadowRoot);
+    });
+
     const errors = [];
 
-    // NOTE: label resolution below mirrors resolveLabel() in _READER_JS.
-    // If you change label resolution logic there, update this too.
-
-    // 1. aria-invalid elements
-    const invalid = root.querySelectorAll('[aria-invalid="true"]');
-    invalid.forEach(el => {
-        const tag = el.tagName;
-        const id = el.id || '';
-        // Find the label
-        let label = '';
-        if (el.getAttribute('aria-labelledby')) {
-            const ref = document.getElementById(el.getAttribute('aria-labelledby'));
-            if (ref) label = ref.textContent.trim();
-        }
-        if (!label && el.getAttribute('aria-label')) label = el.getAttribute('aria-label');
-        if (!label && id) {
-            const lbl = root.querySelector('label[for="' + id + '"]');
-            if (lbl) label = lbl.textContent.trim();
-        }
-        if (!label) {
-            const parent = el.closest('div,fieldset,section');
-            if (parent) {
-                const lbl = parent.querySelector('label, legend, [class*="label"]');
+    function scanRoot(root) {
+        // 1. aria-invalid elements
+        root.querySelectorAll('[aria-invalid="true"]').forEach(el => {
+            const tag = el.tagName;
+            const id = el.id || '';
+            let label = '';
+            if (el.getAttribute('aria-labelledby')) {
+                const ref = root.getElementById(el.getAttribute('aria-labelledby'));
+                if (ref) label = ref.textContent.trim();
+            }
+            if (!label && el.getAttribute('aria-label')) label = el.getAttribute('aria-label');
+            if (!label && id) {
+                const lbl = root.querySelector('label[for="' + id + '"]');
                 if (lbl) label = lbl.textContent.trim();
             }
-        }
-        // Find associated error text
-        let errorText = '';
-        const errId = el.getAttribute('aria-errormessage');
-        if (errId) {
-            const errEl = document.getElementById(errId);
-            if (errEl) errorText = errEl.textContent.trim();
-        }
-        if (!errorText) {
-            const next = el.parentElement ? el.parentElement.querySelector('.error, [class*="error"], [class*="validation"], [class*="feedback"], [class*="hint"]') : null;
-            if (next) errorText = next.textContent.trim();
-        }
-        if (!errorText) {
-            // Some ATS show error as a sibling span/div after the field
-            const sibling = el.nextElementSibling;
-            if (sibling) errorText = sibling.textContent.trim();
-        }
-        errors.push({label: label.slice(0, 80) || tag || '?', error_text: errorText.slice(0, 120)});
-    });
+            if (!label) {
+                const parent = el.closest('div,fieldset,section');
+                if (parent) {
+                    const lbl = parent.querySelector('label, legend, [class*="label"]');
+                    if (lbl) label = lbl.textContent.trim();
+                }
+            }
+            let errorText = '';
+            const errId = el.getAttribute('aria-errormessage');
+            if (errId) {
+                const errEl = root.getElementById(errId);
+                if (errEl) errorText = errEl.textContent.trim();
+            }
+            if (!errorText) {
+                const next = el.parentElement ? el.parentElement.querySelector('.error, [class*="error"], [class*="validation"], [class*="feedback"], [class*="hint"]') : null;
+                if (next) errorText = next.textContent.trim();
+            }
+            if (!errorText) {
+                const sibling = el.nextElementSibling;
+                if (sibling) errorText = sibling.textContent.trim();
+            }
+            errors.push({label: label.slice(0, 80) || tag || '?', error_text: errorText.slice(0, 120)});
+        });
 
-    // 2. Visible error banners/alerts inside the form
-    const errorBanners = root.querySelectorAll('[role="alert"], .alert-error, .error-message, [class*="form-error"], [data-error]');
-    errorBanners.forEach(el => {
-        const text = el.textContent.trim();
-        if (text && text.length > 5 && text.length < 300) {
-            // Skip status/progress messages (not validation errors)
-            const lower = text.toLowerCase();
-            if (lower.includes('upload') || lower.includes('loading') || lower.includes('saving')) return;
-            errors.push({label: '(form)', error_text: text.slice(0, 120)});
-        }
-    });
+        // 2. Visible error banners/alerts
+        root.querySelectorAll('[role="alert"], .alert-error, .error-message, [class*="form-error"], [data-error]').forEach(el => {
+            const text = el.textContent.trim();
+            if (text && text.length > 5 && text.length < 300) {
+                const lower = text.toLowerCase();
+                if (lower.includes('upload') || lower.includes('loading') || lower.includes('saving')) return;
+                errors.push({label: '(form)', error_text: text.slice(0, 120)});
+            }
+        });
+    }
 
+    roots.forEach(scanRoot);
     return errors;
 }"""
 

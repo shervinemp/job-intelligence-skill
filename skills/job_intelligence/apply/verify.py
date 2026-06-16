@@ -7,7 +7,7 @@ import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
 from lib.chrome_manager import connect
-from apply.common.page_helpers import load_state
+from apply.common.page_helpers import load_state, page_text
 from apply.common.output import emit_next, emit_status, emit_error
 from apply.common.resolve import promote_session_cache
 
@@ -66,7 +66,7 @@ def run(jid):
         "you have applied",
     ]
     if page:
-        text = (page.evaluate("() => document.body.innerText") or "").lower()
+        text = (page_text(page) or "").lower()
         if any(s in text for s in success_signals):
             _mark_applied(jid)
             emit_status("submitted (text match on page)")
@@ -76,7 +76,7 @@ def run(jid):
         # No matching page — scan ALL pages for success text
         for p in ctx.pages:
             try:
-                t = (p.evaluate("() => document.body.innerText") or "").lower()
+                t = (page_text(p) or "").lower()
                 if any(s in t for s in success_signals):
                     _mark_applied(jid)
                     emit_status("submitted (cross-domain redirect)")
@@ -107,8 +107,8 @@ def run(jid):
                 emit_next("none")
                 return
 
-        # Strategy 2: Success text in body
-        text = (page.evaluate("() => document.body.innerText") or "").lower()
+        # Strategy 2: Success text in body (including shadow DOM)
+        text = (page_text(page) or "").lower()
         for signal in success_signals:
             if signal in text:
                 _mark_applied(jid)
