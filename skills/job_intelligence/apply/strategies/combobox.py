@@ -8,8 +8,6 @@ def fill(page, f, ans):
     sel = f.get("_sel", "")
     if not sel:
         return False
-    page.evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))")
-    time.sleep(0.1)
     from apply.strategies import text as _text
     try:
         page.locator(sel).click(force=True, timeout=5000)
