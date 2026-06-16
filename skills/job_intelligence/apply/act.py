@@ -78,9 +78,9 @@ def _match_word(needle, haystack):
     )
 
 
-def _find_answer(label, label_norm, answers, ca, profile, required=False):
+def _find_answer(label, label_norm, answers, ca, profile, required=False, available_options=None):
     """Find answer via resolve chain. Ignores ca (old common_answers) — resolve reads profile directly."""
-    res = resolution_for_fill(label, profile, answers_override=answers)
+    res = resolution_for_fill(label, profile, answers_override=answers, available_options=available_options)
     return res.value
 
 
@@ -755,11 +755,11 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         # Skip pre-filled fields with valid data
         current_val = f.get("value", "")
         if current_val and len(current_val.strip()) > 1:
-            ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
+            ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False), available_options=f.get("options"))
             if ans_check is None or ans_check.lower() == current_val.lower():
                 continue
 
-        ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
+        ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False), available_options=f.get("options"))
         if ans is None:
             if f.get("required"):
                 unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
@@ -1065,8 +1065,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
                 filled += 1
                 continue
             lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
-            ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False))
             opts = f.get("options", [])
+            ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False), available_options=opts)
             if ans:
                 if opts and ans not in opts:
                     match = next((o for o in opts if ans.lower() in o.lower()), None)
@@ -1076,10 +1076,13 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
                 print(f"  [{f['tag']}] {lbl[:50]} -> {ans[:50]}", file=sys.stderr)
                 filled += 1
             elif f.get("required"):
-                print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (required)", file=sys.stderr)
+                opts = f.get("options", [])
+                opt_hint = f"  options: {opts[:5]}" if opts else ""
+                print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (required){opt_hint}", file=sys.stderr)
         print(f"DRY_RUN: {filled}/{total} fields resolvable", file=sys.stderr)
         if filled < total:
             print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
+            print("  Options shown above for combobox fields — LLM can select from them.", file=sys.stderr)
         emit_next("proceed" if filled == total else "act --fill --answers '...'")
         return
 
@@ -1102,7 +1105,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
     )]
     if eeo_unfilled:
         for ef in eeo_unfilled:
-            res = resolution_for_fill(ef["label"], profile, answers_override=answers)
+            res = resolution_for_fill(ef["label"], profile, answers_override=answers, available_options=ef.get("options"))
             if res.value:
                 nf, _ = _fill_text(page, [ef], {ef["label"]: res.value}, ca, profile, jid, state)
                 filled += nf
