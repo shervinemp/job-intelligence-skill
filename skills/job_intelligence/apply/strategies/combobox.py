@@ -16,52 +16,30 @@ def _try_open_dropdown(page, sel):
     return False
 
 
-def _dropdown_opened(page):
-    """Check if any [role="option"] is now visible in the page."""
-    return page.evaluate("() => Array.from(document.querySelectorAll('[role=\"option\"]')).some(o => o.offsetParent !== null)")
-
-
 def _find_any_trigger(page, sel):
-    """Click chain: visible siblings → parent → input.
-    Skips the input if it's display:none (saves time on widget-type combos)."""
-    orig = sel
-
-    # Check if input is visible — skip if hidden (widget pattern)
+    """Find the best clickable trigger. Does NOT click. Returns selector."""
     is_hidden = page.evaluate(f"() => {{ const el = document.querySelector('{sel}'); if (!el) return true; const s = window.getComputedStyle(el); return s.display === 'none' || s.visibility === 'hidden'; }}")
 
     if not is_hidden:
-        opened = _try_open_dropdown(page, sel)
-        if opened:
-            return sel
+        return sel
 
-    # Try each visible sibling
+    # Try first visible sibling
     siblings = page.evaluate(f"""() => {{
         const el = document.querySelector('{sel}');
         if (!el || !el.parentElement) return [];
-        const ids = [];
-        for (const c of el.parentElement.children) {{
-            if (c === el) continue;
-            const s = window.getComputedStyle(c);
-            if (s.display !== 'none' && s.visibility !== 'hidden' && c.offsetParent !== null && c.id)
-                ids.push('[id="' + c.id + '"]');
-        }}
-        return ids;
+        return Array.from(el.parentElement.children)
+            .filter(c => c !== el && c.offsetParent !== null && c.id)
+            .map(c => '[id="' + c.id + '"]');
     }}""")
-    for sib in siblings:
-        opened = _try_open_dropdown(page, sib)
-        if opened:
-            return sib
+    if siblings:
+        return siblings[0]
 
     # Try parent
     parent_id = page.evaluate(f"document.querySelector('{sel}')?.parentElement?.id || ''")
     if parent_id:
-        opened = _try_open_dropdown(page, f'[id="{parent_id}"]')
-        if opened:
-            return f'[id="{parent_id}"]'
+        return f'[id="{parent_id}"]'
 
-    return orig
-
-    return orig
+    return sel
 
 
 def _parse_number(s):
