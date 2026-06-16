@@ -178,8 +178,9 @@ def resolve(
                 return Resolution(val, entry["key"], label, "label_map", False)
 
     # Step 4: --answers override (explicit user/assistant override, highest priority)
+    # Use prefix match to handle truncated labels in --answers
     for k, v in answers_override.items():
-        if nf(k) == norm:
+        if nf(k) == norm or norm.startswith(nf(k)):
             return Resolution(v, "answers_override", label, "user_typed", False)
 
     # Step 5: ephemeral exact match (profile.json answers, deterministic)
