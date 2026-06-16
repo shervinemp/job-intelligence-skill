@@ -328,9 +328,29 @@ def _probe_fields(page, fields):
         if f.get("role") == "combobox" and not f.get("options"):
             try:
                 opts = page.evaluate(f"""() => {{
-                    const el = document.querySelector('{sel}');
+                    const sel = '{sel}';
+                    const el = document.querySelector(sel);
                     if (!el) return [];
-                    el.click();
+
+                    // Click widget trigger (element → parent → container trigger)
+                    let clicked = false;
+                    try {{ el.click(); clicked = true; }} catch(e) {{}}
+                    if (!clicked) {{
+                        let p = el.parentElement;
+                        for (let i = 0; i < 3 && p; i++) {{
+                            try {{ p.click(); clicked = true; break; }} catch(e) {{}}
+                            p = p.parentElement;
+                        }}
+                    }}
+                    if (!clicked) {{
+                        const c = el.closest('[class*="RCMFormField"], [class*="fieldComponent"], [class*="sfComboBox"]');
+                        if (c) {{
+                            const t = c.querySelector('button, [role="button"], [tabindex], i, span.glyphicon, [class*="sapUiIcon"]');
+                            if (t) {{ try {{ t.click(); clicked = true; }} catch(e) {{}} }}
+                        }}
+                    }}
+                    if (!clicked) return [];
+
                     return new Promise(resolve => {{
                         setTimeout(() => {{
                             const items = Array.from(document.querySelectorAll('[role="option"]'))
@@ -375,6 +395,12 @@ def _probe_fields(page, fields):
                     f["accept"] = accept
             except Exception:
                 pass
+
+        # Checkbox: detect agreement/consent patterns
+        if f["tag"] == "INPUT" and f.get("type") == "checkbox":
+            lbl = (f.get("label") or "").lower()
+            if any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm", "understand"]):
+                f["_interaction"] = "checkbox_agree"
     return fields
 
 
@@ -533,12 +559,48 @@ def _try_dropdown(page, f, ans):
     return
 
 
+def _click_widget_trigger(page, sel):
+    """Click the visible trigger for a combobox/dropdown widget.
+    Tries: element → parent → nearby button/label in same container.
+    Returns True if a clickable element was found and clicked."""
+    return page.evaluate(f"""() => {{
+        const el = document.querySelector('{sel}');
+        if (!el) return false;
+
+        // Try clicking the element itself first
+        try {{ el.click(); return true; }} catch(e) {{}}
+
+        // Try clicking parent elements (SAP SF puts handler on a parent div)
+        let target = el.parentElement;
+        for (let i = 0; i < 3 && target; i++) {{
+            try {{ target.click(); return true; }} catch(e) {{}}
+            target = target.parentElement;
+        }}
+
+        // Look for a clickable trigger in the same field container
+        const container = el.closest('[class*="RCMFormField"], [class*="fieldComponent"], [class*="sfComboBox"]');
+        if (container) {{
+            const trigger = container.querySelector('button, [role="button"], [tabindex], i, span.glyphicon, [class*="sapUiIcon"], [class*="icon"]');
+            if (trigger && trigger !== el) {{
+                try {{ trigger.click(); return true; }} catch(e) {{}}
+            }}
+        }}
+        
+        // Fallback: dispatch a click event directly
+        try {{
+            el.dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true}}));
+            return true;
+        }} catch(e) {{}}
+        return false;
+    }}""")
+
+
 def _try_combobox(page, el, ans):
-    """Click combobox input, select matching option."""
+    """Click combobox widget trigger, select matching option."""
     if el.get_attribute("role") != "combobox":
         return
     try:
-        el.click(force=True)
+        _click_widget_trigger(page, f'[id="{el.get_attribute("id")}"]')
         time.sleep(0.5)
         opt = page.locator(f'[role="option"]:has-text("{ans}")')
         if opt.count():
@@ -629,11 +691,22 @@ def _try_native_setter(page, sel, ans):
 
 
 def _fill_field_deterministic(page, f, ans):
-    """Pass 2 deterministic fill using recipe from Pass 1 recon.
+    """Pass 2 deterministic fill using recipe from Pass 1 probe.
     Field dict has _sel (selector), options, validation, role, tag.
     Returns True if filled."""
     sel = f.get("_sel", "")
     if not sel:
+        return False
+
+    # Consent/agreement checkbox — click to check
+    if f.get("_interaction") == "checkbox_agree":
+        try:
+            cb = page.locator(sel)
+            if cb.count() and not cb.is_checked():
+                cb.check(force=True)
+                return True
+        except Exception:
+            pass
         return False
 
     if f["tag"] == "SELECT":
