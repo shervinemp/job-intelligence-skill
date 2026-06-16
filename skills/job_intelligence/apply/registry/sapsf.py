@@ -19,26 +19,54 @@ def pre_fill(page):
 def post_fill(page):
     """After native value setter fills combobox INPUTs, notify SAP SF's juic
     framework by dispatching 'change' and 'blur' events one at a time.
-    Falls back to direct juic API call if standard events don't work."""
+    Also tries clicking through the widget trigger hierarchy to sync state."""
     page.evaluate("""() => {
         const boxes = document.querySelectorAll('input[role="combobox"]');
         boxes.forEach((el, i) => {
             if (el.value && el.value.length > 0) {
+                // Standard events
                 setTimeout(() => {
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                     el.dispatchEvent(new Event('blur', { bubbles: true }));
-                    // Direct juic API fallback
+                    // Direct juic API
                     const id = el.id;
                     if (id && window.juic && window.juic.fire) {
                         window.juic.fire(id + ':', '_handleChange', new Event('change'));
                     }
                 }, i * 150);
+
+                // SAP SF widget trigger cascade: parent elements may have the real click handler
+                setTimeout(() => {
+                    let p = el.parentElement;
+                    for (let j = 0; j < 3 && p; j++) {
+                        try { p.click(); break; } catch(e) {}
+                        p = p.parentElement;
+                    }
+                    // Also try clicking container trigger icons
+                    const c = el.closest('[class*="RCMFormField"], [class*="fieldComponent"], [class*="sfComboBox"]');
+                    if (c) {
+                        const t = c.querySelector('button, [role="button"], [tabindex], i, span.glyphicon, [class*="sapUiIcon"]');
+                        if (t && t !== el) { try { t.click(); } catch(e) {} }
+                    }
+                    // Open dropdown, select matching option
+                    const selOpt = document.querySelector('[role="option"]');
+                    if (selOpt) {
+                        const opts = document.querySelectorAll('[role="option"]');
+                        for (const o of opts) {
+                            if (o.textContent.trim().toLowerCase() === el.value.toLowerCase()) {
+                                o.click();
+                                break;
+                            }
+                        }
+                        document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+                    }
+                }, i * 150 + 300);
             }
         });
     }""")
     import time
     count = page.evaluate("() => document.querySelectorAll('input[role=\"combobox\"]').length")
-    time.sleep(count * 0.2 + 1)
+    time.sleep(count * 0.4 + 2)
 
 
 def pre_submit(page):

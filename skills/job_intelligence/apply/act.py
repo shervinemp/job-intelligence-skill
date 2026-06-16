@@ -328,29 +328,12 @@ def _probe_fields(page, fields):
         if f.get("role") == "combobox" and not f.get("options"):
             try:
                 opts = page.evaluate(f"""() => {{
-                    const sel = '{sel}';
-                    const el = document.querySelector(sel);
+                    const el = document.querySelector('{sel}');
                     if (!el) return [];
-
-                    // Click widget trigger (element → parent → container trigger)
-                    let clicked = false;
-                    try {{ el.click(); clicked = true; }} catch(e) {{}}
-                    if (!clicked) {{
-                        let p = el.parentElement;
-                        for (let i = 0; i < 3 && p; i++) {{
-                            try {{ p.click(); clicked = true; break; }} catch(e) {{}}
-                            p = p.parentElement;
-                        }}
-                    }}
-                    if (!clicked) {{
-                        const c = el.closest('[class*="RCMFormField"], [class*="fieldComponent"], [class*="sfComboBox"]');
-                        if (c) {{
-                            const t = c.querySelector('button, [role="button"], [tabindex], i, span.glyphicon, [class*="sapUiIcon"]');
-                            if (t) {{ try {{ t.click(); clicked = true; }} catch(e) {{}} }}
-                        }}
-                    }}
-                    if (!clicked) return [];
-
+                    // Safe click: element itself via dispatchEvent (bypasses visibility)
+                    try {{
+                        el.dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true}}));
+                    }} catch(e) {{ return []; }}
                     return new Promise(resolve => {{
                         setTimeout(() => {{
                             const items = Array.from(document.querySelectorAll('[role="option"]'))
@@ -561,32 +544,13 @@ def _try_dropdown(page, f, ans):
 
 def _click_widget_trigger(page, sel):
     """Click the visible trigger for a combobox/dropdown widget.
-    Tries: element → parent → nearby button/label in same container.
-    Returns True if a clickable element was found and clicked."""
+    Safe fallbacks: element click → native event dispatch.
+    Platform-specific trigger resolution (e.g. SAP SF container)
+    belongs in the registry hook, not here."""
     return page.evaluate(f"""() => {{
         const el = document.querySelector('{sel}');
         if (!el) return false;
-
-        // Try clicking the element itself first
         try {{ el.click(); return true; }} catch(e) {{}}
-
-        // Try clicking parent elements (SAP SF puts handler on a parent div)
-        let target = el.parentElement;
-        for (let i = 0; i < 3 && target; i++) {{
-            try {{ target.click(); return true; }} catch(e) {{}}
-            target = target.parentElement;
-        }}
-
-        // Look for a clickable trigger in the same field container
-        const container = el.closest('[class*="RCMFormField"], [class*="fieldComponent"], [class*="sfComboBox"]');
-        if (container) {{
-            const trigger = container.querySelector('button, [role="button"], [tabindex], i, span.glyphicon, [class*="sapUiIcon"], [class*="icon"]');
-            if (trigger && trigger !== el) {{
-                try {{ trigger.click(); return true; }} catch(e) {{}}
-            }}
-        }}
-        
-        // Fallback: dispatch a click event directly
         try {{
             el.dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true}}));
             return true;
