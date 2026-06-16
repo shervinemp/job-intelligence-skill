@@ -52,14 +52,15 @@ def ask(image_path, prompt, temperature=0.3, max_tokens=2048, file_path=None):
     except Exception as e:
         return None, f"reading image: {e}"
     content = []
+    combined = prompt
     if file_path:
         try:
             with open(file_path, encoding="utf-8") as f:
                 file_content = f.read()
-            content.append({"type": "text", "text": f"Context from {os.path.basename(file_path)}:\n{file_content[:3000]}"})
+            combined = f"Context from {os.path.basename(file_path)}:\n{file_content[:3000]}\n\n{prompt}"
         except Exception as e:
             pass
-    content.append({"type": "text", "text": prompt})
+    content.append({"type": "text", "text": combined})
     return ask_bytes(image_data, content, temperature, max_tokens)
 
 
