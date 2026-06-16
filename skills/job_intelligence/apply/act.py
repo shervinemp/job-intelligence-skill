@@ -933,6 +933,12 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         time.sleep(1)
         ps = read_page(page)
 
+    # Upload tailored resume if platform has custom upload widget and no standard file inputs
+    if registry and registry.has_hook("upload_resume") and not ps.get("hasFileInput"):
+        registry.call_hook("upload_resume", page, jid)
+        time.sleep(1)
+        ps = read_page(page)
+
     # Guard: if this page was already filled, warn but proceed
     last_fingerprint = state.get("page_fingerprint", "")
     label_fp = "_".join(f.get("label", "")[:20] for f in ps["fields"][:3])
