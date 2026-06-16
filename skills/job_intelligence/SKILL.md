@@ -70,22 +70,28 @@ If the cover letter or CV needs fixes: `retry <jid> --feedback "what to fix"` �
 ## Apply pipeline
 
 ```
-detect <jid> → [navigate] → act --fill → act --next (repeat) → act --submit --confirm <jid> → verify <jid>
+detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --submit --confirm <jid> → verify <jid>
 ```
 
 | Step | What it does |
 |------|-------------|
-| `detect <jid>` | Pre-flight: DB stage, PDF, classify type (easy_apply / external / ats_direct / already_applied / login_wall). Outputs `TYPE:` + `NEXT:`. |
-| `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS |
+| `detect [<jid>]` | Pre-flight: DB stage, PDF, classify type. Omit JID to auto-pick first tailored. Outputs `TYPE:` + `NEXT:`. |
+| `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS. Auto-clicks "Apply now" on job listing pages. Prompts for login on auth wall — cookies persist via Chrome profile. |
 | `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
 | `act --submit <jid> --confirm` | Submit. **`--confirm` req'd** — dry-run w/o. Checks validation errors, CAPTCHA, success text. |
 | `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
+| `apply.py reject <jid>` | Skip permanently |
+| `apply.py flag <jid>` | Toggle auth wall flag |
+| `apply.py retry [<jid>]` | Re-attempt failed applies |
+| `apply.py undo <jid>` | Move back one stage |
 
 ### Apply tips
 
+- Omit JID on `detect` to auto-pick the first tailored job from the queue.
+- Auth walls: navigate prompts for login. Log in via the open browser, press Enter to continue. Type `flag` to skip. Cookies persist via Chrome profile — same platform won't re-prompt.
 - `--answers` — normalized exact match (case/punctuation insensitive). Full label text.
 - `--candidate N` — picks from CANDIDATES list. Works on --fill/--next/--submit/--inspect.
 - `--dry-run` on `--fill` shows resolved answers without DOM modification. Validates field detection first.
