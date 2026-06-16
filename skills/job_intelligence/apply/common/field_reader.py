@@ -155,7 +155,7 @@ _READER_JS = """(config) => {
     root.querySelectorAll(':defined').forEach(el => { if (el.shadowRoot) fileCount += el.shadowRoot.querySelectorAll('input[type="file"]').length; });
 
     // Buttons (standard DOM)
-    const buttons = Array.from(root.querySelectorAll('button, a.btn, a[role="button"]'))
+    const buttons = Array.from(root.querySelectorAll('button, a.btn, [role="button"]'))
         .filter(b => b.offsetParent !== null)
         .map(b => ({
             text: (b.textContent || '').trim().slice(0, 30),
