@@ -594,28 +594,52 @@ def _try_native_setter(page, sel, ans):
 
 
 def _fill_combobox(page, f, ans):
-    """Fill a combobox/dropdown widget: click the input (trusted click, bubbles
-    to container where widget handler listens), then select matching option.
-    Works on any platform with [role="option"] dropdowns."""
+    """Fill a combobox/dropdown widget via cascading strategy:
+    1. Click the input (trusted, bubbles to widget handler)
+    2. Click widget container directly if input click didn't open dropdown
+    3. Native setter as last resort
+    """
     sel = f.get("_sel", "")
     if not sel:
         return False
-    # Click the input directly — event bubbles to parent container where widget listens
+
+    # Strategy 1: click the input directly — event bubbles to container
     try:
         page.locator(sel).click(force=True, timeout=5000)
     except Exception:
-        return False
+        return _try_native_setter(page, sel, ans)
     time.sleep(0.5)
-    # Find and click the matching option
+
+    # Check if dropdown opened
+    opt = page.locator(f'[role="option"]:has-text("{ans}")')
+    if opt.count():
+        opt.first.click(force=True, timeout=3000)
+        time.sleep(0.3)
+        return True
+
+    # Strategy 2: click the parent widget container (some frameworks
+    # listen on the container, not the input)
     try:
-        opt = page.locator(f'[role="option"]:has-text("{ans}")')
-        if opt.count():
-            opt.first.click(force=True, timeout=3000)
-            time.sleep(0.3)
-            return True
+        container = page.evaluate(f"""() => {{
+            const el = document.querySelector('{sel}');
+            if (!el) return '';
+            const c = el.closest('[class*="ComboBox"], [class*="Dropdown"], [class*="Select"], [class*="widget"], .fieldComponentInput');
+            if (c && c.id) return '[id="' + c.id + '"]';
+            if (c && el.parentElement && el.parentElement.id) return '[id="' + el.parentElement.id + '"]';
+            return '';
+        }}""")
+        if container:
+            page.locator(container).click(force=True, timeout=3000)
+            time.sleep(0.5)
+            opt = page.locator(f'[role="option"]:has-text("{ans}")')
+            if opt.count():
+                opt.first.click(force=True, timeout=3000)
+                time.sleep(0.3)
+                return True
     except Exception:
         pass
-    # Fallback: native setter
+
+    # Strategy 3: native setter (value in DOM, may not sync widget state)
     return bool(_try_native_setter(page, sel, ans))
 
 
