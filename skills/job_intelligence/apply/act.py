@@ -314,7 +314,68 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
     return filled, unfilled
 
 
-def _normalize_label(lbl):
+def _enrich_field_options(page, fields):
+    """Pass 1 recon: enrich every field with available options and constraints.
+    For comboboxes → probe dropdown options.
+    For text inputs → capture validation constraints (pattern, autocomplete, length).
+    For all fields → resolve current value from live DOM."""
+    for f in fields:
+        sel = _resolve_selector(page, f)
+        if not sel:
+            continue
+
+        # Combobox: probe available options by opening dropdown
+        if f.get("role") == "combobox" and not f.get("options"):
+            try:
+                opts = page.evaluate(f"""() => {{
+                    const el = document.querySelector('{sel}');
+                    if (!el) return [];
+                    el.click();
+                    return new Promise(resolve => {{
+                        setTimeout(() => {{
+                            const items = Array.from(document.querySelectorAll('[role="option"]'))
+                                .filter(o => o.offsetParent !== null)
+                                .map(o => o.textContent.trim())
+                                .filter(Boolean)
+                                .slice(0, 30);
+                            document.body.dispatchEvent(new KeyboardEvent('keydown', {{key: 'Escape', bubbles: true}}));
+                            resolve(items);
+                        }}, 400);
+                    }});
+                }}""")
+                if opts:
+                    f["options"] = opts
+            except Exception:
+                pass
+
+        # Text/inputs: capture validation hints
+        if f.get("role") != "combobox":
+            try:
+                info = page.evaluate(f"""() => {{
+                    const el = document.querySelector('{sel}');
+                    if (!el) return null;
+                    return {{
+                        pattern: el.getAttribute('pattern') || '',
+                        autocomplete: el.getAttribute('autocomplete') || '',
+                        maxlength: el.getAttribute('maxlength') || '',
+                        minlength: el.getAttribute('minlength') || '',
+                        inputmode: el.getAttribute('inputmode') || '',
+                    }};
+                }}""")
+                if info and any(v for v in info.values()):
+                    f["validation"] = info
+            except Exception:
+                pass
+
+        # File input: capture accept attribute
+        if f["tag"] == "INPUT" and f.get("type") == "file":
+            try:
+                accept = page.evaluate(f"document.querySelector('{sel}')?.getAttribute('accept') || ''")
+                if accept:
+                    f["accept"] = accept
+            except Exception:
+                pass
+    return fields
     return re.sub(r"[^a-z0-9+#]+", " ", lbl.lower()).strip()
 
 
@@ -564,8 +625,38 @@ def _try_native_setter(page, sel, ans):
         return False
 
 
+def _fill_field_deterministic(page, f, ans, sel, el):
+    """Pass 2 deterministic fill using known field type + captured options + validation.
+    Returns True if filled, False if all strategies failed."""
+    if f["tag"] == "SELECT":
+        return bool(_try_select_tag(el, f, ans))
+    if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
+        if f.get("options"):
+            match = next((o for o in f["options"] if ans.lower() in o.lower() or o.lower() in ans.lower()), None)
+            if match:
+                return bool(_try_combobox(page, el, ans) or _try_native_setter(page, sel, ans))
+        return bool(_try_combobox(page, el, ans) or _try_native_setter(page, sel, ans))
+    if f.get("datepicker") == "flatpickr":
+        return bool(_try_flatpickr(page, sel, ans))
+    if f["tag"] == "DIV" or f.get("contenteditable"):
+        return bool(_try_contenteditable(page, sel, ans))
+    if f["tag"] in ("INPUT", "TEXTAREA"):
+        # Truncate to maxlength from captured validation hints
+        val = f.get("validation", {})
+        try:
+            ml = val.get("maxlength") or el.get_attribute("maxlength")
+            if ml and ans and len(ans) > int(ml):
+                ans = ans[: int(ml)]
+        except Exception:
+            pass
+        if f.get("placeholder") == "Search" or f.get("data_automation_id", ""):
+            return bool(_try_autocomplete(page, el, ans) or _try_native_setter(page, sel, ans))
+        return bool(_try_visible_fill(el, ans) or _try_native_setter(page, sel, ans))
+    return False
+
+
 def _fill_text(page, fields, answers, ca, profile, jid, state):
-    """Fill text/select/textarea fields via strategy cascade. Returns filled count + unfilled list."""
+    """Fill text/select/textarea fields. Returns filled count + unfilled list."""
     filled = 0
     unfilled = []
     file_uploaded = False
@@ -579,7 +670,6 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         # File upload (resume PDF)
         if f["tag"] == "INPUT" and f["type"] == "file":
             lbl_lower = (f.get("label", "") or "").lower()
-            # Skip optional uploads after the first file is placed
             if file_uploaded and not f.get("required", False):
                 if "cover" not in lbl_lower and "letter" not in lbl_lower and "discovery" not in lbl_lower:
                     continue
@@ -597,14 +687,13 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
                 if f.get("required"):
                     unfilled.append({"label": "Resume Upload", "options": [], "tag": "FILE"})
                 continue
-            # Try drag-and-drop fallback
             if not file_uploaded:
                 if _try_drag_drop(page, _RESUME_DIR):
                     file_uploaded = True
                     filled += 1
             continue
 
-        # Standard text/select/dropdown field
+        # Standard field
         lbl = f["label"]
         lbl_norm = _normalize_label(lbl)
 
@@ -622,55 +711,15 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             continue
 
         sel = _resolve_selector(page, f)
-        if not sel:
+        if not sel or not page.query_selector(sel):
             if f.get("required"):
                 unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
             continue
 
         el = page.query_selector(sel)
-        if not el:
-            if f.get("required"):
-                unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
-            continue
-
-        # Strategy cascade: try each method, fall through on failure
-        if _try_select_tag(el, f, ans):
+        if _fill_field_deterministic(page, f, ans, sel, el):
             filled += 1
-        elif _try_dropdown(page, f, ans):
-            filled += 1
-        elif _try_combobox(page, el, ans):
-            filled += 1
-        elif f.get("datepicker") == "flatpickr" and _try_flatpickr(page, sel, ans):
-            filled += 1
-        elif f["tag"] == "DIV" or f.get("contenteditable"):
-            if _try_contenteditable(page, sel, ans):
-                filled += 1
-            elif f.get("required"):
-                unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
-        elif f["tag"] in ("INPUT", "TEXTAREA"):
-            # Truncate to maxlength
-            try:
-                ml = el.get_attribute("maxlength")
-                if ml and ans and len(ans) > int(ml):
-                    ans = ans[: int(ml)]
-            except Exception:
-                pass
-            is_ac = False
-            try:
-                if f.get("placeholder") == "Search" or f.get("data_automation_id", ""):
-                    is_ac = True
-            except Exception:
-                pass
-            if is_ac:
-                if _try_autocomplete(page, el, ans):
-                    filled += 1
-                elif _try_native_setter(page, sel, ans):
-                    filled += 1
-            else:
-                if _try_visible_fill(el, ans) or _try_native_setter(page, sel, ans):
-                    filled += 1
-
-        if filled == prev_filled and f.get("required"):
+        elif f.get("required"):
             unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
 
         if filled > prev_filled:
@@ -941,6 +990,9 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         else:
             _validate_profile(profile)
     ca = profile.get("common_answers", {})
+
+    # Pass 1: Reconnaissance — enrich fields with available options and constraints
+    ps["fields"] = _enrich_field_options(page, ps["fields"])
 
     # Dry-run: resolve answers without touching DOM, print what would happen
     if dry_run:
