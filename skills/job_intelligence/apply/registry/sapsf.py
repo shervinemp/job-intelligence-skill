@@ -21,30 +21,43 @@ def pre_fill(page):
         pass
 
 
-def upload_resume(page, jid):
-    """Upload tailored resume to SAP SF custom widget."""
+def upload_documents(page, jid):
+    """Upload tailored resume (and cover letter) to SAP SF custom upload widget."""
     from lib.config import RESULTS_DIR
     res_dir = os.path.join(RESULTS_DIR, jid)
     if not os.path.isdir(res_dir):
         return False
-    pdfs = [f for f in os.listdir(res_dir) if "Resume" in f and f.endswith(".pdf")]
+    pdfs = [f for f in os.listdir(res_dir) if f.endswith(".pdf")]
     if not pdfs:
         return False
-    pdf_path = os.path.join(res_dir, pdfs[0])
-    try:
-        upload_btn = page.locator('text=Resume, text=Upload, text=CV').first
-        if not upload_btn.count():
-            upload_btn = page.locator('[class*="upload"], [class*="resume"], [class*="file"]').first
-        if not upload_btn.count():
+
+    def _upload_one(file_path):
+        try:
+            # Find the first visible upload button/area
+            for sel in ['button:has-text("Upload")', '[class*="upload"]', '[class*="file"]', '[class*="attach"]']:
+                btn = page.locator(sel).first
+                if btn.count():
+                    with page.expect_file_chooser() as fc_info:
+                        btn.click(force=True, timeout=5000)
+                    fc = fc_info.value
+                    fc.set_files(file_path)
+                    time.sleep(2)
+                    return True
             return False
-        with page.expect_file_chooser() as fc_info:
-            upload_btn.click(force=True, timeout=5000)
-        fc = fc_info.value
-        fc.set_files(pdf_path)
-        time.sleep(2)
-        return True
-    except Exception:
-        return False
+        except Exception:
+            return False
+
+    # Upload resume
+    resume = next((f for f in pdfs if "Resume" in f), None)
+    if resume:
+        _upload_one(os.path.join(res_dir, resume))
+
+    # Upload cover letter if exists
+    cover = next((f for f in pdfs if "Cover" in f), None)
+    if cover:
+        _upload_one(os.path.join(res_dir, cover))
+
+    return True
 
 
 def post_fill(page):
