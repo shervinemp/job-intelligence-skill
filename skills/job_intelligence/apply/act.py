@@ -595,30 +595,63 @@ def _try_native_setter(page, sel, ans):
 
 def _fill_combobox(page, f, ans):
     """Fill a combobox/dropdown widget via cascading strategy:
-    1. Click the input (trusted, bubbles to widget handler)
-    2. Click widget container directly if input click didn't open dropdown
-    3. Native setter as last resort
+    1. Close any stray dropdown, click the input (trusted, bubbles to handler)
+    2. If no dropdown appears, click widget container directly
+    3. Poll for option elements using broad selector (role, li, class)
+    4. Search shadow DOM for options
+    5. Native setter as last resort
     """
     sel = f.get("_sel", "")
     if not sel:
         return False
+
+    # Close any stray open dropdown before clicking
+    page.evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))")
+    time.sleep(0.1)
 
     # Strategy 1: click the input directly — event bubbles to container
     try:
         page.locator(sel).click(force=True, timeout=5000)
     except Exception:
         return _try_native_setter(page, sel, ans)
-    time.sleep(0.5)
 
-    # Check if dropdown opened
-    opt = page.locator(f'[role="option"]:has-text("{ans}")')
-    if opt.count():
-        opt.first.click(force=True, timeout=3000)
-        time.sleep(0.3)
-        return True
+    # Poll for options: try [role="option"], li, [role="menuitem"], [class*="option"]
+    url_before = page.url
+    opt = None
+    for _ in range(20):
+        time.sleep(0.25)
+        # Page navigated — stop (trigger was actually a link)
+        if page.url != url_before:
+            page.goto(url_before, wait_until="domcontentloaded", timeout=15000)
+            time.sleep(2)
+            break
+        # Broad option search: ARIA role + common markup patterns + shadow DOM
+        opt = page.evaluate(f"""() => {{
+            const ans = {json.dumps(ans)};
+            const sel = '[role="option"], li, [role="menuitem"], [class*="option"], [class*="item"]';
+            const all = Array.from(document.querySelectorAll(sel));
+            // Search shadow roots too
+            document.querySelectorAll(':defined').forEach(el => {{
+                if (el.shadowRoot) all.push(...el.shadowRoot.querySelectorAll(sel));
+            }});
+            const match = all.find(o => o.offsetParent !== null && (o.textContent.trim().toLowerCase() === ans.toLowerCase() || o.textContent.trim().toLowerCase().includes(ans.toLowerCase())));
+            return match ? (match.id ? '[id="' + match.id + '"]' : match.textContent.trim().slice(0, 30)) : null;
+        }}""")
+        if opt:
+            break
 
-    # Strategy 2: click the parent widget container (some frameworks
-    # listen on the container, not the input)
+    if opt:
+        try:
+            if opt.startswith("["):
+                page.locator(opt).click(force=True, timeout=3000)
+            else:
+                page.locator(f'[role="option"]:has-text("{opt}")').first.click(force=True, timeout=3000)
+            time.sleep(0.3)
+            return True
+        except Exception:
+            pass
+
+    # Strategy 2: click the parent widget container
     try:
         container = page.evaluate(f"""() => {{
             const el = document.querySelector('{sel}');
@@ -631,15 +664,19 @@ def _fill_combobox(page, f, ans):
         if container:
             page.locator(container).click(force=True, timeout=3000)
             time.sleep(0.5)
-            opt = page.locator(f'[role="option"]:has-text("{ans}")')
-            if opt.count():
-                opt.first.click(force=True, timeout=3000)
+            opt = page.evaluate(f"""() => {{
+                const ans = {json.dumps(ans)};
+                const match = Array.from(document.querySelectorAll('[role="option"], li, [role="menuitem"]')).find(o => o.offsetParent !== null && o.textContent.trim().toLowerCase().includes(ans.toLowerCase()));
+                return match ? (match.id ? '[id="' + match.id + '"]' : null) : null;
+            }}""")
+            if opt:
+                page.locator(opt).click(force=True, timeout=3000)
                 time.sleep(0.3)
                 return True
     except Exception:
         pass
 
-    # Strategy 3: native setter (value in DOM, may not sync widget state)
+    # Strategy 3: native setter
     return bool(_try_native_setter(page, sel, ans))
 
 
@@ -708,11 +745,19 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
     unfilled = []
     file_uploaded = False
     _RESUME_DIR = None
+    _seen_labels = set()
 
     for f in fields:
         prev_filled = filled
         if f["type"] == "radio":
             continue
+
+        # Mid-fill guard: check session timeout (long fills may expire)
+        try:
+            from apply.common.page_helpers import handle_session_timeout
+            handle_session_timeout(page)
+        except Exception:
+            pass
 
         # File upload (resume PDF)
         if f["tag"] == "INPUT" and f["type"] == "file":
@@ -743,6 +788,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         # Standard field
         lbl = f["label"]
         lbl_norm = _normalize_label(lbl)
+        _seen_labels.add(lbl)
 
         # Skip pre-filled fields with valid data
         current_val = f.get("value", "")
@@ -759,6 +805,15 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
 
         if _fill_field_deterministic(page, f, ans):
             filled += 1
+            # After filling a field, check for new conditional fields
+            try:
+                _ps = read_page(page)
+                _new = [nf for nf in _ps.get("fields", []) if nf.get("required") and nf.get("label", "") not in _seen_labels]
+                if _new:
+                    fields.extend(f for f in _new if f not in fields)
+                    _seen_labels.update(nf.get("label", "") for nf in _new)
+            except Exception:
+                pass
         elif f.get("required"):
             unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
 
