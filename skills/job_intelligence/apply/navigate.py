@@ -111,10 +111,11 @@ def run(jid):
                 if has_password or ("sign in" in body_text and "apply" not in body_text):
                     mark_auth_wall(jid, ep.url, title or "", company or "")
                     print(f"AUTH_WALL: {jid} — {title} @ {company}", file=sys.stderr)
-                    print("  Browser is open on the sign-in page. Log in, then press Enter to continue.", file=sys.stderr)
-                    print("  Type 'flag' and press Enter to mark as auth wall and skip.", file=sys.stderr)
+                    print("  Browser is open on the sign-in page. Log in, then press Enter.", file=sys.stderr)
+                    print("  Type 'flag' and press Enter to skip.", file=sys.stderr)
+                    sys.stderr.flush()
                     try:
-                        inp = input("> ").strip().lower()
+                        inp = input().strip().lower()
                     except (EOFError, KeyboardInterrupt):
                         inp = "flag"
                     if inp == "flag":
