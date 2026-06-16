@@ -1744,6 +1744,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
 def cmd_inspect(jid, candidate=None):
     """Full page analysis: screenshot, HTML, probes, fields, buttons.
     Uses inspect_lib for core logic; adds job context from state."""
+    from apply.common.output import emit_warn, emit_error, emit_next
     state = load_state()
     if state.get("jid") != jid:
         emit_error(f"state is for job {state.get('jid','?')}, not {jid}")
