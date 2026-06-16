@@ -154,14 +154,20 @@ _READER_JS = """(config) => {
     let fileCount = root.querySelectorAll('input[type="file"]').length;
     root.querySelectorAll(':defined').forEach(el => { if (el.shadowRoot) fileCount += el.shadowRoot.querySelectorAll('input[type="file"]').length; });
 
-    // Buttons (standard DOM)
-    const buttons = Array.from(root.querySelectorAll('button, a.btn, [role="button"]'))
-        .filter(b => b.offsetParent !== null)
-        .map(b => ({
-            text: (b.textContent || '').trim().slice(0, 30),
-            disabled: b.disabled || false,
-            type: 'button',
-        }));
+    // Buttons (standard DOM + shadow DOM)
+    const buttons = [];
+    function collectButtons(root) {
+        root.querySelectorAll('button, a.btn, [role="button"]').forEach(b => {
+            if (b.offsetParent !== null) buttons.push(b);
+        });
+    }
+    collectButtons(root);
+    root.querySelectorAll(':defined').forEach(el => { if (el.shadowRoot) collectButtons(el.shadowRoot); });
+    const buttonData = buttons.map(b => ({
+        text: (b.textContent || '').trim().slice(0, 30),
+        disabled: b.disabled || false,
+        type: 'button',
+    }));
 
     const text = (document.body.innerText || '').toLowerCase();
     const hasFormWords = text.includes('submit') || text.includes('apply') || text.includes('application');
@@ -180,7 +186,7 @@ _READER_JS = """(config) => {
         pageType: pageType,
         hasFileInput: fileCount > 0,
         hasRequiredFile: root.querySelectorAll('input[type="file"][required]').length > 0,
-        buttons: buttons,
+        buttons: buttonData,
         url: location.href,
     };
 }"""
