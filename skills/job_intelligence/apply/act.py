@@ -756,7 +756,21 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         # even if display text differs from answer — widget may translate codes)
         current_val = f.get("value", "")
         if current_val and len(current_val.strip()) > 1:
-            continue
+            # For required fields, still check if answer contradicts the current value
+            if f.get("required"):
+                ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, required=True, available_options=f.get("options"))
+                if ans_check:
+                    # If answer shares no words with current value, overwrite
+                    cw = current_val.lower().split()
+                    aw = ans_check.lower().split()
+                    if not any(w in cw for w in aw):
+                        pass  # will overwrite below
+                    else:
+                        continue  # already matches closely enough
+                else:
+                    continue  # no better answer — keep existing value
+            else:
+                continue
 
         ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False), available_options=f.get("options"))
         if ans is None:
