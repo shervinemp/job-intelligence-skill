@@ -315,22 +315,47 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
 
 
 def _probe_fields(page, fields):
-    """Pass 1 probe: enrich every field with selector, available options,
-    validation hints, and current state.
+    """Pass 1 probe: enrich every field with selector, trigger selector,
+    available options, validation hints, and current state.
     Returns a complete recipe for deterministic Pass 2 execution."""
     for f in fields:
         sel = _resolve_selector(page, f)
         if not sel:
             continue
-        f["_sel"] = sel  # store for Pass 2
+        f["_sel"] = sel
+
+        # Find visible widget trigger for combobox/hidden inputs
+        if f.get("role") == "combobox" or (f["tag"] == "INPUT" and not f.get("role")):
+            try:
+                trig = page.evaluate(f"""() => {{
+                    const el = document.querySelector('{sel}');
+                    if (!el) return '';
+
+                    // Check siblings for a clickable trigger
+                    const parent = el.parentElement;
+                    if (parent) {{
+                        const triggers = parent.querySelectorAll('button, [role="button"], i, span.glyphicon, [class*="icon"], [class*="sapUiIcon"], [tabindex]');
+                        for (const t of triggers) {{
+                            if (t !== el && t.offsetParent !== null) {{
+                                if (t.id) return '#' + CSS.escape(t.id);
+                                return null; // no stable selector — use fallback
+                            }}
+                        }}
+                    }}
+                    return '';
+                }}""")
+                if trig:
+                    f["_trigger_sel"] = trig
+            except Exception:
+                pass
 
         # Combobox: probe available options by opening dropdown
         if f.get("role") == "combobox" and not f.get("options"):
             try:
+                trigger = f.get("_trigger_sel", sel)
                 opts = page.evaluate(f"""() => {{
-                    const el = document.querySelector('{sel}');
+                    const el = document.querySelector('{trigger}') || document.querySelector('{sel}');
                     if (!el) return [];
-                    // Safe click: element itself via dispatchEvent (bypasses visibility)
                     try {{
                         el.dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true}}));
                     }} catch(e) {{ return []; }}
@@ -681,10 +706,15 @@ def _fill_field_deterministic(page, f, ans):
         el = page.query_selector(sel)
         if not el:
             return False
-        if f.get("options"):
+        if f.get("options") and ans not in f["options"]:
             match = next((o for o in f["options"] if ans.lower() in o.lower() or o.lower() in ans.lower()), None)
-            if match:
-                return bool(_try_combobox(page, el, ans) or _try_native_setter(page, sel, ans))
+            if not match:
+                return _try_native_setter(page, sel, ans)
+        # Use trigger selector if found (for hidden INPUT + visible trigger pattern)
+        click_sel = f.get("_trigger_sel", sel)
+        if click_sel != sel:
+            _click_widget_trigger(page, click_sel)
+            time.sleep(0.5)
         return bool(_try_combobox(page, el, ans) or _try_native_setter(page, sel, ans))
 
     if f.get("datepicker") == "flatpickr":
