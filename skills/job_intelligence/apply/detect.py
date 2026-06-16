@@ -237,6 +237,7 @@ def run(jid):
         reg = resolve_registry(url)
         if page_state and page_state["fieldCount"] > 0:
             page_owner = False  # keep page open for act --fill
+            tag_page(p, jid)
             _merge_state({"jid": jid, "_detect_fields": page_state, "external_url": p.url})
             emit_type("easy_apply")
             if reg:
@@ -245,6 +246,7 @@ def run(jid):
         elif apply_fields:
             fb = {"fieldCount": len(apply_fields), "fields": apply_fields}
             page_owner = False
+            tag_page(p, jid)
             _merge_state({"jid": jid, "_detect_fields": fb, "external_url": p.url})
             emit_type("easy_apply")
             if reg:
@@ -252,6 +254,7 @@ def run(jid):
             emit_next("act --fill")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
             page_owner = False
+            tag_page(p, jid)
             _merge_state({"jid": jid, "external_url": p.url})
             emit_type("easy_apply", "dialog not auto-opened")
             if reg:
