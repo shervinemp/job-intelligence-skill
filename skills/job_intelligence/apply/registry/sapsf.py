@@ -19,7 +19,7 @@ def pre_fill(page):
 def post_fill(page):
     """After native value setter fills combobox INPUTs, notify SAP SF's juic
     framework by dispatching 'change' and 'blur' events one at a time.
-    This triggers the widget's internal state update so form validation passes."""
+    Falls back to direct juic API call if standard events don't work."""
     page.evaluate("""() => {
         const boxes = document.querySelectorAll('input[role="combobox"]');
         boxes.forEach((el, i) => {
@@ -27,13 +27,18 @@ def post_fill(page):
                 setTimeout(() => {
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                     el.dispatchEvent(new Event('blur', { bubbles: true }));
-                }, i * 100);
+                    // Direct juic API fallback
+                    const id = el.id;
+                    if (id && window.juic && window.juic.fire) {
+                        window.juic.fire(id + ':', '_handleChange', new Event('change'));
+                    }
+                }, i * 150);
             }
         });
     }""")
     import time
     count = page.evaluate("() => document.querySelectorAll('input[role=\"combobox\"]').length")
-    time.sleep(count * 0.15 + 0.5)
+    time.sleep(count * 0.2 + 1)
 
 
 def pre_submit(page):
