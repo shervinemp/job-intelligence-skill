@@ -987,7 +987,55 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         }""")
         time.sleep(3)
         ps = read_page(page)
-        print(f"EASY_APPLY: clicked → {ps['fieldCount']} fields", file=sys.stderr)
+        if not ps.get("fieldCount", 0):
+            print("EASY_APPLY: click didn't open modal", file=sys.stderr)
+        else:
+            # Fill visible modal fields
+            from apply.common.resolve import resolution_for_fill
+            profile = {}
+            if os.path.exists(profile_path):
+                try: profile = json.load(open(profile_path))
+                except: pass
+            for f in ps["fields"]:
+                lbl = f.get("label", "")
+                if not lbl or f.get("type") in ("radio", "file") or not f.get("required"):
+                    continue
+                if f.get("value", "").strip():
+                    continue
+                ans = resolution_for_fill(lbl, profile)
+                if ans.value:
+                    sel = None
+                    if f.get("id"): sel = f'[id="{f["id"]}"]'
+                    elif f.get("name"): sel = f'[name="{f["name"]}"]'
+                    if sel:
+                        try:
+                            page.locator(sel).fill(ans.value)
+                        except Exception:
+                            page.evaluate(f"document.querySelector('{sel}')?.focus();document.execCommand('insertText', false, '{ans.value}')")
+            # Navigate through screens
+            for _ in range(8):
+                time.sleep(1)
+                ps = read_page(page)
+                text = (page_text(page) or "").lower()
+                if any(s in text for s in ["your application has been", "your application was", "has been sent", "thank you for", "successfully applied"]):
+                    get_conn().execute("UPDATE jobs SET stage='applied',applied_at=datetime('now') WHERE id=?", (jid,)).connection.commit()
+                    emit_status("submitted (LinkedIn Easy Apply)")
+                    emit_next("verify")
+                    return
+                if not ps.get("fieldCount", 0):
+                    break  # modal closed — abort
+                # Only click buttons inside the modal dialog, not page-level navigation
+                clicked = page.evaluate("""(kws) => {
+                    const dialog = document.querySelector('[role="dialog"]');
+                    if (!dialog) return false;
+                    for (const kw of kws) {
+                        const btn = dialog.querySelector('button:has-text("' + kw + '"), a:has-text("' + kw + '"), [role="button"]:has-text("' + kw + '")');
+                        if (btn && btn.offsetParent !== null) { btn.click(); return true; }
+                    }
+                    return false;
+                }""", [["Next", "Review", "Submit application", "Submit", "Done"]])
+                if not clicked:
+                    break
 
     # Check for login wall — try guest apply first, then abort
     text = page_text(page) or ""
@@ -1036,23 +1084,6 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         if not guest_clicked:
             emit_status("login_wall", "sign in required — retry after login")
             emit_next("retry after login")
-    # Click "Easy Apply" on LinkedIn if present (before field reading)
-    if not guest_clicked:
-        is_easy_apply = page.evaluate("""() => {
-            for (const el of document.querySelectorAll('button, a')) {
-                if ((el.textContent || '').trim().toLowerCase() === 'easy apply') return true;
-            }
-            return false;
-        }""")
-        if is_easy_apply:
-            page.evaluate("""() => {
-                for (const el of document.querySelectorAll('button, a')) {
-                    if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
-                }
-            }""")
-            time.sleep(3)
-            ps = read_page(page)
-            print(f"EASY_APPLY: clicked → {ps['fieldCount']} fields", file=sys.stderr)
 
     # If no fields detected, use model-assisted action finding
     if ps["fieldCount"] == 0:
