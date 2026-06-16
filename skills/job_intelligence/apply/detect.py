@@ -7,7 +7,7 @@ import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn, desc_exists
-from apply.common.page_helpers import read_page, check_captcha, tag_page, STATE_PATH
+from apply.common.page_helpers import read_page, check_captcha, tag_page, page_text, STATE_PATH
 from apply.common.output import emit_next, emit_status, emit_type, emit_error
 from apply.common.registry import resolve as resolve_registry
 from apply.common.platforms import (
@@ -246,6 +246,7 @@ def run(jid):
         reg = resolve_registry(url)
         if page_state and page_state["fieldCount"] > 0:
             # Full flow: modal is open with fields — fill and submit now (one process)
+            # BUT do NOT mark as applied — let verify confirm submission
             from apply.common.resolve import resolution_for_fill
             profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
             profile = {}
@@ -265,18 +266,17 @@ def run(jid):
             # Navigate through screens
             for _ in range(8):
                 time.sleep(1)
-                text = (p.evaluate("document.body.innerText") or "").lower()
-                if any(w in text for w in ["your application has been", "your application was", "has been sent", "thank you for", "successfully applied"]):
-                    _merge_state({"jid": jid, "external_url": p.url})
-                    conn = get_conn()
-                    conn.execute("UPDATE jobs SET stage='applied',applied_at=datetime('now') WHERE id=?", (jid,))
-                    conn.commit()
-                    emit_type("easy_apply", "submitted")
-                    emit_next("none")
-                    sys.exit(0)
                 dialog = p.evaluate("() => document.querySelector('[role=\"dialog\"]')")
                 if not dialog:
                     break
+                # Check for real success (title change is most reliable)
+                title = (p.evaluate("document.title") or "").lower()
+                if "successfully applied" in title or "application submitted" in title or "thank you for applying" in title:
+                    _merge_state({"jid": jid, "external_url": p.url})
+                    emit_type("easy_apply", "submitted")
+                    emit_next("verify")
+                    sys.exit(0)
+                # Click navigation buttons inside dialog
                 for kw in ["Next", "Review", "Submit application", "Submit", "Done"]:
                     clicked = p.evaluate(f"""() => {{
                         const d = document.querySelector('[role="dialog"]');
@@ -291,7 +291,7 @@ def run(jid):
                     if clicked:
                         time.sleep(1)
                         break
-            # Fallback: modal closed or flow completed — hand to --fill for remaining
+            # Fallback: modal closed or flow done — hand to fill for remaining
             page_owner = False
             tag_page(p, jid)
             _merge_state({"jid": jid, "_detect_fields": page_state, "external_url": p.url})
