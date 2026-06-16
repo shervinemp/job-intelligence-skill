@@ -14,6 +14,7 @@ from apply.common.page_helpers import (
     read_page,
     handle_captcha,
     handle_session_timeout,
+    page_text,
     scan_actions,
     read_and_save,
     DEFAULT_EXCLUDED_BUTTONS as _EXCLUDED_BUTTONS,
@@ -203,7 +204,7 @@ def _handle_post_click(state, ps, page):
         )
         if has_submit_btn:
             return False
-        text = (page.evaluate("() => document.body.innerText") or "").lower()
+        text = (page_text(page) or "").lower()
         for w in ["your application has been", "your application was", "has been sent", "you have applied"]:
             if w in text:
                 emit_status("submitted")
@@ -989,7 +990,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
             return
 
     # Check for login wall — try guest apply first, then abort
-    text = page.evaluate("() => document.body.innerText") or ""
+    text = page_text(page) or ""
     plat = state.get("platform", "")
     if check_page(text, plat, LOGIN_WALL):
         # Try guest apply buttons
@@ -1265,9 +1266,9 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         emit_next("act --next")
     elif not unfilled and not has_submit and not has_next:
         # All fields filled, no buttons — possible auto-submit
-        page_text = (page.evaluate("() => document.body.innerText") or "").lower()
+        body_text = (page_text(page) or "").lower()
         if any(
-            w in page_text
+            w in body_text
             for w in ["your application has been", "your application was", "has been sent", "you have applied"]
         ):
             emit_status("submitted", "auto-submit without clicking")
@@ -1652,7 +1653,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
     for _ in range(30):
         time.sleep(0.5)
         current = _page_hash(page)
-        current_text = (page.evaluate("() => document.body.innerText") or "").lower()
+        current_text = (page_text(page) or "").lower()
         if current != before_hash or any(
             w in current_text for w in ["error", "required", "invalid"]
         ):
@@ -1667,7 +1668,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
         emit_next("act --submit --confirm")
         return
 
-    text = (page.evaluate("() => document.body.innerText") or "").lower()
+    text = (page_text(page) or "").lower()
     # Include alert dialog messages in error/success detection
     for msg in _alerts:
         text += " " + msg.lower()

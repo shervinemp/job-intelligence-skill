@@ -44,24 +44,55 @@ _CAPTCHA_SIGNALS = [
 ]
 
 
+def page_text(page):
+    """Return page text including content from shadow roots."""
+    return page.evaluate("""() => {
+        let t = document.body.innerText || '';
+        document.querySelectorAll(':defined').forEach(el => {
+            if (el.shadowRoot) t += '\\n' + (el.shadowRoot.textContent || '');
+        });
+        return t;
+    }""") or ""
+
+
+def page_html(page):
+    """Return page HTML including declarative shadow DOM."""
+    return page.evaluate("""() => {
+        // Recursive serialization that captures shadow DOM
+        function serialize(node) {
+            if (node.nodeType === Node.TEXT_NODE) return node.textContent.replace(/[\\x00-\\x08\\x0B\\x0E-\\x1F]/g, '');
+            if (node.nodeType !== Node.ELEMENT_NODE) return '';
+            let s = '<' + node.tagName.toLowerCase();
+            for (const a of node.attributes) s += ' ' + a.name + '="' + a.value.replace(/"/g, '&quot;') + '"';
+            s += '>';
+            if (node.shadowRoot) {
+                s += '<template shadowrootmode="' + node.shadowRoot.mode + '">';
+                for (const c of node.shadowRoot.childNodes) s += serialize(c);
+                s += '</template>';
+            }
+            for (const c of node.childNodes) {
+                if (c.nodeType === Node.ELEMENT_NODE && c.tagName === 'SLOT') continue;
+                s += serialize(c);
+            }
+            s += '</' + node.tagName.toLowerCase() + '>';
+            return s;
+        }
+        return serialize(document.documentElement);
+    }""") or ""
+
+
 def check_captcha(page):
-    """Check if the current page has a CAPTCHA challenge. Returns True if detected.
-    Single evaluate call for efficiency."""
+    """Check if the current page has a CAPTCHA challenge. Returns True if detected."""
     try:
-        result = page.evaluate(f"""((args) => {{
-            const signals = args[0], keywords = args[1];
-            const text = (document.body.innerText || '').toLowerCase();
-            for (const kw of keywords) {{ if (text.includes(kw)) return true; }}
-            const html = (document.documentElement.innerHTML || '').toLowerCase();
-            for (const sig of signals) {{ if (html.includes(sig)) return true; }}
-            return false;
-        }})""", [_CAPTCHA_SIGNALS,
-               ["verify you are human", "security check",
-                "i'm not a robot", "complete the security check"]])
-        return result
+        text = page_text(page).lower()
+        html = page_html(page).lower()
+        for kw in ["verify you are human", "security check", "i'm not a robot", "complete the security check"]:
+            if kw in text: return True
+        for sig in _CAPTCHA_SIGNALS:
+            if sig in html: return True
+        return False
     except Exception:
-        pass
-    return False
+        return False
 
 
 def handle_captcha(page, state):
