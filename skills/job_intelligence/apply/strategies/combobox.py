@@ -4,44 +4,46 @@ import json, time
 
 def _find_click_target(page, sel):
     """Find a clickable element: input itself, or nearest visible sibling/icon
-    (hidden input + visible icon pattern used by many widget frameworks)."""
-    target = page.evaluate(f"""() => {{
+    (hidden input + visible icon pattern used by many widget frameworks).
+    Returns selector string or None."""
+    return page.evaluate(f"""() => {{
         const el = document.querySelector('{sel}');
         if (!el) return null;
 
-        // If element is visible, click it directly
+        // If element is visible, use it directly
         const style = window.getComputedStyle(el);
         if (style.display !== 'none' && style.visibility !== 'hidden' && el.offsetParent !== null)
-            return {{sel: '{sel}', tag: el.tagName}};
+            return '{sel}';
 
-        // Hidden input: find visible sibling icon/button in same container
+        // Hidden input: find visible sibling/icon in same parent
         const parent = el.parentElement;
         if (!parent) return null;
 
-        // Check siblings for visible clickable elements
         for (const child of parent.children) {{
             if (child === el) continue;
             const cs = window.getComputedStyle(child);
             if (cs.display === 'none' || cs.visibility === 'hidden') continue;
             if (child.offsetParent === null) continue;
-            // Found a visible element — use it if it looks like a widget trigger
-            if (child.id) return {{sel: '[id="' + child.id + '"]', tag: child.tagName}};
+            if (child.id) return '[id="' + child.id + '"]';
         }}
 
-        // Check parent container for visible clickable children
+        // Use parent element itself (common for event delegation)
+        if (parent.id) return '[id="' + parent.id + '"]';
+        if (parent.parentElement && parent.parentElement.id) return '[id="' + parent.parentElement.id + '"]';
+
+        // Last resort: search broader container
         const container = parent.closest('[class*="ComboBox"], [class*="Dropdown"], [class*="Select"], [class*="widget"]');
         if (container) {{
             for (const child of container.children) {{
                 const cs = window.getComputedStyle(child);
                 if (cs.display === 'none' || cs.visibility === 'hidden') continue;
-                if (child.offsetParent === null) continue;
-                if (child.id) return {{sel: '[id="' + child.id + '"]', tag: child.tagName}};
+                if (child.id) return '[id="' + child.id + '"]';
             }}
+            if (container.id) return '[id="' + container.id + '"]';
         }}
 
-        return null;
+        return '{sel}';
     }}""")
-    return target
 
 
 def fill(page, f, ans):
@@ -53,8 +55,7 @@ def fill(page, f, ans):
     from apply.strategies import text as _text
 
     # Find the right element to click (input itself or visible sibling trigger)
-    target = _find_click_target(page, sel)
-    click_sel = target["sel"] if target else sel
+    click_sel = _find_click_target(page, sel) or sel
 
     try:
         page.locator(click_sel).click(force=True, timeout=5000)
