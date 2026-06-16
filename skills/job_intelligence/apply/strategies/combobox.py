@@ -51,33 +51,33 @@ def _find_any_trigger(page, sel):
 
 
 def _select_option(page, sel, ans):
-    """Poll for option matching `ans` within the combobox's own listbox,
-    click it via JS. Returns True if selected."""
+    """Poll for option matching `ans` within the combobox's own listbox.
+    Returns selector string for Playwright to click (trusted event)."""
     for _ in range(20):
         time.sleep(0.25)
-        clicked = page.evaluate(f"""() => {{
+        opt_sel = page.evaluate(f"""() => {{
             const a = {json.dumps(ans)};
             const input = document.querySelector('{sel}');
-            if (!input) return false;
-            // Scope search to the input's own listbox (aria-owns)
+            if (!input) return null;
             const owns = input.getAttribute('aria-owns');
             const root = owns ? document.getElementById(owns) : document;
-            if (!root) return false;
-            const match = root.querySelector('[role="option"], li, [role="menuitem"]');
-            if (!match) return false;
-            // Find the option with matching text
+            if (!root) return null;
             const opts = Array.from(root.querySelectorAll('[role="option"], li, [role="menuitem"]'));
             const found = opts.find(o =>
                 o.textContent.trim().toLowerCase() === a.toLowerCase() ||
                 o.textContent.trim().toLowerCase().includes(a.toLowerCase()) ||
                 a.split(' ').filter(w => w.length > 2).every(w => o.textContent.trim().toLowerCase().includes(w))
             );
-            if (found) {{ found.click(); return true; }}
-            return false;
+            if (found && found.id) return '[id="' + found.id + '"]';
+            return null;
         }}""")
-        if clicked:
-            time.sleep(0.3)
-            return True
+        if opt_sel:
+            try:
+                page.locator(opt_sel).click(force=True, timeout=3000)
+                time.sleep(0.3)
+                return True
+            except Exception:
+                pass
     return False
 
 
