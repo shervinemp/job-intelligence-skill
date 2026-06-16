@@ -95,7 +95,11 @@ def _select_option(page, sel, ans):
                 if (oLow === aLow) return true;
                 if (oLow.includes(aLow) || aLow.includes(oLow)) return true;
                 const words = aLow.split(' ').filter(w => w.length > 2);
-                if (words.length && words.every(w => oLow.includes(w))) return true;
+                if (words.length) {{
+                    const matchCount = words.filter(w => oLow.includes(w)).length;
+                    if (matchCount === words.length) return true;
+                    if (matchCount / words.length >= 0.75) return true;
+                }}
                 const aNum = parseNum(aLow);
                 if (aNum !== null) {{
                     const parts = oLow.replace(/-/g, ' ').replace(/to/g, ' ').split(' ');
