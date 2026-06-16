@@ -7,7 +7,7 @@ import json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.chrome_manager import connect
 from lib.db import get_conn, desc_exists
-from apply.common.page_helpers import read_page, check_captcha, tag_page, page_text, STATE_PATH
+from apply.common.page_helpers import read_page, check_captcha, tag_page, STATE_PATH
 from apply.common.output import emit_next, emit_status, emit_type, emit_error
 from apply.common.registry import resolve as resolve_registry
 from apply.common.platforms import (
@@ -266,11 +266,17 @@ def run(jid):
             # Navigate through screens
             for _ in range(8):
                 time.sleep(1)
-                dialog = p.evaluate("() => document.querySelector('[role=\"dialog\"]')")
-                if not dialog:
-                    break
+                try:
+                    dialog = p.evaluate("() => !!document.querySelector('[role=\"dialog\"]')")
+                    if not dialog:
+                        break
+                except Exception:
+                    break  # page navigated — exit loop
                 # Check for real success (title change is most reliable)
-                title = (p.evaluate("document.title") or "").lower()
+                try:
+                    title = (p.evaluate("document.title") or "").lower()
+                except Exception:
+                    break
                 if "successfully applied" in title or "application submitted" in title or "thank you for applying" in title:
                     _merge_state({"jid": jid, "external_url": p.url})
                     emit_type("easy_apply", "submitted")
