@@ -975,10 +975,10 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
     # Check for login wall — try guest apply first, then abort
     text = page_text(page) or ""
     plat = state.get("platform", "")
+    guest_clicked = False
     if check_page(text, plat, LOGIN_WALL):
         # Try guest apply buttons
         guest_patterns = GUEST_APPLY.get(plat, []) + GUEST_APPLY["default"]
-        guest_clicked = False
         for gp in guest_patterns:
             btn = page.evaluate(
                 f"""(gp) => {{
@@ -1019,6 +1019,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         if not guest_clicked:
             emit_status("login_wall", "sign in required — retry after login")
             emit_next("retry after login")
+
     # If no fields detected, use model-assisted action finding
     if ps["fieldCount"] == 0:
         apply_kws = [
@@ -1624,7 +1625,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
     )
 
     before_hash = _page_hash(page)
-    b_loc = page.locator(f'button:has-text("{target["text"]}"), [role="button"]:has-text("{target["text"]}")')
+    b_loc = page.locator(f'button:has-text("{target["text"]}"), a:has-text("{target["text"]}"), [role="button"]:has-text("{target["text"]}")')
     if b_loc.count() == 0:
         print(
             f"  Submit warning: button '{target['text']}' not found on page",
@@ -1744,6 +1745,7 @@ def cmd_submit(jid, confirm=False, candidate=None):
 def cmd_inspect(jid, candidate=None):
     """Full page analysis: screenshot, HTML, probes, fields, buttons.
     Uses inspect_lib for core logic; adds job context from state."""
+    from apply.common.output import emit_warn, emit_error, emit_next
     state = load_state()
     if state.get("jid") != jid:
         emit_error(f"state is for job {state.get('jid','?')}, not {jid}")

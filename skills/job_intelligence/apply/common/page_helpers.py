@@ -82,14 +82,22 @@ def page_html(page):
 
 
 def check_captcha(page):
-    """Check if the current page has a CAPTCHA challenge. Returns True if detected."""
+    """Check if the current page has a CAPTCHA challenge. Returns True if detected.
+    Only flags CAPTCHA if the challenge is visible (has a visible iframe or widget),
+    not just because a keyword appears in a script tag."""
     try:
+        # Check for visible challenge widget first — most reliable
+        has_widget = page.evaluate("""() => {
+            const sel = 'iframe[src*="challenge"], [class*="cf-browser"], [id*="challenge"], [class*="challenge"], [class*="turnstile"]';
+            return !!document.querySelector(sel);
+        }""")
+        if has_widget:
+            return True
+        # Fallback: check body text for CAPTCHA keywords
         text = page_text(page).lower()
-        html = page_html(page).lower()
         for kw in ["verify you are human", "security check", "i'm not a robot", "complete the security check"]:
-            if kw in text: return True
-        for sig in _CAPTCHA_SIGNALS:
-            if sig in html: return True
+            if kw in text:
+                return True
         return False
     except Exception:
         return False
