@@ -78,7 +78,7 @@ def _match_word(needle, haystack):
     )
 
 
-def _find_answer(label, label_norm, answers, ca, profile, available_options=None):
+def _find_answer(label, label_norm, answers, ca, profile, required=False, available_options=None):
     """Find answer via resolve chain. Ignores ca (old common_answers) — resolve reads profile directly."""
     res = resolution_for_fill(label, profile, answers_override=answers, available_options=available_options)
     return res.value
@@ -434,267 +434,6 @@ def _resolve_selector(page, f):
     return ""
 
 
-def _try_select_tag(el, f, ans):
-    """Fill a <select> element."""
-    if f["tag"] != "SELECT":
-        return
-    try:
-        values = ans if isinstance(ans, list) else [ans]
-        selected = [next((o for o in f.get("options", []) if v.lower() == o.lower()), v) for v in values]
-        el.select_option(selected if len(selected) > 1 else selected[0])
-        return True
-    except Exception:
-        return False
-
-
-def _try_dropdown(page, f, ans):
-    """Click custom dropdown trigger, select matching option."""
-    if f["tag"] != "DROPDOWN":
-        return
-    sel = None
-    if f.get("id"):
-        sel = f'[id="{f["id"]}"]'
-    elif f.get("data_automation_id"):
-        sel = f'[data-automation-id="{f["data_automation_id"]}"]'
-    elif f.get("name"):
-        sel = f'[name="{f["name"]}"]'
-    if not sel:
-        return
-    try:
-        btn = page.locator(sel)
-        if btn.count() == 0:
-            return
-        btn.first.click(force=True, timeout=5000)
-        time.sleep(1)
-        opt = page.locator(f'[role="option"]:has-text("{ans}")')
-        if opt.count() > 0:
-            opt.first.click(force=True, timeout=3000)
-            time.sleep(0.5)
-            return True
-        lb = page.locator(f'[role="listbox"]:has-text("{ans}")')
-        if lb.count() > 0:
-            lb.first.click(force=True, timeout=3000)
-            time.sleep(0.5)
-            return True
-        btn.first.click(force=True, timeout=5000)
-    except Exception:
-        pass
-    return
-
-
-def _click_widget_trigger(page, sel):
-    """Click the visible trigger for a combobox/dropdown widget.
-    Safe fallbacks: element click → native event dispatch.
-    Platform-specific trigger resolution (e.g. SAP SF container)
-    belongs in the registry hook, not here."""
-    return page.evaluate(f"""() => {{
-        const el = document.querySelector('{sel}');
-        if (!el) return false;
-        try {{ el.click(); return true; }} catch(e) {{}}
-        try {{
-            el.dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true}}));
-            return true;
-        }} catch(e) {{}}
-        return false;
-    }}""")
-
-
-def _try_combobox(page, el, ans):
-    """Click combobox widget trigger, select matching option."""
-    if el.get_attribute("role") != "combobox":
-        return
-    try:
-        _click_widget_trigger(page, f'[id="{el.get_attribute("id")}"]')
-        time.sleep(0.5)
-        opt = page.locator(f'[role="option"]:has-text("{ans}")')
-        if opt.count():
-            opt.first.click(force=True, timeout=3000)
-            time.sleep(0.3)
-            return True
-    except Exception:
-        pass
-    return
-
-
-def _try_flatpickr(page, sel, ans):
-    """Fill a flatpickr datepicker widget."""
-    try:
-        page.evaluate(
-            """(args) => {
-            var sel = args[0], val = args[1];
-            var el = document.querySelector(sel);
-            if (!el) return;
-            if (el._flatpickr) { el._flatpickr.setDate(val, true); return; }
-            var fp = el.closest('.flatpickr');
-            if (fp && fp._flatpickr) { fp._flatpickr.setDate(val, true); }
-        }""",
-            [sel, ans],
-        )
-        return True
-    except Exception:
-        return False
-
-
-def _try_contenteditable(page, sel, ans):
-    """Fill a contenteditable div."""
-    try:
-        page.evaluate(
-            """(sel, val) => {
-            const el = document.querySelector(sel);
-            if (el) { el.textContent = val; el.dispatchEvent(new Event('input', {bubbles:true})); }
-        }""",
-            [sel, ans],
-        )
-        return True
-    except Exception:
-        return False
-
-
-def _try_autocomplete(page, el, ans):
-    """Type into autocomplete/multiselect with press_sequentially."""
-    try:
-        el.click()
-        time.sleep(0.3)
-        el.press_sequentially(ans, delay=random.randint(40, 90))
-        time.sleep(0.5)
-        return True
-    except Exception:
-        return False
-
-
-def _try_visible_fill(el, ans):
-    """Standard Playwright fill on a visible, enabled, editable element."""
-    try:
-        if el.is_visible():
-            el.fill(ans)
-            return True
-    except Exception:
-        pass
-    return False
-
-
-def _try_native_setter(page, sel, ans):
-    """Set value via native JS value setter (bypasses visibility checks)."""
-    try:
-        page.evaluate(
-            """(args) => {
-            var ans = args[0], sel = args[1];
-            var el = document.querySelector(sel);
-            if (!el) return;
-            el.focus();
-            var n = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-            n.call(el, ans);
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-        }""",
-            [ans, sel],
-        )
-        return True
-    except Exception:
-        return False
-
-
-def _fill_combobox(page, f, ans):
-    """Fill a combobox/dropdown widget via cascading strategy:
-    1. Close any stray dropdown, click the input (trusted, bubbles to handler)
-    2. If no dropdown appears, click widget container directly
-    3. Poll for option elements using broad selector (role, li, class)
-    4. Search shadow DOM for options
-    5. Native setter as last resort
-    """
-    sel = f.get("_sel", "")
-    if not sel:
-        return False
-
-    # Close any stray open dropdown before clicking
-    page.evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))")
-    time.sleep(0.1)
-
-    # Strategy 1: click the input directly — event bubbles to container
-    try:
-        page.locator(sel).click(force=True, timeout=5000)
-    except Exception:
-        return _try_native_setter(page, sel, ans)
-
-    # Poll for options: try [role="option"], li, [role="menuitem"], [class*="option"]
-    url_before = page.url
-    opt = None
-    for _ in range(20):
-        time.sleep(0.25)
-        # Page navigated — stop (trigger was actually a link)
-        if page.url != url_before:
-            page.goto(url_before, wait_until="domcontentloaded", timeout=15000)
-            time.sleep(2)
-            break
-        # Broad option search: ARIA role + common markup patterns + shadow DOM
-        opt = page.evaluate(f"""() => {{
-            const ans = {json.dumps(ans)};
-            const sel = '[role="option"], li, [role="menuitem"], [class*="option"], [class*="item"]';
-            const all = Array.from(document.querySelectorAll(sel));
-            // Search shadow roots too
-            document.querySelectorAll(':defined').forEach(el => {{
-                if (el.shadowRoot) all.push(...el.shadowRoot.querySelectorAll(sel));
-            }});
-            const match = all.find(o => o.offsetParent !== null && (o.textContent.trim().toLowerCase() === ans.toLowerCase() || o.textContent.trim().toLowerCase().includes(ans.toLowerCase())));
-            return match ? (match.id ? '[id="' + match.id + '"]' : match.textContent.trim().slice(0, 30)) : null;
-        }}""")
-        if opt:
-            break
-
-    if opt:
-        try:
-            if opt.startswith("["):
-                page.locator(opt).click(force=True, timeout=3000)
-            else:
-                page.locator(f'[role="option"]:has-text("{opt}")').first.click(force=True, timeout=3000)
-            time.sleep(0.3)
-            return True
-        except Exception:
-            pass
-
-    # Strategy 2: click the parent widget container
-    try:
-        container = page.evaluate(f"""() => {{
-            const el = document.querySelector('{sel}');
-            if (!el) return '';
-            const c = el.closest('[class*="ComboBox"], [class*="Dropdown"], [class*="Select"], [class*="widget"], .fieldComponentInput');
-            if (c && c.id) return '[id="' + c.id + '"]';
-            if (c && el.parentElement && el.parentElement.id) return '[id="' + el.parentElement.id + '"]';
-            return '';
-        }}""")
-        if container:
-            page.locator(container).click(force=True, timeout=3000)
-            time.sleep(0.5)
-            opt = page.evaluate(f"""() => {{
-                const ans = {json.dumps(ans)};
-                const match = Array.from(document.querySelectorAll('[role="option"], li, [role="menuitem"]')).find(o => o.offsetParent !== null && o.textContent.trim().toLowerCase().includes(ans.toLowerCase()));
-                return match ? (match.id ? '[id="' + match.id + '"]' : null) : null;
-            }}""")
-            if opt:
-                page.locator(opt).click(force=True, timeout=3000)
-                time.sleep(0.3)
-                return True
-    except Exception:
-        pass
-
-    # Strategy 3: native setter
-    return bool(_try_native_setter(page, sel, ans))
-
-
-def _fill_text_field(page, f, ans, sel, el):
-    """Fill a standard text/textarea field: fill if visible, native setter otherwise."""
-    val = {"maxlength": el.get_attribute("maxlength")} if el else {}
-    try:
-        ml = val.get("maxlength")
-        if ml and ans and len(ans) > int(ml):
-            ans = ans[: int(ml)]
-    except Exception:
-        pass
-    if f.get("placeholder") == "Search" or f.get("data_automation_id", ""):
-        return bool(_try_autocomplete(page, el, ans) or _try_native_setter(page, sel, ans))
-    return bool(_try_visible_fill(el, ans) or _try_native_setter(page, sel, ans))
-
-
 def _fill_field_deterministic(page, f, ans):
     """Dispatch to canonical strategy module."""
     from apply.strategies import field_deterministic as _fd
@@ -756,8 +495,9 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         # even if display text differs from answer — widget may translate codes)
         current_val = f.get("value", "")
         current_stripped = current_val.strip()
-        # Never skip placeholder/"no selection" values
-        if current_stripped.lower() in ("no selection", "select one", "select...", ""):
+        # Use isEmpty flag from field_reader, fallback to manual check
+        is_empty = f.get("isEmpty", current_stripped.lower() in ("no selection", "select one", "select...", "select an option", ""))
+        if is_empty:
             pass
         elif current_stripped and len(current_stripped) > 1:
             # For required fields, still check if answer contradicts the current value
@@ -882,6 +622,40 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         emit_next("retry after solving CAPTCHA")
         return
 
+    # LinkedIn Easy Apply: re-open modal if it closed (ephemeral overlay)
+    has_detect = state.get("_detect_fields", {}).get("fieldCount", 0) > 0
+    is_linkedin = "linkedin.com" in page.url.lower()
+    if is_linkedin and has_detect:
+        dialog_open = page.evaluate("() => !!document.querySelector('[role=dialog], dialog')")
+        if not dialog_open:
+            print("EASY_APPLY: modal closed, re-opening...", file=sys.stderr)
+            easy_apply = page.evaluate("""() => {
+                const all = document.querySelectorAll('button, a');
+                for (const el of all) {
+                    if (el.offsetParent === null) continue;
+                    const t = (el.textContent || '').trim().toLowerCase();
+                    if (t === 'easy apply' || t.startsWith('easy apply')) {
+                        el.click(); return true;
+                    }
+                }
+                return false;
+            }""")
+            if easy_apply:
+                time.sleep(2)
+                try:
+                    page.wait_for_selector('[role="dialog"], dialog', timeout=8000)
+                except Exception:
+                    pass
+            else:
+                print("EASY_APPLY: re-open failed, trying URL navigate", file=sys.stderr)
+                job_id_match = re.search(r"/jobs/view/(\d+)", page.url)
+                if job_id_match:
+                    page.goto(
+                        f"https://www.linkedin.com/jobs/view/{job_id_match.group(1)}/apply/?openSDUIApplyFlow=true",
+                        wait_until="domcontentloaded", timeout=30000,
+                    )
+                    time.sleep(3)
+
     # Registry + probe cascade
     domain = _domain(page.url)
     registry = resolve_registry(page.url)
@@ -942,6 +716,22 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         time.sleep(1)
         ps = read_page(page)
 
+    # Platform flow hook: replaces the entire fill/navigate/submit chain for
+    # platforms with ephemeral state (LinkedIn Easy Apply modals, etc.)
+    if registry and registry.flow_hook and registry.has_hook(registry.flow_hook):
+        result = registry.call_hook(registry.flow_hook, page, jid)
+        if result == "done":
+            emit_status("submitted")
+            emit_next("verify")
+            state["result"] = "submitted"
+            save_state(state)
+        elif result == "paused":
+            save_state(state)
+        elif result == "failed":
+            emit_status("flow_failed", "flow hook could not proceed")
+            emit_next("act --inspect")
+        return
+
     # Guard: if this page was already filled, warn but proceed
     last_fingerprint = state.get("page_fingerprint", "")
     label_fp = "_".join(f.get("label", "")[:20] for f in ps["fields"][:3])
@@ -971,71 +761,6 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
                 file=sys.stderr,
             )
             return
-
-    # Click "Easy Apply" on LinkedIn if present (before login wall check)
-    is_easy_apply = page.evaluate("""() => {
-        for (const el of document.querySelectorAll('button, a, [role="button"]')) {
-            if ((el.textContent || '').trim().toLowerCase() === 'easy apply') return true;
-        }
-        return false;
-    }""")
-    if is_easy_apply:
-        page.evaluate("""() => {
-            for (const el of document.querySelectorAll('button, a, [role="button"]')) {
-                if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
-            }
-        }""")
-        time.sleep(3)
-        ps = read_page(page)
-        if not ps.get("fieldCount", 0):
-            print("EASY_APPLY: click didn't open modal", file=sys.stderr)
-        else:
-            # Fill visible modal fields
-            from apply.common.resolve import resolution_for_fill
-            profile = {}
-            if os.path.exists(profile_path):
-                try: profile = json.load(open(profile_path))
-                except: pass
-            for f in ps["fields"]:
-                lbl = f.get("label", "")
-                if not lbl or f.get("type") in ("radio", "file") or not f.get("required"):
-                    continue
-                if f.get("value", "").strip():
-                    continue
-                ans = resolution_for_fill(lbl, profile)
-                if ans.value:
-                    sel = None
-                    if f.get("id"): sel = f'[id="{f["id"]}"]'
-                    elif f.get("name"): sel = f'[name="{f["name"]}"]'
-                    if sel:
-                        try:
-                            page.locator(sel).fill(ans.value)
-                        except Exception:
-                            page.evaluate(f"document.querySelector('{sel}')?.focus();document.execCommand('insertText', false, '{ans.value}')")
-            # Navigate through screens
-            for _ in range(8):
-                time.sleep(1)
-                ps = read_page(page)
-                text = (page_text(page) or "").lower()
-                if any(s in text for s in ["your application has been", "your application was", "has been sent", "thank you for", "successfully applied"]):
-                    get_conn().execute("UPDATE jobs SET stage='applied',applied_at=datetime('now') WHERE id=?", (jid,)).connection.commit()
-                    emit_status("submitted (LinkedIn Easy Apply)")
-                    emit_next("verify")
-                    return
-                if not ps.get("fieldCount", 0):
-                    break  # modal closed — abort
-                # Only click buttons inside the modal dialog, not page-level navigation
-                clicked = page.evaluate("""(kws) => {
-                    const dialog = document.querySelector('[role="dialog"]');
-                    if (!dialog) return false;
-                    for (const kw of kws) {
-                        const btn = dialog.querySelector('button:has-text("' + kw + '"), a:has-text("' + kw + '"), [role="button"]:has-text("' + kw + '")');
-                        if (btn && btn.offsetParent !== null) { btn.click(); return true; }
-                    }
-                    return false;
-                }""", [["Next", "Review", "Submit application", "Submit", "Done"]])
-                if not clicked:
-                    break
 
     # Check for login wall — try guest apply first, then abort
     text = page_text(page) or ""

@@ -90,9 +90,13 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
 
     if tailor_mode == "agent":
         script_dir = os.path.join(RESULTS_DIR, job_id)
-        print(f"PROMPT: generate script.py at {script_dir}/")
-        print(f"  Instructions: read the full prompt above, write script.py, then run: tailor.py admit {job_id}", file=sys.stderr)
-        return True, {"text": prompt, "response_path": None, "scripts": []}
+        os.makedirs(script_dir, exist_ok=True)
+        prompt_path = os.path.join(script_dir, "prompt.txt")
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            f.write(prompt)
+        print(f"PROMPT: {prompt_path}", file=sys.stderr)
+        print(f"  Instructions: read prompt.txt, write script.py, then run: tailor.py admit {job_id} --pdf <path>", file=sys.stderr)
+        return True, {"text": prompt, "response_path": prompt_path, "scripts": []}
 
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
@@ -209,19 +213,21 @@ def cmd_review(count=1):
     for jid, entry in batch:
         title = entry.get("title", "?")
         company = entry.get("company", "?")
-        script_path = os.path.join(RESULTS_DIR, jid, "script.py")
-        cl_text = ""
-        if os.path.exists(script_path):
-            with open(script_path, encoding="utf-8") as f:
-                script_src = f.read()
-            cl_match = re.search(r'COVER_LETTER_TEXT\s*=\s*"""(.+?)"""', script_src, re.DOTALL)
-            if cl_match:
-                cl_text = cl_match.group(1).strip()[:400]
         print(f"JOB {jid} {title} @ {company}", file=sys.stderr)
         print(f"  URL: {entry.get('url', '')}", file=sys.stderr)
-        if cl_text:
-            print(f"  COVER: {cl_text}", file=sys.stderr)
-        print(f"  APPROVED or REJECT --feedback \"reason\"?", file=sys.stderr)
+        # Show cover letter from PDF
+        rd = os.path.join(RESULTS_DIR, jid)
+        if os.path.isdir(rd):
+            covers = [f for f in os.listdir(rd) if "Cover" in f and f.endswith(".pdf")]
+            if covers:
+                try:
+                    import PyPDF2
+                    with open(os.path.join(rd, covers[0]), "rb") as f:
+                        ct = " ".join(p.extract_text() for p in PyPDF2.PdfReader(f).pages)
+                    print(f"  COVER: {ct[:500]}", file=sys.stderr)
+                except Exception:
+                    pass
+        print(f"  apprentice admit/reject/retry --feedback '...' ?", file=sys.stderr)
 
 
 def cmd_admit(*job_ids, pdf_path=None):
@@ -237,6 +243,16 @@ def cmd_admit(*job_ids, pdf_path=None):
         if pdf_path and not os.path.exists(pdf_path):
             print(f"PDF_NOT_FOUND: {job_id} — {pdf_path}", file=sys.stderr)
             continue
+        if not pdf_path:
+            rd = os.path.join(RESULTS_DIR, job_id)
+            if os.path.isdir(rd):
+                pdfs = [f for f in os.listdir(rd) if f.endswith('.pdf') and 'Resume' in f]
+                if pdfs:
+                    pdf_path = os.path.join(rd, pdfs[0])
+                else:
+                    print(f"NO_PDF: {job_id} — no Resume PDF in {rd}", file=sys.stderr)
+                    print(f"  Run tailor.py retry {job_id} to re-generate, or use --pdf", file=sys.stderr)
+                    continue
         entry = state["jobs"][job_id]
         if entry.get("state") != "active":
             print(f"  {job_id}: admitted with state '{entry.get('state')}' -> active", file=sys.stderr)

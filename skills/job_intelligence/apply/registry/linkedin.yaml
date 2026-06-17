@@ -1,0 +1,30 @@
+name: linkedin
+version: 1
+
+detect:
+  domains:
+    - linkedin.com
+
+flow_hook: easy_apply_flow
+
+probe:
+  best_strategy: dialog
+  widgets: {}
+
+patterns:
+  already_applied:
+    - "applied"
+  easy_apply:
+    - "easy apply"
+
+properties:
+  multi_page: true
+  has_eeo: false
+  has_progress_bar: true
+  page_range: [1, 10]
+
+notes: |
+  LinkedIn Easy Apply: ephemeral modal overlay. Resume selection requires label click +
+  event dispatch (radio.click() doesn't trigger LinkedIn's Ember.js handlers).
+  Flow hook: easy_apply_flow in linkedin.py — re-entrant, called by act --fill.
+  Pauses for LLM input when fields can't be resolved via profile+answers.
