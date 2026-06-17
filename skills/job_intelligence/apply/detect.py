@@ -172,7 +172,10 @@ def run(jid):
         }"""
         )
 
-        if any(b["text"] == "Applied" for b in buttons):
+        has_easy_apply = any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons)
+        has_applied = any(b["text"] == "Applied" for b in buttons)
+
+        if has_applied and not has_easy_apply:
             emit_type("already_applied")
             emit_next("none")
             _merge_state({"jid": jid})
