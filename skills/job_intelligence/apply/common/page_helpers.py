@@ -31,6 +31,42 @@ def tag_page(page, jid):
     _PAGE_JID_MAP[id(page)] = jid  # cache for current process
 
 
+def mark_applied(jid):
+    """Update DB stage to applied."""
+    from lib.db import get_conn
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    get_conn().execute(
+        "UPDATE jobs SET stage='applied', updated_at=?, applied_at=? WHERE id=?",
+        (ts, ts, jid),
+    ).connection.commit()
+
+
+def check_applied_signal(page):
+    """Check page for successful application signals. Returns True if applied."""
+    try:
+        body = (page.evaluate("() => document.body.innerText") or "").lower()
+    except Exception:
+        return False
+    signals = ["your application has been", "your application was",
+               "has been sent", "application received", "you have applied",
+               "thank you for applying", "application submitted"]
+    for s in signals:
+        if s in body:
+            return True
+    try:
+        found = page.evaluate("""() => {
+            const all = document.querySelectorAll('button, a, span, div');
+            for (const el of all) {
+                const t = (el.textContent || '').trim().toLowerCase();
+                if (t === 'applied' || t === 'application submitted') return true;
+            }
+            return false;
+        }""")
+        return bool(found)
+    except Exception:
+        return False
+
+
 def read_page_tag(page):
     """Read persistent JID tag from DOM."""
     try:
@@ -82,14 +118,22 @@ def page_html(page):
 
 
 def check_captcha(page):
-    """Check if the current page has a CAPTCHA challenge. Returns True if detected."""
+    """Check if the current page has a CAPTCHA challenge. Returns True if detected.
+    Only flags CAPTCHA if the challenge is visible (has a visible iframe or widget),
+    not just because a keyword appears in a script tag."""
     try:
+        # Check for visible challenge widget first — most reliable
+        has_widget = page.evaluate("""() => {
+            const sel = 'iframe[src*="challenge"], [class*="cf-browser"], [id*="challenge"], [class*="challenge"], [class*="turnstile"]';
+            return !!document.querySelector(sel);
+        }""")
+        if has_widget:
+            return True
+        # Fallback: check body text for CAPTCHA keywords
         text = page_text(page).lower()
-        html = page_html(page).lower()
         for kw in ["verify you are human", "security check", "i'm not a robot", "complete the security check"]:
-            if kw in text: return True
-        for sig in _CAPTCHA_SIGNALS:
-            if sig in html: return True
+            if kw in text:
+                return True
         return False
     except Exception:
         return False
@@ -179,7 +223,14 @@ def read_page(p, custom_widgets=None):
                 custom_widgets = cw
         except Exception:
             pass
-    result = _rf(p, scope="document", custom_widgets=custom_widgets)
+    # If a dialog/modal is open, prefer dialog scope over document — document
+    # includes site chrome (nav, search, sidebar) that drowns out real fields.
+    has_dialog = p.evaluate("() => !!document.querySelector('[role=dialog], dialog, [data-test-form-builder]')")
+    if has_dialog:
+        result = _rf(p, scope="dialog", custom_widgets=custom_widgets)
+        result["_scoped_to"] = "dialog"
+    else:
+        result = _rf(p, scope="document", custom_widgets=custom_widgets)
     if result["fieldCount"] == 0:
         result = _rf(p, scope="dialog", custom_widgets=custom_widgets)
     # Iframe fallback: some ATS embed forms in same-origin iframes.

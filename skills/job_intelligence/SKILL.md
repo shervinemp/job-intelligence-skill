@@ -69,17 +69,24 @@ If the cover letter or CV needs fixes: `retry <jid> --feedback "what to fix"` �
 ## Apply pipeline
 
 ```
-detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --submit --confirm <jid> → verify <jid>
+detect [<jid>] → [navigate] → act --fill (repeats if paused) → verify <jid>
+```
+
+For platforms with ephemeral modals (LinkedIn Easy Apply), `act --fill` runs a **flow hook** that handles the entire submission (fill → next → review → submit) in one process. If fields need LLM input, it pauses and emits `NEXT: act --fill --answers '...'`. Re-run with answers to continue.
+
+For standard ATS pages, the step-by-step flow still applies:
+```
+act --fill → act --next (repeat) → act --submit --confirm
 ```
 
 | Step | What it does |
 |------|-------------|
 | `detect [<jid>]` | Pre-flight: DB stage, PDF, classify type. Omit JID to auto-pick first tailored. Outputs `TYPE:` + `NEXT:`. |
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS. Auto-clicks "Apply now" on job listing pages. Prompts for login on auth wall — cookies persist via Chrome profile. |
-| `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
-| `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
+| `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill fields. For platforms with a `flow_hook` in registry (LinkedIn), runs full submission flow in one process. For others, standard fill. `--answers` exact → profile. `--dry-run` previews without DOM changes. |
+| `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). Not used for flow-hook platforms. |
 | `act --back <jid>` | Click Back |
-| `act --submit <jid> --confirm` | Submit. **`--confirm` req'd** — dry-run w/o. Checks validation errors, CAPTCHA, success text. |
+| `act --submit <jid> --confirm` | Submit. **`--confirm` req'd**. Not used for flow-hook platforms. |
 | `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 | `apply.py reject <jid>` | Skip permanently |
@@ -99,7 +106,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 - Pipeline cannot create accounts, remember passwords, or handle 2FA.
 - 3x guard: same page 3 fills in a row → warns.
 - EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `common_answers.eeo` for reuse.
-- Platform registry (`apply/registry/*.yaml`): per-ATS widget overrides. `widget_parent` config controls dropdown parent selector.
+- Platform registry (`apply/registry/*.yaml`): per-ATS config. `flow_hook` property declares a re-entrant flow hook (called by `act --fill`) for platforms with ephemeral modals. `widget_parent` config controls dropdown parent selector.
 
 ## Platform quirks
 
@@ -109,7 +116,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | Greenhouse | No `<select>` — all custom autocomplete. Country = `<input>`. "Submit application" = real button ("Apply" = scroll trigger). |
 | Lever | 0 fields → follow apply-link → `/apply`. Labels: `<label><div>Text</div><div><input></div></label>`. No Select/Radio. |
 | Workday | 7-step SPA (Info → Experience → Questions → Disclosures → Review). DROPDOWN=`button[aria-haspopup]`. Phone: strip +1 prefix. Skills: type + Enter. Per-company login. |
-| LinkedIn | Easy Apply (modal, Next/Review/Submit) vs External (`<a>` tag, safety redirect). detect checks `<a>` + `<button>`. |
+| LinkedIn | Easy Apply: ephemeral modal — `flow_hook` in registry/linkedin.py handles full flow in `act --fill`. Resume selection via label click + event dispatch. External: `<a>` tag with safety redirect. |
 
 ## Account & login notes
 

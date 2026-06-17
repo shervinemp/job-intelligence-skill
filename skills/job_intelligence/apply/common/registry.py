@@ -26,6 +26,7 @@ class RegistryConfig:
         self.has_eeo = data.get("properties", {}).get("has_eeo", False)
         self.has_progress_bar = data.get("properties", {}).get("has_progress_bar", False)
         self.page_range = tuple(data.get("properties", {}).get("page_range", [1, 10]))
+        self.flow_hook = data.get("flow_hook", "")
         self.notes = data.get("notes", "")
         self._hook_module = hook_module
 

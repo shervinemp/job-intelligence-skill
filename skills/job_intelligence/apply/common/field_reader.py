@@ -76,11 +76,17 @@ _READER_JS = """(config) => {
         return o.slice(0, 40);
     }
 
+    var PLACEHOLDER_VALUES = ['select an option', 'select one', 'select...', 'no selection', '- select -', 'choose'];
+    function isEmptyValue(v) {
+        return !v || PLACEHOLDER_VALUES.indexOf(v.trim().toLowerCase()) >= 0;
+    }
+
     function fieldFromElement(el, scopeRoot) {
         const label = resolveLabel(el, scopeRoot);
         const opts = el.tagName === 'SELECT'
             ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0, 15)
             : [];
+        const rawVal = el.value || '';
         return {
             tag: el.tagName, type: el.getAttribute('type') || '',
             id: el.id, name: el.getAttribute('name') || '',
@@ -89,7 +95,8 @@ _READER_JS = """(config) => {
             data_automation_id: el.getAttribute('data-automation-id') || '',
             role: el.getAttribute('role') || '',
             required: !!el.required || el.getAttribute('aria-required') === 'true',
-            value: el.value || '', checked: el.type === 'radio' ? el.checked : null,
+            value: rawVal, isEmpty: isEmptyValue(rawVal),
+            checked: el.type === 'radio' ? el.checked : null,
             multiple: el.tagName === 'SELECT' && el.multiple || false, options: opts,
             datepicker: el.type === 'date' ? 'native'
                 : el.classList.contains('flatpickr-input') || (el.closest && el.closest('.flatpickr')) ? 'flatpickr' : '',

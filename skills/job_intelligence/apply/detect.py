@@ -93,10 +93,11 @@ def run(jid):
             _merge_state({"jid": jid})
             sys.exit(0)
 
+
     # Classify type
     b, ctx = connect()
     p = ctx.new_page()
-    page_owner = True  # track whether we should close p at exit
+    page_owner = True
 
     def _close_p():
         nonlocal page_owner
@@ -140,6 +141,10 @@ def run(jid):
 
         p.on("response", _handle_response)
 
+        from apply.common.page_manager import PageManager
+        pm = PageManager(ctx, jid)
+        pm.close_stale(target_url=url)
+
         # First check the regular job page for external apply button
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
         try:
@@ -147,20 +152,10 @@ def run(jid):
         except Exception:
             pass
         time.sleep(2)
-        from apply.common.page_manager import PageManager
 
-        pm = PageManager(ctx, jid)
-        pm.close_stale(target_url=url)
         pm.register(p)
 
-        # Click "Easy Apply" button to open modal (if direct URL didn't auto-open)
-        p.evaluate("""() => {
-            for (const el of document.querySelectorAll('button, a, [role="button"]')) {
-                if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
-            }
-        }""")
-        time.sleep(3)
-
+        # Read buttons BEFORE clicking Easy Apply (the click may remove the button)
         buttons = p.evaluate(
             """() => {
             const all = document.querySelectorAll('button, a');
@@ -172,12 +167,25 @@ def run(jid):
         }"""
         )
 
-        if any(b["text"] == "Applied" for b in buttons):
+        has_easy_apply = any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons)
+        has_applied = any(b["text"] == "Applied" for b in buttons)
+
+        if has_applied and not has_easy_apply:
             emit_type("already_applied")
             emit_next("none")
             _merge_state({"jid": jid})
             _close_p()
             sys.exit(0)
+
+        # Click "Easy Apply" if present (before external URL check)
+        if has_easy_apply:
+            p.evaluate("""() => {
+                for (const el of document.querySelectorAll('button, a, [role="button"]')) {
+                    if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
+                }
+            }""")
+            time.sleep(3)
+
         if any("on company website" in (b.get("aria") or "").lower() for b in buttons):
             ext_url = p.evaluate("""() => {
                 const anchors = document.querySelectorAll('a[href]');
@@ -231,7 +239,15 @@ def run(jid):
             _close_p()
             return
 
+        # Poll for fields — LinkedIn modal renders form elements async (Ember.js)
         page_state = read_page(p)
+        if page_state.get("fieldCount", 0) == 0:
+            for _ in range(20):
+                time.sleep(0.5)
+                page_state = read_page(p)
+                if page_state.get("fieldCount", 0) > 0:
+                    print(f"  Modal fields loaded after {(_+1)*0.5:.0f}s", file=sys.stderr)
+                    break
         buttons = p.evaluate(
             """() => {
             const all = document.querySelectorAll('button, a');
@@ -245,29 +261,23 @@ def run(jid):
 
         reg = resolve_registry(url)
         if page_state and page_state["fieldCount"] > 0:
-            page_owner = False  # keep page open for act --fill
-            tag_page(p, jid)
-            _merge_state({"jid": jid, "_detect_fields": page_state, "external_url": p.url})
             emit_type("easy_apply")
             if reg:
                 reg.emit_notes()
+            _merge_state({"jid": jid, "_detect_fields": page_state, "external_url": p.url})
             emit_next("act --fill")
         elif apply_fields:
             fb = {"fieldCount": len(apply_fields), "fields": apply_fields}
-            page_owner = False
-            tag_page(p, jid)
-            _merge_state({"jid": jid, "_detect_fields": fb, "external_url": p.url})
             emit_type("easy_apply")
             if reg:
                 reg.emit_notes()
+            _merge_state({"jid": jid, "_detect_fields": fb, "external_url": p.url})
             emit_next("act --fill")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
-            page_owner = False
-            tag_page(p, jid)
-            _merge_state({"jid": jid, "external_url": p.url})
-            emit_type("easy_apply", "dialog not auto-opened")
+            emit_type("easy_apply", "modal not auto-opened")
             if reg:
                 reg.emit_notes()
+            _merge_state({"jid": jid, "external_url": p.url})
             emit_next("act --fill")
         else:
             emit_type("unknown")
