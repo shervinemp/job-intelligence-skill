@@ -149,26 +149,29 @@ def easy_apply_flow(page, jid):
         "paused" — needs LLM input (unfilled fields without answers). State saved.
         "failed" — can't proceed (no dialog, no buttons)
     """
-    # Ensure dialog is open
+    # Ensure dialog is open (poll for up to 10s — LinkedIn loads async)
     has_dialog = page.evaluate("() => !!document.querySelector('[role=dialog], dialog')")
     if not has_dialog:
-        # Try clicking Easy Apply button
-        clicked = page.evaluate("""() => {
-            const all = document.querySelectorAll('button, a');
-            for (const el of all) {
-                if (el.offsetParent === null) continue;
-                const t = (el.textContent || '').trim().toLowerCase();
-                if (t === 'easy apply' || t.startsWith('easy apply')) {
-                    el.click(); return true;
+        dialog_opened = False
+        for _ in range(20):
+            clicked = page.evaluate("""() => {
+                const all = document.querySelectorAll('button, a');
+                for (const el of all) {
+                    if (el.offsetParent === null) continue;
+                    const t = (el.textContent || '').trim().toLowerCase();
+                    if (t === 'easy apply' || t.startsWith('easy apply')) {
+                        el.click(); return true;
+                    }
                 }
-            }
-            return false;
-        }""")
-        if not clicked:
-            return "failed"
-        time.sleep(2)
-        has_dialog = page.evaluate("() => !!document.querySelector('[role=dialog], dialog')")
-        if not has_dialog:
+                return false;
+            }""")
+            if clicked:
+                time.sleep(1.5)
+                if page.evaluate("() => !!document.querySelector('[role=dialog], dialog')"):
+                    dialog_opened = True
+                    break
+            time.sleep(0.5)
+        if not dialog_opened:
             return "failed"
 
     time.sleep(1.5)
