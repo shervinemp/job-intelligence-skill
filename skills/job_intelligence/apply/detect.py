@@ -93,10 +93,11 @@ def run(jid):
             _merge_state({"jid": jid})
             sys.exit(0)
 
+
     # Classify type
     b, ctx = connect()
     p = ctx.new_page()
-    page_owner = True  # track whether we should close p at exit
+    page_owner = True
 
     def _close_p():
         nonlocal page_owner
@@ -140,6 +141,10 @@ def run(jid):
 
         p.on("response", _handle_response)
 
+        from apply.common.page_manager import PageManager
+        pm = PageManager(ctx, jid)
+        pm.close_stale(target_url=url)
+
         # First check the regular job page for external apply button
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
         try:
@@ -147,10 +152,7 @@ def run(jid):
         except Exception:
             pass
         time.sleep(2)
-        from apply.common.page_manager import PageManager
 
-        pm = PageManager(ctx, jid)
-        pm.close_stale(target_url=url)
         pm.register(p)
 
         # Read buttons BEFORE clicking Easy Apply (the click may remove the button)
@@ -237,7 +239,15 @@ def run(jid):
             _close_p()
             return
 
+        # Poll for fields — LinkedIn modal renders form elements async (Ember.js)
         page_state = read_page(p)
+        if page_state.get("fieldCount", 0) == 0:
+            for _ in range(20):
+                time.sleep(0.5)
+                page_state = read_page(p)
+                if page_state.get("fieldCount", 0) > 0:
+                    print(f"  Modal fields loaded after {(_+1)*0.5:.0f}s", file=sys.stderr)
+                    break
         buttons = p.evaluate(
             """() => {
             const all = document.querySelectorAll('button, a');
@@ -251,82 +261,23 @@ def run(jid):
 
         reg = resolve_registry(url)
         if page_state and page_state["fieldCount"] > 0:
-            # Full flow: modal is open with fields — fill and submit now (one process)
-            # BUT do NOT mark as applied — let verify confirm submission
-            from apply.common.resolve import resolution_for_fill
-            profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
-            profile = {}
-            if os.path.exists(profile_path):
-                try: profile = json.load(open(profile_path))
-                except: pass
-            for f in page_state["fields"]:
-                lbl = f.get("label", "")
-                if not lbl or not f.get("required") or f.get("value", "").strip():
-                    continue
-                ans = resolution_for_fill(lbl, profile)
-                if ans.value:
-                    sel = f'[id="{f["id"]}"]' if f.get("id") else (f'[name="{f["name"]}"]' if f.get("name") else None)
-                    if sel:
-                        try: p.locator(sel).fill(ans.value)
-                        except: pass
-            # Navigate through screens
-            for _ in range(8):
-                time.sleep(1)
-                try:
-                    dialog = p.evaluate("() => !!document.querySelector('[role=\"dialog\"]')")
-                    if not dialog:
-                        break
-                except Exception:
-                    break  # page navigated — exit loop
-                # Check for real success (title change is most reliable)
-                try:
-                    title = (p.evaluate("document.title") or "").lower()
-                except Exception:
-                    break
-                if "successfully applied" in title or "application submitted" in title or "thank you for applying" in title:
-                    _merge_state({"jid": jid, "external_url": p.url})
-                    emit_type("easy_apply", "submitted")
-                    emit_next("verify")
-                    sys.exit(0)
-                # Click navigation buttons inside dialog
-                for kw in ["Next", "Review", "Submit application", "Submit", "Done"]:
-                    clicked = p.evaluate(f"""() => {{
-                        const d = document.querySelector('[role="dialog"]');
-                        if (!d) return false;
-                        for (const el of d.querySelectorAll('button, a, [role="button"]')) {{
-                            if (el.offsetParent !== null && (el.textContent || '').trim().toLowerCase() === '{kw.lower()}') {{
-                                el.click(); return true;
-                            }}
-                        }}
-                        return false;
-                    }}""")
-                    if clicked:
-                        time.sleep(1)
-                        break
-            # Fallback: modal closed or flow done — hand to fill for remaining
-            page_owner = False
-            tag_page(p, jid)
-            _merge_state({"jid": jid, "_detect_fields": page_state, "external_url": p.url})
             emit_type("easy_apply")
             if reg:
                 reg.emit_notes()
+            _merge_state({"jid": jid, "_detect_fields": page_state, "external_url": p.url})
             emit_next("act --fill")
         elif apply_fields:
             fb = {"fieldCount": len(apply_fields), "fields": apply_fields}
-            page_owner = False
-            tag_page(p, jid)
-            _merge_state({"jid": jid, "_detect_fields": fb, "external_url": p.url})
             emit_type("easy_apply")
             if reg:
                 reg.emit_notes()
+            _merge_state({"jid": jid, "_detect_fields": fb, "external_url": p.url})
             emit_next("act --fill")
         elif any("easy apply" in (b.get("aria") or b["text"]).lower() for b in buttons):
-            page_owner = False
-            tag_page(p, jid)
-            _merge_state({"jid": jid, "external_url": p.url})
-            emit_type("easy_apply", "dialog not auto-opened")
+            emit_type("easy_apply", "modal not auto-opened")
             if reg:
                 reg.emit_notes()
+            _merge_state({"jid": jid, "external_url": p.url})
             emit_next("act --fill")
         else:
             emit_type("unknown")

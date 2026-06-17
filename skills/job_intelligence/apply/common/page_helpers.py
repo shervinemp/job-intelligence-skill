@@ -31,6 +31,42 @@ def tag_page(page, jid):
     _PAGE_JID_MAP[id(page)] = jid  # cache for current process
 
 
+def mark_applied(jid):
+    """Update DB stage to applied."""
+    from lib.db import get_conn
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    get_conn().execute(
+        "UPDATE jobs SET stage='applied', updated_at=?, applied_at=? WHERE id=?",
+        (ts, ts, jid),
+    ).connection.commit()
+
+
+def check_applied_signal(page):
+    """Check page for successful application signals. Returns True if applied."""
+    try:
+        body = (page.evaluate("() => document.body.innerText") or "").lower()
+    except Exception:
+        return False
+    signals = ["your application has been", "your application was",
+               "has been sent", "application received", "you have applied",
+               "thank you for applying", "application submitted"]
+    for s in signals:
+        if s in body:
+            return True
+    try:
+        found = page.evaluate("""() => {
+            const all = document.querySelectorAll('button, a, span, div');
+            for (const el of all) {
+                const t = (el.textContent || '').trim().toLowerCase();
+                if (t === 'applied' || t === 'application submitted') return true;
+            }
+            return false;
+        }""")
+        return bool(found)
+    except Exception:
+        return False
+
+
 def read_page_tag(page):
     """Read persistent JID tag from DOM."""
     try:
@@ -187,7 +223,14 @@ def read_page(p, custom_widgets=None):
                 custom_widgets = cw
         except Exception:
             pass
-    result = _rf(p, scope="document", custom_widgets=custom_widgets)
+    # If a dialog/modal is open, prefer dialog scope over document — document
+    # includes site chrome (nav, search, sidebar) that drowns out real fields.
+    has_dialog = p.evaluate("() => !!document.querySelector('[role=dialog], dialog, [data-test-form-builder]')")
+    if has_dialog:
+        result = _rf(p, scope="dialog", custom_widgets=custom_widgets)
+        result["_scoped_to"] = "dialog"
+    else:
+        result = _rf(p, scope="document", custom_widgets=custom_widgets)
     if result["fieldCount"] == 0:
         result = _rf(p, scope="dialog", custom_widgets=custom_widgets)
     # Iframe fallback: some ATS embed forms in same-origin iframes.
