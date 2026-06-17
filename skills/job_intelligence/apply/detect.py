@@ -153,14 +153,7 @@ def run(jid):
         pm.close_stale(target_url=url)
         pm.register(p)
 
-        # Click "Easy Apply" button to open modal (if direct URL didn't auto-open)
-        p.evaluate("""() => {
-            for (const el of document.querySelectorAll('button, a, [role="button"]')) {
-                if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
-            }
-        }""")
-        time.sleep(3)
-
+        # Read buttons BEFORE clicking Easy Apply (the click may remove the button)
         buttons = p.evaluate(
             """() => {
             const all = document.querySelectorAll('button, a');
@@ -181,6 +174,16 @@ def run(jid):
             _merge_state({"jid": jid})
             _close_p()
             sys.exit(0)
+
+        # Click "Easy Apply" if present (before external URL check)
+        if has_easy_apply:
+            p.evaluate("""() => {
+                for (const el of document.querySelectorAll('button, a, [role="button"]')) {
+                    if ((el.textContent || '').trim().toLowerCase() === 'easy apply') { el.click(); return; }
+                }
+            }""")
+            time.sleep(3)
+
         if any("on company website" in (b.get("aria") or "").lower() for b in buttons):
             ext_url = p.evaluate("""() => {
                 const anchors = document.querySelectorAll('a[href]');
