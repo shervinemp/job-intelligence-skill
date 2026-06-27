@@ -69,15 +69,6 @@ def _validate_profile(profile):
         )
 
 
-def _match_word(needle, haystack):
-    """Word-boundary match: 'phone' matches 'phone number' but NOT 'phone extension'."""
-    return (
-        f" {needle} " in f" {haystack} "
-        or haystack.startswith(f"{needle} ")
-        or haystack.endswith(f" {needle}")
-    )
-
-
 def _find_answer(label, label_norm, answers, ca, profile, required=False, available_options=None):
     """Find answer via resolve chain. Ignores ca (old common_answers) — resolve reads profile directly."""
     res = resolution_for_fill(label, profile, answers_override=answers, available_options=available_options)
@@ -139,7 +130,8 @@ def _click_candidate(page, c, state=None):
                 const all = document.querySelectorAll('a');
                 for (const el of all) {{
                     if (el.offsetParent === null) continue;
-                    if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return true; }}
+                    if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click()
+    return true; }}
                 }}
                 return false;
             }}""",
@@ -152,7 +144,8 @@ def _click_candidate(page, c, state=None):
             const all = document.querySelectorAll('button');
             for (const el of all) {{
                 if (el.offsetParent === null) continue;
-                if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click(); return true; }}
+                if ((el.textContent || '').trim().toLowerCase() === txt) {{ el.click()
+    return true; }}
             }}
             return false;
         }}""",
@@ -447,6 +440,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
     file_uploaded = False
     _RESUME_DIR = None
     _seen_labels = set()
+    _conditional_depth = 0
 
     for f in fields:
         prev_filled = filled
@@ -523,15 +517,17 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
 
         if _fill_field_deterministic(page, f, ans):
             filled += 1
-            # After filling a field, check for new conditional fields
-            try:
-                _ps = read_page(page)
-                _new = [nf for nf in _ps.get("fields", []) if nf.get("required") and nf.get("label", "") not in _seen_labels]
-                if _new:
-                    fields.extend(f for f in _new if f not in fields)
-                    _seen_labels.update(nf.get("label", "") for nf in _new)
-            except Exception:
-                pass
+            # After filling a field, check for new conditional fields (max 3 levels)
+            if _conditional_depth < 3:
+                try:
+                    _ps = read_page(page)
+                    _new = [nf for nf in _ps.get("fields", []) if nf.get("required") and nf.get("label", "") not in _seen_labels]
+                    if _new:
+                        _conditional_depth += 1
+                        fields.extend(f for f in _new if f not in fields)
+                        _seen_labels.update(nf.get("label", "") for nf in _new)
+                except Exception:
+                    pass
         elif f.get("required"):
             unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
 
@@ -617,7 +613,6 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
                 print("ERROR: no page found and no external URL", file=sys.stderr)
                 return
     handle_session_timeout(page)
-    handle_session_timeout(page)
     if handle_captcha(page, state):
         emit_next("retry after solving CAPTCHA")
         return
@@ -635,7 +630,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
                     if (el.offsetParent === null) continue;
                     const t = (el.textContent || '').trim().toLowerCase();
                     if (t === 'easy apply' || t.startsWith('easy apply')) {
-                        el.click(); return true;
+                        el.click()
+    return true;
                     }
                 }
                 return false;
@@ -795,7 +791,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
                         for (const el of all) {{
                             if (el.offsetParent === null) continue;
                             if ((el.textContent || '').trim().toLowerCase() === gp) {{
-                                el.click(); return;
+                                el.click()
+    return;
                             }}
                         }}
                     }}""",
@@ -1414,6 +1411,12 @@ def cmd_submit(jid, confirm=False, candidate=None):
         file=sys.stderr,
     )
 
+    # Platform pre-submit hook (e.g., scroll to reveal button)
+    reg = resolve_registry(page.url)
+    if reg and reg.has_hook("pre_submit"):
+        reg.call_hook("pre_submit", page)
+        time.sleep(1)
+
     before_hash = _page_hash(page)
     b_loc = page.locator(f'button:has-text("{target["text"]}"), a:has-text("{target["text"]}"), [role="button"]:has-text("{target["text"]}")')
     if b_loc.count() == 0:
@@ -1539,7 +1542,8 @@ def cmd_inspect(jid, candidate=None):
     state = load_state()
     if state.get("jid") != jid:
         emit_error(f"state is for job {state.get('jid','?')}, not {jid}")
-        print("  Run detect first.", file=sys.stderr); return
+        print("  Run detect first.", file=sys.stderr)
+    return
 
     from apply.common.inspect_lib import capture, probe_state
     from lib.ask_api import available as _vision_available

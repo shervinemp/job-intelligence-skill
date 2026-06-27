@@ -33,7 +33,8 @@ Before running pipeline, read these:
 | `enrich.py retry-skipped` | Reset skipped → extracted |
 | `enrich.py open [<jid>]` | Open in Chrome |
 | `tailor.py [--auto]` | Start tailoring (crafst 1, --auto = all) |
-| `tailor.py admit <jid> [--pdf <path>]` (also: done) | Confirm PDF → stage = tailored |
+| `tailor.py admit <jid>` | Confirm → stage = tailored (auto-finds resume in results dir) |
+| `tailor.py build <jid>` | Validate resume.json schema + quality, build PDFs |
 | `tailor.py reject <jid>` | Skip |
 | `tailor.py undo <jid>` | Move back one stage |
 | `tailor.py review [--jobs N]` | Review tailored jobs (approve or retry --feedback) |
@@ -44,14 +45,24 @@ Before running pipeline, read these:
 | `lib/ask_api.py [--img <path>] --prompt <text>` | Query LLM API |
 | `report.py stats` | Pipeline state + next step |
 
+
 ## Tailoring
+
+Data/build separation: the LLM writes a `resume.json` data file (no code). A shared builder (`lib/build_resume.py`) reads the JSON and produces PDFs. The JSON is easy to review for quality issues (pandering, hallucination, title creep) without parsing code.
 
 Two backends via `JI_TAILOR` env var:
 
-- **`JI_TAILOR=agent`** (default): Prompt printed to stdout. Write `script.py` based on instructions, run it to produce PDF, `admit <jid> --pdf <path>` verifies file + advances stage.
-- **`JI_TAILOR=gem`**: Uses Gemini Web gem. Gem generates `script.py`, pipeline runs it inline, PDF appears. Run `admit <jid>` to confirm + advance stage.
+- **`JI_TAILOR=agent`** (default): Prompt printed to stdout. Write `resume.json` in [JSON Resume](https://jsonresume.org/) format (standard — LLMs already know it). Build and admit:
+  ```
+  tailor.py build <jid>                # schema validation + PDF generation
+  tailor.py admit <jid>                # confirm and advance stage (auto-finds resume)
+  ```
+  The LLM reads the generated resume.json and PDFs to judge quality before admitting.
+- **`JI_TAILOR=gem`**: Uses Gemini Web gem. Gem generates `resume.json`, builder runs inline. Run `admit <jid>` to confirm + advance stage.
 
-Both routes converge on `admit` (or `done` for backward compat) — gem route skips `--pdf` (PDF auto-generated), agent route should provide it. `admit` advances DB stage to "tailored" (CV ready). Apply pipeline advances to "applied" (form submitted).
+Both routes converge on `admit` — gem route auto-builds PDFs, agent route requires manual build step. `admit` advances DB stage to "tailored" (CV ready). Apply pipeline advances to "applied" (form submitted).
+
+**Cover letter** is stored in the `coverLetter` field of the JSON Resume (custom extension). The builder automatically generates a separate Cover Letter PDF if this field is present. The cover letter text is plain text (no markdown), maximum 3 paragraphs, no logistics (salary, availability dates).
 
 Prompt does not include default resume — fill in CV content from candidate profile + job requirements.
 
@@ -63,30 +74,27 @@ After tailoring, optionally review generated CVs before admitting:
 tailor.py review [--jobs N]
 ```
 
-Shows the job title, URL, and cover letter snippet. Run `report.py inspect <jid>` for the full strategy.
+Shows the job title, URL, and cover letter from the generated PDF. Run `report.py inspect <jid>` for the full strategy.
 If the cover letter or CV needs fixes: `retry <jid> --feedback "what to fix"` — injects feedback + previous response and re-tailors immediately.
+
+The `resume.json` data file lives at `results/<jid>/resume.json`. You can read it directly to check for quality issues: does it mention the company name? Does it pander? Are there fabricated metrics? JSON is easier to audit than fpdf2 code.
+
+The builder also validates the JSON before generating PDFs — run `--validate` separately to check without building:
 
 ## Apply pipeline
 
 ```
-detect [<jid>] → [navigate] → act --fill (repeats if paused) → verify <jid>
-```
-
-For platforms with ephemeral modals (LinkedIn Easy Apply), `act --fill` runs a **flow hook** that handles the entire submission (fill → next → review → submit) in one process. If fields need LLM input, it pauses and emits `NEXT: act --fill --answers '...'`. Re-run with answers to continue.
-
-For standard ATS pages, the step-by-step flow still applies:
-```
-act --fill → act --next (repeat) → act --submit --confirm
+detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --submit --confirm <jid> → verify <jid>
 ```
 
 | Step | What it does |
 |------|-------------|
 | `detect [<jid>]` | Pre-flight: DB stage, PDF, classify type. Omit JID to auto-pick first tailored. Outputs `TYPE:` + `NEXT:`. |
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS. Auto-clicks "Apply now" on job listing pages. Prompts for login on auth wall — cookies persist via Chrome profile. |
-| `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill fields. For platforms with a `flow_hook` in registry (LinkedIn), runs full submission flow in one process. For others, standard fill. `--answers` exact → profile. `--dry-run` previews without DOM changes. |
-| `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). Not used for flow-hook platforms. |
+| `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
+| `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
-| `act --submit <jid> --confirm` | Submit. **`--confirm` req'd**. Not used for flow-hook platforms. |
+| `act --submit <jid> --confirm` | Submit. **`--confirm` req'd** — dry-run w/o. Checks validation errors, CAPTCHA, success text. |
 | `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 | `apply.py reject <jid>` | Skip permanently |
@@ -106,7 +114,7 @@ act --fill → act --next (repeat) → act --submit --confirm
 - Pipeline cannot create accounts, remember passwords, or handle 2FA.
 - 3x guard: same page 3 fills in a row → warns.
 - EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `common_answers.eeo` for reuse.
-- Platform registry (`apply/registry/*.yaml`): per-ATS config. `flow_hook` property declares a re-entrant flow hook (called by `act --fill`) for platforms with ephemeral modals. `widget_parent` config controls dropdown parent selector.
+- Platform registry (`apply/registry/*.yaml`): per-ATS widget overrides. `widget_parent` config controls dropdown parent selector.
 
 ## Platform quirks
 
@@ -116,7 +124,7 @@ act --fill → act --next (repeat) → act --submit --confirm
 | Greenhouse | No `<select>` — all custom autocomplete. Country = `<input>`. "Submit application" = real button ("Apply" = scroll trigger). |
 | Lever | 0 fields → follow apply-link → `/apply`. Labels: `<label><div>Text</div><div><input></div></label>`. No Select/Radio. |
 | Workday | 7-step SPA (Info → Experience → Questions → Disclosures → Review). DROPDOWN=`button[aria-haspopup]`. Phone: strip +1 prefix. Skills: type + Enter. Per-company login. |
-| LinkedIn | Easy Apply: ephemeral modal — `flow_hook` in registry/linkedin.py handles full flow in `act --fill`. Resume selection via label click + event dispatch. External: `<a>` tag with safety redirect. |
+| LinkedIn | Easy Apply (modal, Next/Review/Submit) vs External (`<a>` tag, safety redirect). detect checks `<a>` + `<button>`. |
 
 ## Account & login notes
 
@@ -152,7 +160,8 @@ act --fill → act --next (repeat) → act --submit --confirm
 
 `~/.ji/results/{jid}/`:
 - `gemini_response.txt` — Gemini output (gem route)
-- `script.py` — PDF build script
+- `resume.json` — resume data in JSON Resume format
+- `prompt.txt` — generation prompt with job details and rules
 - `*.pdf` — CV / cover letter
 - `{jid}.url` — job shortcut (Windows)
 
@@ -178,7 +187,7 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 
 ## Technical notes
 
-- **JI_TAILOR**: `"agent"` (default) = SLM writes `script.py`, `admit` confirms. `"gem"` = Gemini Web gem.
+- **JI_TAILOR**: `"agent"` (default) = SLM writes `resume.json`, `admit` confirms. `"gem"` = Gemini Web gem.
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
 - **LinkedIn title dedup**: Cards repeat title — `linkedin.py` deduplicates by matching repeated half.
 - **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
