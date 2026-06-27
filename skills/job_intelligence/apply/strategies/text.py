@@ -49,5 +49,16 @@ def fill_text_field(page, f, ans, sel, el):
     except Exception:
         pass
     if f.get("placeholder") == "Search" or f.get("data_automation_id", ""):
-        return bool(autocomplete(page, el, ans) or native_setter(page, sel, ans))
-    return bool(visible_fill(el, ans) or native_setter(page, sel, ans))
+        ok = bool(autocomplete(page, el, ans) or native_setter(page, sel, ans))
+    else:
+        ok = bool(visible_fill(el, ans) or native_setter(page, sel, ans))
+    # Verify value persisted
+    if ok and ans:
+        try:
+            time.sleep(0.1)
+            current = el.evaluate("el => el.value")
+            if current != ans and len(current) < len(ans) * 0.8:
+                native_setter(page, sel, ans)
+        except Exception:
+            pass
+    return ok

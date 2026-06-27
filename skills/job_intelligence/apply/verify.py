@@ -124,7 +124,8 @@ def run(jid):
                 .map(b => b.textContent.trim());
         }"""
         )
-        if "Applied" in buttons:
+        if any(b.lower() == "applied" for b in buttons):
+            print(f"  SIGNAL: Applied button found (high confidence)", file=sys.stderr)
             _mark_applied(jid)
             emit_status("submitted (Applied button)")
             emit_next("none")
@@ -134,38 +135,13 @@ def run(jid):
         emit_next("act --inspect")
         return
 
-    # Optional vision check — only if endpoint is available (no-op otherwise)
+    # Screenshot for optional LLM verification (I run ask_api manually if needed)
     if page:
         try:
-            from lib.ask_api import available as _vision_ok
-            if _vision_ok():
-                from apply.common.inspect_lib import page_jpeg
-                from lib.ask_api import ask_bytes
-                reply, _ = ask_bytes(
-                    image_data=page_jpeg(page, full=False),
-                    prompt="""You are checking if a job application was successfully submitted.
-Look at the page. Is there a clear success/confirmation message?
-Respond in this exact format:
-ANSWER: YES or NO
-DETAILS: <if YES, quote the confirmation text; if NO, leave blank>""",
-                )
-                if reply:
-                    for line in reply.splitlines():
-                        line = line.strip()
-                        if line.startswith("ANSWER:"):
-                            answer = line.split(":", 1)[1].strip().lower()
-                            if answer == "yes":
-                                details = ""
-                                for dl in reply.splitlines():
-                                    if dl.strip().startswith("DETAILS:"):
-                                        details = dl.split(":", 1)[1].strip()[:100]
-                                _mark_applied(jid)
-                                label = "submitted (vision)"
-                                if details:
-                                    label += f": {details}"
-                                emit_status(label)
-                                emit_next("none")
-                                return
+            from apply.common.inspect_lib import capture
+            img_path = capture(page, str(jid), prefix="verify")
+            print(f"  Verify screenshot: {img_path}", file=sys.stderr)
+            print(f"  Run 'lib/ask_api.py --img {img_path} --prompt \"check for success message\"' for vision verification", file=sys.stderr)
         except Exception:
             pass
 

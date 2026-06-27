@@ -2,7 +2,7 @@
 
 Usage:
   tailor.py [--auto]                  Craft all described jobs
-  tailor.py admit <jid> [jid...]      Mark job as tailored (also: done)
+   tailor.py admit <jid> [jid...]      Mark job as tailored (auto-finds resume in results dir)
   tailor.py reject <jid> [jid...]      Reject job(s)
   tailor.py retry                     Retry all failed (batch)
   tailor.py retry <jid>               Re-tailor a specific job
@@ -20,7 +20,6 @@ from lib.db import load, advance, get_failed, pipeline_status
 from lib.db import desc_get, app_save, app_get, app_list
 from lib.call_gemini import call_gemini_node, list_gems
 from lib.config import RESULTS_DIR
-from lib.extract_pdf import extract_and_run
 from lib.platforms import clean as clean_desc
 
 
@@ -63,6 +62,7 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         ("\u2026", "..."), ("\u2022", "-"), ("\u25e6", "-"), ("\u00b7", "-"),
     ]:
         desc_clean = desc_clean.replace(bad, good)
+        title_clean = title_clean.replace(bad, good)
     desc_clean = re.sub(r"https?://\S+", "", desc_clean)
     desc_clean = re.sub(r"\n{2,}", "\n", desc_clean).strip()
 
@@ -74,32 +74,32 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
     if notes:
         prompt += f"\n\nContext: {notes}"
     if feedback and prev_response:
-        prompt += f"\n\n--- YOUR PREVIOUS OUTPUT (address feedback below) ---\n{prev_response[:3000]}"
-        prompt += f"\n\n--- FEEDBACK FROM REVIEW ---\n{feedback}"
+        prompt += f"\n\n--- PREVIOUS ATTEMPT ---\n{prev_response}\n\n--- FEEDBACK ---\n{feedback}"
+
+    # Always attach tailor_prompt.md rules
+    prompt_path_md = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
+    try:
+        with open(prompt_path_md) as f:
+            instructions = f.read()
+        prompt = instructions + "\n\n---\n\n" + prompt
+    except FileNotFoundError:
+        pass
 
     tailor_mode = os.environ.get("JI_TAILOR", "agent")
-    if tailor_mode == "agent":
-        prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
-        try:
-            with open(prompt_path) as f:
-                agent_instructions = f.read()
-        except FileNotFoundError:
-            agent_instructions = "Write a Python script that generates a tailored CV PDF for this job."
-        prompt = agent_instructions + "\n\n---\n\n" + prompt
-    prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
-
-    if tailor_mode == "agent":
-        script_dir = os.path.join(RESULTS_DIR, job_id)
-        os.makedirs(script_dir, exist_ok=True)
-        prompt_path = os.path.join(script_dir, "prompt.txt")
-        with open(prompt_path, "w", encoding="utf-8") as f:
-            f.write(prompt)
-        print(f"PROMPT: {prompt_path}", file=sys.stderr)
-        print(f"  Instructions: read prompt.txt, write script.py, then run: tailor.py admit {job_id} --pdf <path>", file=sys.stderr)
-        return True, {"text": prompt, "response_path": prompt_path, "scripts": []}
-
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
+
+    # Save prompt for reference
+    prompt_file = os.path.join(app_dir, "prompt.txt")
+    with open(prompt_file, "w", encoding="utf-8") as f:
+        f.write(prompt)
+
+    if tailor_mode == "agent":
+        print(f"PROMPT: {prompt_file}", file=sys.stderr)
+        print(f"  Write resume.json, then: tailor.py build {job_id} && tailor.py admit {job_id}", file=sys.stderr)
+        return True, {"text": prompt, "response_path": prompt_file, "scripts": []}
+
+    # Gemini route
     stale = os.path.join(app_dir, "gemini_response.txt")
     if os.path.exists(stale):
         os.remove(stale)
@@ -115,6 +115,26 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         return False, output
     app_save(job_id, "gemini_response.txt", output)
 
+    # Extract JSON Resume from response
+    json_match = re.search(r"```json\s*(.*?)```", output, re.DOTALL)
+    if not json_match:
+        json_match = re.search(r"({[\s\S]*\"basics\"[\s\S]*})", output)
+    if json_match:
+        try:
+            resume_data = json.loads(json_match.group(1))
+            resume_path = os.path.join(app_dir, "resume.json")
+            with open(resume_path, "w", encoding="utf-8") as f:
+                json.dump(resume_data, f, indent=2)
+            from lib.build_resume import build as build_pdfs
+            out = build_pdfs(resume_path, app_dir)
+            if out:
+                print(f"  RESUME: {out['resume']}", file=sys.stderr)
+                if out.get('cover'):
+                    print(f"  COVER: {out['cover']}", file=sys.stderr)
+        except Exception as e:
+            print(f"  JSON extraction failed: {e}", file=sys.stderr)
+
+    # Extract strategy section (optional)
     strategy_path = None
     strategy_match = re.search(r"(?:1\.\s*)?(Strategy.*?)(?=\n\s*(?:2\s*[&.]|3\.|Optimized|$))", output, re.DOTALL)
     if strategy_match:
@@ -122,12 +142,10 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         app_save(job_id, "strategy.md", strategy_text)
         strategy_path = f"db://{job_id}/strategy.md"
 
-    saved_scripts, notes = extract_and_run(output, app_dir)
-    notes.append(f"Full response: db://{job_id}/gemini_response.txt")
     return True, {
         "response_path": f"db://{job_id}/gemini_response.txt",
-        "text": output[:2000], "scripts": saved_scripts,
-        "strategy_path": strategy_path, "notes": "; ".join(notes),
+        "text": output[:2000], "scripts": [],
+        "strategy_path": strategy_path,
     }
 
 
@@ -141,7 +159,7 @@ def cmd_craft(auto=False):
         if failed_count:
             print(f"NO_PENDING ({failed_count} failed, use 'retry')", file=sys.stderr)
         else:
-            print(f"ALL_DONE", file=sys.stderr)
+            print("ALL_DONE", file=sys.stderr)
         return
     jid, entry = described[0]
     title = entry.get("title", "?")
@@ -152,7 +170,7 @@ def cmd_craft(auto=False):
     try:
         success, result = generate_tailored_docs(entry)
         if success and os.environ.get("JI_TAILOR", "agent") == "agent":
-            print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'", file=sys.stderr)
+            print(f"  PROMPT_READY {jid} — write resume.json, then 'tailor.py build {jid}'", file=sys.stderr)
         elif success:
             print(f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check quality", file=sys.stderr)
             text = result.get("text", "")
@@ -193,7 +211,7 @@ def craft_jid(jid):
     success, result = generate_tailored_docs(entry)
     if success:
         mode = os.environ.get("JI_TAILOR", "agent")
-        print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'" if mode == "agent" else f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check", file=sys.stderr)
+        print(f"  PROMPT_READY {jid} — write resume.json, then 'tailor.py build {jid}'" if mode == "agent" else f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check", file=sys.stderr)
     else:
         err_str = str(result)[:120]
         if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
@@ -205,18 +223,44 @@ def craft_jid(jid):
 
 def cmd_review(count=1):
     state = load()
-    tailored = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "tailored"]
-    if not tailored:
-        print("No tailored jobs to review.", file=sys.stderr)
+    # Find jobs to review: any with resume.json in results dir, or stage=tailored
+    candidates = []
+    for jid, entry in state["jobs"].items():
+        if entry.get("stage") == "tailored":
+            candidates.append((jid, entry))
+        elif os.path.exists(os.path.join(RESULTS_DIR, jid, "resume.json")):
+            candidates.append((jid, entry))
+    if not candidates:
+        print("No jobs to review.", file=sys.stderr)
         return
-    batch = tailored if count == -1 else tailored[:count]
+    batch = candidates if count == -1 else candidates[:count]
+    rules_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
     for jid, entry in batch:
         title = entry.get("title", "?")
         company = entry.get("company", "?")
         print(f"JOB {jid} {title} @ {company}", file=sys.stderr)
         print(f"  URL: {entry.get('url', '')}", file=sys.stderr)
-        # Show cover letter from PDF
         rd = os.path.join(RESULTS_DIR, jid)
+        # Show resume summary + first work entry from resume.json
+        json_path = os.path.join(rd, "resume.json")
+        if os.path.exists(json_path):
+            try:
+                import json as _j
+                with open(json_path) as f:
+                    rd_data = _j.load(f)
+                basics = rd_data.get("basics", {})
+                work = rd_data.get("work", [])
+                summary = (basics.get("summary") or "")[:400]
+                if summary:
+                    print(f"  SUMMARY: {summary}", file=sys.stderr)
+                if work:
+                    w = work[0]
+                    print(f"  EXP: {w.get('position','?')} @ {w.get('company','?')}", file=sys.stderr)
+                    for h in w.get("highlights", [])[:2]:
+                        print(f"    - {h[:120]}", file=sys.stderr)
+            except Exception:
+                pass
+        # Show cover letter from PDF
         if os.path.isdir(rd):
             covers = [f for f in os.listdir(rd) if "Cover" in f and f.endswith(".pdf")]
             if covers:
@@ -227,12 +271,15 @@ def cmd_review(count=1):
                     print(f"  COVER: {ct[:500]}", file=sys.stderr)
                 except Exception:
                     pass
-        print(f"  apprentice admit/reject/retry --feedback '...' ?", file=sys.stderr)
+        print(f"  RULES: check against tailor_prompt.md — no pandering, hallucination, title creep, tool soup. Company name must appear in summary or bullets.", file=sys.stderr)
+        if os.path.exists(rules_path):
+            print(f"  Full rules: {rules_path}", file=sys.stderr)
+        print(f"  apprentice: admit/reject/retry --feedback '...'", file=sys.stderr)
 
 
-def cmd_admit(*job_ids, pdf_path=None):
+def cmd_admit(*job_ids):
     if not job_ids:
-        print("Usage: python3 tailor.py admit <jid1> [jid2 ...]", file=sys.stderr)
+        print("Usage: python tailor.py admit <jid1> [jid2 ...]", file=sys.stderr)
         return
     state = load()
     count = 0
@@ -240,22 +287,30 @@ def cmd_admit(*job_ids, pdf_path=None):
         if job_id not in state.get("jobs", {}):
             print(f"Job not found: {job_id}", file=sys.stderr)
             continue
-        if pdf_path and not os.path.exists(pdf_path):
-            print(f"PDF_NOT_FOUND: {job_id} — {pdf_path}", file=sys.stderr)
+        rd = os.path.join(RESULTS_DIR, job_id)
+        if os.path.isdir(rd):
+            pdfs = [f for f in os.listdir(rd) if f.lower().endswith('.pdf') and 'resume' in f.lower()]
+            if pdfs:
+                pdf_path = os.path.join(rd, pdfs[0])
+            else:
+                print(f"NO_PDF: {job_id} — no Resume PDF in {rd}", file=sys.stderr)
+                print(f"  Run tailor.py build {job_id} first, then re-run admit", file=sys.stderr)
+                continue
+        else:
+            print(f"NO_RESULTS: {job_id} — no results directory", file=sys.stderr)
             continue
-        if not pdf_path:
-            rd = os.path.join(RESULTS_DIR, job_id)
-            if os.path.isdir(rd):
-                pdfs = [f for f in os.listdir(rd) if f.endswith('.pdf') and 'Resume' in f]
-                if pdfs:
-                    pdf_path = os.path.join(rd, pdfs[0])
-                else:
-                    print(f"NO_PDF: {job_id} — no Resume PDF in {rd}", file=sys.stderr)
-                    print(f"  Run tailor.py retry {job_id} to re-generate, or use --pdf", file=sys.stderr)
-                    continue
         entry = state["jobs"][job_id]
         if entry.get("state") != "active":
             print(f"  {job_id}: admitted with state '{entry.get('state')}' -> active", file=sys.stderr)
+        # Quality summary before committing
+        from lib.build_resume import validate_file as _vf
+        _jp = os.path.join(RESULTS_DIR, job_id, "resume.json")
+        if os.path.exists(_jp):
+            if not _vf(_jp):
+                print(f"  BLOCKED: validation errors — fix resume.json and re-run admit", file=sys.stderr)
+                continue
+        else:
+            print(f"  NOTE: no resume.json — admit from file only", file=sys.stderr)
         advance(entry, "tailored", state="active", applied_at=datetime.now().isoformat())
         job_url = state["jobs"][job_id].get("url", "")
         if job_url and sys.platform == "win32":
@@ -272,9 +327,32 @@ def cmd_admit(*job_ids, pdf_path=None):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
+def cmd_build(job_id):
+    """Validate resume.json and build PDFs for a job."""
+    if not job_id:
+        print("Usage: python tailor.py build <jid>", file=sys.stderr)
+        return
+    from lib.build_resume import validate_file, build as build_pdfs
+    json_path = os.path.join(RESULTS_DIR, job_id, "resume.json")
+    if not os.path.exists(json_path):
+        print(f"NOT_FOUND: {json_path}", file=sys.stderr)
+        print("  Write resume.json first, then run build.", file=sys.stderr)
+        return
+    print(f"BUILD: {job_id}", file=sys.stderr)
+    if not validate_file(json_path):
+        print("  Fix validation errors above, then re-run build.", file=sys.stderr)
+        return
+    out = build_pdfs(json_path, os.path.join(RESULTS_DIR, job_id))
+    if out:
+        print(f"  RESUME: {out['resume']}", file=sys.stderr)
+        if out.get("cover"):
+            print(f"  COVER: {out['cover']}", file=sys.stderr)
+        print(f"  NEXT: tailor.py admit {job_id}", file=sys.stderr)
+
+
 def cmd_reject(*job_ids):
     if not job_ids:
-        print("Usage: python3 tailor.py reject <jid1> [jid2 ...]", file=sys.stderr)
+        print("Usage: python tailor.py reject <jid1> [jid2 ...]", file=sys.stderr)
         return
     s = load()
     count = 0
@@ -292,7 +370,7 @@ def cmd_reject(*job_ids):
 
 def cmd_undo(job_id):
     if not job_id:
-        print("Usage: python3 tailor.py undo <job_id>", file=sys.stderr)
+        print("Usage: python tailor.py undo <job_id>", file=sys.stderr)
         return
     state = load()
     if job_id not in state.get("jobs", {}):
@@ -317,11 +395,13 @@ def cmd_retry(job_id=None, feedback=None):
             print(f"Job not found: {job_id}", file=sys.stderr)
             return
         advance(entry, "described", state="active", error=None)
-        resp_path = os.path.join(RESULTS_DIR, job_id, "gemini_response.txt")
         prev = ""
-        if os.path.exists(resp_path):
-            with open(resp_path, encoding="utf-8") as f:
-                prev = f.read()
+        for candidate in ["gemini_response.txt", "resume.json"]:
+            p = os.path.join(RESULTS_DIR, job_id, candidate)
+            if os.path.exists(p):
+                with open(p, encoding="utf-8") as f:
+                    prev = f.read()
+                break
         success, result = generate_tailored_docs(entry, feedback=feedback, prev_response=prev)
         if success:
             advance(entry, "tailored", response_path=result.get("response_path"), scripts=result.get("scripts", []))
@@ -421,7 +501,7 @@ def cmd_reset(job_id=None, states=None, stages=None):
             return
         targets = [(job_id, s["jobs"][job_id])]
     else:
-        print("Usage: python3 tailor.py reset <jid> [--all]", file=sys.stderr)
+        print("Usage: python tailor.py reset <jid> [--all]", file=sys.stderr)
         return
     for jid, entry in targets:
         old = entry.get("stage", "?")
@@ -433,8 +513,9 @@ def cmd_reset(job_id=None, states=None, stages=None):
 def cmd_help():
     print("""Usage:
   [--auto]                                  Craft all described jobs
-  admit <jid> [jid...]                      Mark tailored (also: done)
+  admit <jid> [jid...]                      Mark tailored (auto-finds resume)
   reject <jid> [jid...]                     Reject
+  build <jid>                               Validate resume.json + build PDFs
   undo <jid>                                Move back one stage
   retry                                     Retry all failed (batch)
   retry <jid>                               Re-tailor a job
@@ -452,31 +533,31 @@ def main():
     parser.add_argument("--jid", help="Tailor a specific job by JID")
 
     sub = parser.add_subparsers(dest="command")
-    admit_p = sub.add_parser("admit", help="Mark job as tailored")
+    admit_p = sub.add_parser("admit", help="Mark job as tailored (auto-finds resume in results dir)")
     admit_p.add_argument("jids", nargs="+")
-    admit_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
-    done_p = sub.add_parser("done", help="Alias for admit (backward compat)")
-    done_p.add_argument("jids", nargs="+")
-    done_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
     sub.add_parser("reject", help="Reject job").add_argument("jids", nargs="+")
     review_p = sub.add_parser("review", help="Review tailored jobs (strategy + cover letter)")
     review_p.add_argument("--jobs", type=int, default=1, help="Jobs to review (default 1, -1 = all)")
     retry_p = sub.add_parser("retry", help="Retry failed, or re-process a specific job")
     retry_p.add_argument("jid", nargs="?")
-    retry_p.add_argument("--feedback", help="What to fix (triggers one-shot re-tailor)")
+    retry_p.add_argument("--feedback", help="What to improve (replaces any previous feedback — not cumulative)")
     sub.add_parser("undo", help="Move job back one stage").add_argument("jid", nargs="?")
     reset_p = sub.add_parser("reset", help="Reset job to extracted (first stage)")
     reset_p.add_argument("target", nargs="?", help="jid or --all")
     reset_p.add_argument("--state", dest="states", help="Filter by state: failed, skipped")
     reset_p.add_argument("--stage", dest="stages", help="Filter by stage: tailored, described, extracted")
+    build_p = sub.add_parser("build", help="Validate resume.json + build PDFs")
+    build_p.add_argument("jid", help="Job ID")
     sub.add_parser("help", help="This message")
 
     args = parser.parse_args()
 
     if args.command == "review":
         cmd_review(count=args.jobs)
-    elif args.command in ("admit", "done"):
-        cmd_admit(*args.jids, pdf_path=args.pdf)
+    elif args.command == "build":
+        cmd_build(args.jid)
+    elif args.command == "admit":
+        cmd_admit(*args.jids)
     elif args.command == "reject":
         cmd_reject(*args.jids)
     elif args.command == "undo":
