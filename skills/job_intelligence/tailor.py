@@ -91,8 +91,8 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         print(f"  Write resume.json, then: tailor.py build {job_id} && tailor.py admit {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
-    # Gem route — explicitly tell the gem to output JSON Resume only
-    prompt = "Output ONLY a ```json code block containing a valid JSON Resume. No Python code, no explanations.\n\n" + prompt
+    # Gem route — encourage JSON block for extraction
+    prompt = "Output Section 1 (strategy) freely, then Section 2 as a ```json code block containing the JSON Resume.\n\n" + prompt
 
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
