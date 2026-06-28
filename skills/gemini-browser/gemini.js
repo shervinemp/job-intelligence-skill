@@ -416,13 +416,13 @@ async function deleteChat(page) {
     if (!convId) { log('deleteChat: exit@convId null'); return; }
 
     await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await wait(3000);
+    await wait(5000);
 
     await ensureSidebar(page, true);
 
     let clicked = 'not_found';
     for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await wait(2000);
+      if (attempt > 0) await wait(3000);
       clicked = await page.evaluate((cid) => {
         const convs = document.querySelectorAll('[data-test-id="conversation"]');
         for (const c of convs) {

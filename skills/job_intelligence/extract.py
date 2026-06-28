@@ -107,6 +107,8 @@ def cmd_auto():
         extracted_ids.append(tid)
     setting_set(EXTRACTED_IDS_KEY, extracted_ids)
     print(f"EXTRACTED:{total}", file=sys.stderr)
+    if total:
+        print(f"NEXT: extract.py admit --category tech|general <jid>  OR  extract.py reject <jid>", file=sys.stderr)
 
 
 def cmd_admit(*jids, category=None, notes=None):
