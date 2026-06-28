@@ -147,11 +147,7 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                     if desc:
                         desc = clean_desc(job_url, desc)
                         desc_save(jid, desc)
-                    line = f"JOB:{jid}:{job_url}  [{parsed['title'] or '?'} @ {parsed['company'] or '?'} - {parsed['location'] or '?'}]"
-                    try:
-                        print(line)
-                    except UnicodeEncodeError:
-                        print(line.encode('utf-8', errors='replace').decode('utf-8'))
+                    print(f"JOB:{jid}:{job_url}  [{parsed['title'] or '?'} @ {parsed['company'] or '?'} - {parsed['location'] or '?'}]")
                     count += 1
                 except Exception as e:
                     print(f"WARN: {e}", file=sys.stderr)
