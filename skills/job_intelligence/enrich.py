@@ -227,6 +227,8 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
             advance(entry, entry.get("stage"), state="failed", error=str(result))
             failed += 1
     print(f"FETCHED:{fetched} FAILED:{failed}", file=sys.stderr)
+    if fetched:
+        print(f"NEXT: enrich.py admit <jid> --category ...  OR  enrich.py reject <jid>", file=sys.stderr)
 
 
 def cmd_flag(*jids):
