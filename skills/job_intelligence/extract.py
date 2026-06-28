@@ -87,14 +87,11 @@ def cmd_auto():
         print("NO_PENDING_STAGED", file=sys.stderr)
         return
 
-    total = 0
-    extracted_ids = list(pending_ids)
-    conn = get_conn()
-    for tid, content in pending:
-        urls = _extract_urls(content)
-        if not urls:
-            extracted_ids.append(tid)
-            continue
+    # One email at a time — LLM-in-the-middle handoff
+    tid, content = pending[0]
+    urls = _extract_urls(content)
+    if urls:
+        conn = get_conn()
         for url in urls:
             expected_jid = hashlib.md5(url.encode()).hexdigest()[:16]
             if conn.execute("SELECT 1 FROM jobs WHERE id=?", (expected_jid,)).fetchone():
@@ -102,12 +99,10 @@ def cmd_auto():
             jid = add_job({"url": url, "email_id": tid, "source": "Email", "source_url": url})
             if jid:
                 ctx = _snippet(content, url)
-                print(f"REAL JOB? (admit/reject)", file=sys.stderr)
                 print(f"JOB:{jid}:{url}  [{ctx}]")
-                total += 1
-        extracted_ids.append(tid)
+                print(f"NEXT: extract.py admit --category tech|general {jid}  OR  extract.py reject {jid}")
+    extracted_ids = list(pending_ids) + [tid]
     setting_set(EXTRACTED_IDS_KEY, extracted_ids)
-    print(f"EXTRACTED:{total}", file=sys.stderr)
 
 
 def cmd_admit(*jids, category=None, notes=None):

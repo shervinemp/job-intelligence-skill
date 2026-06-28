@@ -171,7 +171,7 @@ def save_description(jid, text):
     desc_save(jid, text)
 
 
-def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
+def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False, batch=False):
     state = load()
     stage = "described" if refresh else "extracted"
     pending = [(jid, e) for jid, e in state["jobs"].items()
@@ -181,6 +181,59 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
         print("NO_PENDING_FETCH", file=sys.stderr)
         return
 
+    # --parallel: fetch all in parallel via curl, save descs, dump DESC lines
+    # --batch: fetch all sequentially, dump DESC lines
+    # default: one job at a time — LLM-in-the-middle handoff
+    if batch and use_playwright:
+        _cmd_fetch_batch(pending, use_playwright, verbose)
+        return
+    jid, entry = pending[0]
+    title = entry.get("title", "")
+    company = entry.get("company", "")
+    url = entry.get("url", "")
+    ok, result, page_title, raw_html = _fetch_from_url(url, use_playwright=use_playwright)
+    if ok:
+        save_description(jid, result)
+        conn = get_conn()
+        need_title = not entry.get("title")
+        need_company = not entry.get("company")
+        need_location = not entry.get("location")
+        need_salary = not entry.get("salary")
+        if raw_html:
+            _enrich_from_ld(raw_html, entry)
+        sets, vals = [], []
+        if page_title and need_title:
+            sets.append("title=?")
+            vals.append(page_title[:200])
+        elif entry.get("title") and need_title:
+            sets.append("title=?")
+            vals.append(entry["title"])
+        if entry.get("company") and need_company:
+            sets.append("company=?")
+            vals.append(entry["company"])
+        if entry.get("location") and need_location:
+            sets.append("location=?")
+            vals.append(entry["location"])
+        if entry.get("salary") and need_salary:
+            sets.append("salary=?")
+            vals.append(entry["salary"])
+        if sets:
+            vals.append(jid)
+            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
+            conn.commit()
+        limit = 2000 if verbose else 500
+        snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
+        print(f"DESC:{jid}:{snippet}")
+        print(f"NEXT: enrich.py admit {jid} --category tech|general  OR  enrich.py reject {jid}")
+        auth_walls.remove(jid)
+    else:
+        if result == "auth_wall":
+            auth_walls.add(jid, url, title, company)
+        advance(entry, entry.get("stage"), state="failed", error=str(result))
+        print(f"NEXT: enrich.py reject {jid}")
+
+
+def _cmd_fetch_batch(pending, use_playwright, verbose):
     fetched = failed = 0
     for jid, entry in pending:
         title = entry.get("title", "")
@@ -194,10 +247,8 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
             need_company = not entry.get("company")
             need_location = not entry.get("location")
             need_salary = not entry.get("salary")
-            # Enrich from JSON-LD structured data (only backfill empty fields)
             if raw_html:
                 _enrich_from_ld(raw_html, entry)
-            # Build updates for any newly-filled fields
             sets, vals = [], []
             if page_title and need_title:
                 sets.append("title=?")
@@ -220,7 +271,6 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
                 conn.commit()
             limit = 2000 if verbose else 500
             snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
-            print(f"IS THIS A JOB POSTING? (admit/reject)", file=sys.stderr)
             print(f"DESC:{jid}:{snippet}")
             auth_walls.remove(jid)
             fetched += 1
@@ -230,6 +280,74 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
             advance(entry, entry.get("stage"), state="failed", error=str(result))
             failed += 1
     print(f"FETCHED:{fetched} FAILED:{failed}", file=sys.stderr)
+    print(f"NEXT: review DESCs above, then enrich.py admit <jid> --category ...  OR  enrich.py reject <jid>", file=sys.stderr)
+
+
+def cmd_fetch_parallel(force=False, refresh=False, verbose=False):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    state = load()
+    stage = "described" if refresh else "extracted"
+    pending = [(jid, e) for jid, e in state["jobs"].items()
+               if e.get("stage") == stage and e.get("state") == "active" and (force or not desc_exists(jid))]
+    if not pending:
+        print("NO_PENDING_FETCH", file=sys.stderr)
+        return
+    fetched = failed = 0
+
+    def _fetch_one(jid, entry):
+        url = entry.get("url", "")
+        ok, result, page_title, raw_html = _retry_fetch(url, use_playwright=False)
+        if not ok:
+            return jid, None, result
+        save_description(jid, result)
+        conn = get_conn()
+        need_title = not entry.get("title")
+        need_company = not entry.get("company")
+        need_location = not entry.get("location")
+        need_salary = not entry.get("salary")
+        if raw_html:
+            _enrich_from_ld(raw_html, entry)
+        sets, vals = [], []
+        if page_title and need_title:
+            sets.append("title=?")
+            vals.append(page_title[:200])
+        elif entry.get("title") and need_title:
+            sets.append("title=?")
+            vals.append(entry["title"])
+        if entry.get("company") and need_company:
+            sets.append("company=?")
+            vals.append(entry["company"])
+        if entry.get("location") and need_location:
+            sets.append("location=?")
+            vals.append(entry["location"])
+        if entry.get("salary") and need_salary:
+            sets.append("salary=?")
+            vals.append(entry["salary"])
+        if sets:
+            vals.append(jid)
+            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
+            conn.commit()
+        limit = 2000 if verbose else 500
+        snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
+        auth_walls.remove(jid)
+        return jid, snippet, None
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {ex.submit(_fetch_one, jid, entry): jid for jid, entry in pending}
+        for f in as_completed(futures):
+            jid, snippet, err = f.result()
+            if snippet:
+                print(f"DESC:{jid}:{snippet}")
+                fetched += 1
+            else:
+                reason = err or "fetch_failed"
+                entry = state["jobs"].get(jid, {})
+                if reason == "auth_wall":
+                    auth_walls.add(jid, entry.get("url", ""), entry.get("title", ""), entry.get("company", ""))
+                advance(entry, entry.get("stage"), state="failed", error=str(reason))
+                failed += 1
+    print(f"FETCHED:{fetched} FAILED:{failed}", file=sys.stderr)
+    print(f"NEXT: review DESCs above, then enrich.py admit <jid> --category ...  OR  enrich.py reject <jid>", file=sys.stderr)
 
 
 def cmd_flag(*jids):
@@ -291,7 +409,7 @@ def cmd_admit(*jids, **fields):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_skip(*jids):
+def cmd_reject(*jids):
     state = load()
     count = 0
     for jid in jids:
@@ -431,6 +549,8 @@ def main():
     parser.add_argument("--force", action="store_true", help="Re-fetch even if description exists")
     parser.add_argument("--refresh", action="store_true", help="Fetch from described stage")
     parser.add_argument("--verbose", action="store_true", help="Show more description text")
+    parser.add_argument("--batch", action="store_true", help="Fetch all pending descriptions at once (for LLM review)")
+    parser.add_argument("--parallel", action="store_true", help="Fetch all descriptions in parallel via curl (fast, no Playwright)")
 
     sub = parser.add_subparsers(dest="command")
     sub.required = False
@@ -473,12 +593,16 @@ def main():
     elif args.command == "help":
         cmd_help()
     else:
-        cmd_fetch(
-            use_playwright=not args.curl,
-            force=args.force,
-            refresh=args.refresh,
-            verbose=args.verbose,
-        )
+        if args.parallel:
+            cmd_fetch_parallel(force=args.force, refresh=args.refresh, verbose=args.verbose)
+        else:
+            cmd_fetch(
+                use_playwright=not args.curl,
+                force=args.force,
+                refresh=args.refresh,
+                verbose=args.verbose,
+                batch=args.batch,
+            )
 
 
 if __name__ == "__main__":
