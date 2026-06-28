@@ -438,7 +438,7 @@ async function deleteChat(page) {
           const lastSegment = href.split('/').pop().split('?')[0];
           if (lastSegment !== cid) continue;
           c.scrollIntoView({ block: 'center' });
-          const btn = c.querySelector('button[data-test-id="actions-menu-button"]');
+          const btn = c.querySelector('[data-test-id="actions-menu-button"]');
           if (!btn) return 'no_button';
           btn.click();
           return 'ok';
