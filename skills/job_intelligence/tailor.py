@@ -125,8 +125,6 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
     if json_match:
         try:
             raw = json_match.group(1)
-            # Sanitize dates that don't match JSON Resume schema (YYYY, YYYY-MM, YYYY-MM-DD)
-            raw = re.sub(r'"(startDate|endDate|date)":\s*"(?![12]\d{3}(?:-\d{2}(?:-\d{2})?)?")', lambda m: f'"{m.group(1)}":"",', raw)
             resume_data = json.loads(raw)
             # Strip empty or invalid date fields
             for section in ('work', 'education', 'volunteer'):
