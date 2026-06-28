@@ -92,7 +92,7 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
     # Gem route — wrap in JSON block for reliable extraction
-    prompt = "Output the JSON Resume in a ```json code block.\n\n" + prompt
+    prompt = "Output the full JSON Resume (including coverLetter) in a ```json code block.\n\n" + prompt
 
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
