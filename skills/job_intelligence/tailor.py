@@ -86,13 +86,13 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         except FileNotFoundError:
             agent_instructions = "Write a Python script that generates a tailored CV PDF for this job."
         prompt = agent_instructions + "\n\n---\n\n" + prompt
-    prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
-
-    if tailor_mode == "agent":
-        script_dir = os.path.join(RESULTS_DIR, job_id)
-        print(f"PROMPT: generate script.py at {script_dir}/")
-        print(f"  Instructions: read the full prompt above, write script.py, then run: tailor.py admit {job_id}", file=sys.stderr)
+        prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
+        print(f"PROMPT: {os.path.join(RESULTS_DIR, job_id, 'prompt.txt')}", file=sys.stderr)
+        print(f"  Write resume.json, then: tailor.py build {job_id} && tailor.py admit {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
+
+    # Gem route — explicitly tell the gem to output JSON Resume only
+    prompt = "Output ONLY a ```json code block containing a valid JSON Resume. No Python code, no explanations.\n\n" + prompt
 
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
@@ -120,10 +120,6 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
 
     # Extract JSON Resume from response
     json_match = re.search(r"```json\s*(.*?)```", output, re.DOTALL)
-    if not json_match:
-        json_match = re.search(r"\bJSON\s*\n\s*(\{[\s\S]*?\})\s*$", output)
-    if not json_match:
-        json_match = re.search(r'resume_payload\s*=\s*"""\s*(\{[\s\S]*?\})\s*"""', output)
     if json_match:
         try:
             raw = json_match.group(1)
