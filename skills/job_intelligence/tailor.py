@@ -91,7 +91,8 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         print(f"  Write resume.json, then: tailor.py build {job_id} && tailor.py admit {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
-    # Gem route — send job description as-is, gem instructions are built-in
+    # Gem route — wrap in JSON block for reliable extraction
+    prompt = "Section 2 (deliverable) in a ```json code block.\n\n" + prompt
 
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
