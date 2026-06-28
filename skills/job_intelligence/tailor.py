@@ -122,14 +122,22 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
     json_match = re.search(r"```json\s*(.*?)```", output, re.DOTALL)
     if not json_match:
         json_match = re.search(r"\bJSON\s*\n\s*(\{[\s\S]*?\})\s*$", output)
+    if not json_match:
+        json_match = re.search(r'resume_payload\s*=\s*"""\s*(\{[\s\S]*?\})\s*"""', output)
     if json_match:
         try:
-            resume_data = json.loads(json_match.group(1))
-            # Fix "Present" endDate — omit it (current position)
+            raw = json_match.group(1)
+            # Sanitize dates that don't match JSON Resume schema (YYYY, YYYY-MM, YYYY-MM-DD)
+            raw = re.sub(r'"(startDate|endDate|date)":\s*"(?![12]\d{3}(?:-\d{2}(?:-\d{2})?)?")', lambda m: f'"{m.group(1)}":"",', raw)
+            resume_data = json.loads(raw)
+            # Strip empty or invalid date fields
             for section in ('work', 'education', 'volunteer'):
                 for item in resume_data.get(section, []):
-                    if item.get('endDate') and item['endDate'].lower() in ('present', 'current', 'now', 'ongoing'):
-                        del item['endDate']
+                    for f in ('startDate', 'endDate', 'date'):
+                        if f in item:
+                            v = item[f]
+                            if not v or not re.match(r'^\d{4}(-\d{2}(-\d{2})?)?$', str(v)):
+                                del item[f]
             resume_path = os.path.join(app_dir, "resume.json")
             with open(resume_path, "w", encoding="utf-8") as f:
                 json.dump(resume_data, f, indent=2)
