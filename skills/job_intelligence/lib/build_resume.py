@@ -10,8 +10,12 @@ two custom extensions:
   coverLetter: string (optional cover letter body)
 """
 
-import json, os, sys
+import json, os, re, sys
 from fpdf import FPDF, XPos, YPos
+
+
+def _clean_fn(s):
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", s)
 
 _DEFAULT_STYLE = {
     "font": "Helvetica",
@@ -235,9 +239,9 @@ def _build_resume(pdf, data):
             pdf.ln(0.5)
 
     # Filename from data
-    name_slug = name.replace(" ", "_")
-    company_slug = work[0].get("company", "").replace(" ", "_") if work else ""
-    label_slug = label.replace(" ", "_")[:30] if label else "Resume"
+    name_slug = _clean_fn(name.replace(" ", "_"))
+    company_slug = _clean_fn(work[0].get("company", "").replace(" ", "_")) if work else ""
+    label_slug = _clean_fn(label.replace(" ", "_")[:30]) if label else "Resume"
     fn = f"{name_slug}_{company_slug}_{label_slug}_Resume.pdf"
     pdf.output(fn)
     return os.path.abspath(fn)
@@ -256,8 +260,8 @@ def _build_cover_letter(pdf, data):
     pdf.multi_cell(0, 6, _s(body), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     basics = data.get("basics", {})
     work = data.get("work", [])
-    company_slug = work[0].get("company", "").replace(" ", "_") if work else ""
-    name_slug = basics.get("name", "Cover_Letter").replace(" ", "_")
+    company_slug = _clean_fn(work[0].get("company", "").replace(" ", "_")) if work else ""
+    name_slug = _clean_fn(basics.get("name", "Cover_Letter").replace(" ", "_"))
     fn = f"{name_slug}_{company_slug}_Cover_Letter.pdf" if company_slug else f"{name_slug}_Cover_Letter.pdf"
     pdf.output(fn)
     return os.path.abspath(fn)

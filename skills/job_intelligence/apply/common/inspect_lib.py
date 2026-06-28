@@ -68,37 +68,6 @@ def page_html(page):
     }""")
 
 
-def save_persistent(data, jid, ext, prefix=""):
-    """Save bytes/string to screenshots/ directory. Overwrites on re-run. Returns path."""
-    path = _path(jid, ext, prefix)
-    mode = "wb" if isinstance(data, bytes) else "w"
-    try:
-        with open(path, mode) as f:
-            f.write(data)
-        print(f"FILE: {path}")
-    except Exception as e:
-        print(f"FILE_FAILED: {e}", file=sys.stderr)
-    return path
-
-
-def save_temp(data, suffix):
-    """Save data to a temporary file. Returns path; caller must os.unlink()."""
-    mode = "wb" if isinstance(data, bytes) else "w"
-    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-    try:
-        with open(tmp.name, mode) as f:
-            f.write(data)
-    except Exception:
-        try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
-        raise
-    finally:
-        tmp.close()
-    return tmp.name
-
-
 def capture(page, jid, prefix=""):
     """Universal: save screenshot (JPEG) + HTML dump. Outputs IMG: and HTML: paths.
     Optional prefix (e.g. 'fetch') separates files per pipeline stage. Overwrites on re-run.
@@ -172,9 +141,3 @@ def probe_state(page):
             print("Page text: empty — page may be blank or not loaded.", file=sys.stderr)
 
     return fc, ps.get("fields", []), btns, ps.get("pageType", "unknown")
-
-
-def analyze(page, jid, prefix=""):
-    """Convenience: capture + probe_state. For apply-pipeline --inspect."""
-    capture(page, jid, prefix)
-    return probe_state(page)
