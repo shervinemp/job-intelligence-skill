@@ -120,6 +120,8 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
 
     # Extract JSON Resume from response
     json_match = re.search(r"```json\s*(.*?)```", output, re.DOTALL)
+    if not json_match:
+        json_match = re.search(r"\b[Jj][Ss][Oo][Nn]\s*\n\s*(\{[\s\S]*?\})\s*$", output)
     if json_match:
         try:
             raw = json_match.group(1)
