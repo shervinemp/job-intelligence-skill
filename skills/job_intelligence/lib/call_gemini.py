@@ -86,6 +86,12 @@ def call_gemini_node(*args, timeout_seconds=600, gem=None, **kwargs):
                 cwd=gemini_dir
             )
             stdout, stderr = proc.communicate(timeout=timeout_seconds)
+            # Forward gemini.js stderr diagnostics (includes deleteChat debug logs)
+            if stderr:
+                for line in stderr.decode("utf-8", errors="replace").split("\n"):
+                    line = line.strip()
+                    if line:
+                        print(f"  [gemini] {line}", file=sys.stderr)
             # Read output file first (single source of truth)
             data = read_output()
             if data:

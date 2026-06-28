@@ -405,7 +405,9 @@ async function ensureSidebar(page, open = true) {
 
 async function deleteChat(page) {
   try {
-    // Extract conversation ID from current URL (gem, app, or main page)
+    const url = page.url();
+    log(`deleteChat: url=${url}`);
+
     const convId = await page.evaluate(() => {
       const mGem = location.href.match(/\/gem\/[^\/]+\/([^\/\?]+)/);
       if (mGem) return mGem[1];
@@ -414,17 +416,17 @@ async function deleteChat(page) {
       const mMain = location.href.match(/\/c\/([^\/\?]+)/);
       return mMain ? mMain[1] : null;
     });
-    if (!convId) { log('deleteChat: could not extract conv id'); return; }
-    log(`deleteChat: targeting conv ${convId}`);
+    if (!convId) { log('deleteChat: exit@convId null'); return; }
+    log(`deleteChat: conv=${convId}`);
 
-    // Navigate to home to ensure sidebar is current
+    log('deleteChat: goto gemUrl...');
     await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
     await wait(3000);
+    log('deleteChat: goto done');
 
-    // Ensure sidebar is expanded so conversation elements are interactive
     await ensureSidebar(page, true);
+    log('deleteChat: sidebar ensured');
 
-    // Find conversation by convId and click its actions menu
     let clicked = 'not_found';
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) await wait(2000);
@@ -445,20 +447,25 @@ async function deleteChat(page) {
       }, convId);
       if (clicked !== 'not_found') break;
     }
-    if (clicked === 'not_found') { log('deleteChat: conversation not found'); return; }
-    if (clicked === 'no_button') { log('deleteChat: no actions button'); return; }
+    if (clicked === 'not_found') { log('deleteChat: exit@not_found'); return; }
+    if (clicked === 'no_button') { log('deleteChat: exit@no_button'); return; }
+    log('deleteChat: actions clicked');
     await wait(1500);
 
     const deleteBtn = await page.$('[data-test-id="delete-button"]');
-    if (!deleteBtn) { await page.keyboard.press('Escape'); return; }
+    if (!deleteBtn) { log('deleteChat: exit@no_delete_btn'); await page.keyboard.press('Escape'); return; }
+    log('deleteChat: delete btn found');
     await deleteBtn.click();
     await wait(1000);
 
     let confirmBtn = await page.$('[data-test-id="confirm-button"]');
     if (!confirmBtn) {
       const loc = page.locator('[role="dialog"] button:has-text("Delete")');
-      if (await loc.count() > 0) await loc.first().click();
+      const n = await loc.count();
+      log(`deleteChat: confirm fallback, count=${n}`);
+      if (n > 0) await loc.first().click();
     } else {
+      log('deleteChat: confirm btn found');
       await confirmBtn.click();
     }
     await wait(1500);
