@@ -112,7 +112,8 @@ def run(jid):
                     mark_auth_wall(jid, ep.url, title or "", company or "")
                     print(f"AUTH_WALL: {jid} — {title} @ {company}", file=sys.stderr)
                     print("  Browser is on the sign-in page. Log in, then run again.", file=sys.stderr)
-                    save_state({"jid": jid, "external_url": external_url, "page": page_state})
+                    save_state({"jid": jid, "external_url": external_url, "page": page_state,
+                                "title": title, "company": company})
                     emit_next("apply.py detect")
                     sys.exit(0)
 
@@ -127,5 +128,6 @@ def run(jid):
     # Use actual page URL (Greenhouse rewrites boards -> job-boards on redirect)
     actual_url = ep.url
     save_state(
-        {"jid": jid, "external_url": actual_url, "platform": plat, "page": page_state}
+        {"jid": jid, "external_url": actual_url, "platform": plat, "page": page_state,
+         "title": title, "company": company}
     )

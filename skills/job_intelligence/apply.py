@@ -114,7 +114,10 @@ def main():
                 print(f"Job {args.jid} not failed or not found", file=sys.stderr)
         else:
             conn = get_conn()
-            failed = conn.execute("SELECT id FROM jobs WHERE stage='applied' AND state='failed'").fetchall()
+            # A failed apply keeps its current stage (tailored), so failures live at
+            # stage='tailored', not 'applied'. Scope to tailored to avoid resetting
+            # tailor-stage failures (which belong to `tailor.py retry`).
+            failed = conn.execute("SELECT id FROM jobs WHERE stage='tailored' AND state='failed'").fetchall()
             for r in failed:
                 advance_job(r["id"], "tailored", state="active", error=None)
                 print(f"RETRY: {r['id']}", file=sys.stderr)

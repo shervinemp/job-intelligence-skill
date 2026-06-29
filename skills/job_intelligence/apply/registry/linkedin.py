@@ -197,8 +197,7 @@ def easy_apply_flow(page, jid):
     for f in fields:
         if f.get("isEmpty", True):
             lbl = f["label"]
-            res = resolution_for_fill(lbl, profile, answers_override=None,
-                                       available_options=f.get("options"))
+            res = resolution_for_fill(lbl, profile, answers_override=None)
             if res and res.value:
                 try:
                     if f["tag"] == "SELECT":

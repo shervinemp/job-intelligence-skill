@@ -303,20 +303,6 @@ def read_and_save(p, state):
     save_state(state)
     return ps
 
-def resolve_label(label, profile):
-    """Resolve a label to a profile value by exact key match. Falls back to answer_matcher."""
-    norm = re.sub(r'[^a-z0-9+#]+', ' ', label.lower()).strip()
-    fn, ln = profile.get("first_name", ""), profile.get("last_name", "")
-    if norm in ("full name", "name", "your name"):
-        return f"{fn} {ln}" if fn and ln else fn or ln or None
-    for pk, pv in profile.items():
-        if not pv or not isinstance(pv, str) or len(pv) < 2:
-            continue
-        pn = re.sub(r'[^a-z0-9]+', ' ', pk.lower()).strip()
-        if pn == norm:
-            return pv
-    return None
-
 def retry_with_backoff(fn, max_retries=2, base_delay=2, is_rate_limit=None):
     """Retry fn on rate-limit/transient failure with exponential backoff + jitter."""
     for attempt in range(max_retries + 1):
