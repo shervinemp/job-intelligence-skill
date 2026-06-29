@@ -176,7 +176,7 @@ def cmd_craft(auto=False):
         if success and os.environ.get("JI_TAILOR", "agent") == "agent":
             print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'", file=sys.stderr)
         elif success:
-            print(f"  COMPLETE {jid} — run 'tailor.py review {jid}' then admit", file=sys.stderr)
+            print(f"  COMPLETE {jid} — run 'tailor.py review --jid {jid}'", file=sys.stderr)
         else:
             err_str = str(result)[:120]
             if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
@@ -222,29 +222,27 @@ def craft_jid(jid):
             print(f"  FAILED {jid} {err_str}", file=sys.stderr)
 
 
-def cmd_review(count=1):
+def cmd_review(jid=None, count=1):
     state = load()
-    tailored = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "tailored"]
-    if not tailored:
+    if jid:
+        candidates = [(jid, state["jobs"][jid])] if jid in state["jobs"] else []
+    else:
+        candidates = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "tailored"]
+    if not candidates:
         print("No tailored jobs to review.", file=sys.stderr)
         return
-    batch = tailored if count == -1 else tailored[:count]
+    batch = candidates if (count == -1 or jid) else candidates[:count]
     for jid, entry in batch:
         title = entry.get("title", "?")
         company = entry.get("company", "?")
-        script_path = os.path.join(RESULTS_DIR, jid, "script.py")
-        cl_text = ""
-        if os.path.exists(script_path):
-            with open(script_path, encoding="utf-8") as f:
-                script_src = f.read()
-            cl_match = re.search(r'COVER_LETTER_TEXT\s*=\s*"""(.+?)"""', script_src, re.DOTALL)
-            if cl_match:
-                cl_text = cl_match.group(1).strip()[:400]
+        rd = os.path.join(RESULTS_DIR, jid)
         print(f"JOB {jid} {title} @ {company}", file=sys.stderr)
         print(f"  URL: {entry.get('url', '')}", file=sys.stderr)
-        if cl_text:
-            print(f"  COVER: {cl_text}", file=sys.stderr)
-        print(f"  APPROVED or REJECT --feedback \"reason\"?", file=sys.stderr)
+        print(f"  RESUME: {os.path.join(rd, 'resume.json')}", file=sys.stderr)
+        resume_pdfs = [f for f in os.listdir(rd) if "Resume" in f and f.endswith(".pdf")] if os.path.isdir(rd) else []
+        if resume_pdfs:
+            print(f"  PDF: {os.path.join(rd, resume_pdfs[0])}", file=sys.stderr)
+        print(f"NEXT: tailor.py admit {jid}", file=sys.stderr)
 
 
 def cmd_admit(*job_ids, pdf_path=None):
