@@ -1,4 +1,5 @@
-"""Field fill dispatch — routes to correct strategy by field type."""
+"""Field fill dispatch — routes to correct strategy by field type.
+Tries each method in the strategy's METHOD_CHAIN before giving up."""
 from apply.strategies import combobox, text, select
 
 
@@ -19,7 +20,13 @@ def field_deterministic(page, f, ans):
         return False
     if f["tag"] == "SELECT":
         el = page.query_selector(sel)
-        return bool(el and select.try_select_tag(el, f, ans))
+        if not el:
+            return False
+        methods = getattr(select, "METHOD_CHAIN", ["select_option"])
+        for method in methods:
+            if select.try_select_tag(el, f, ans, method=method):
+                return True
+        return False
     if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
         return bool(combobox.fill(page, f, ans))
     if f.get("datepicker") == "flatpickr":
@@ -30,5 +37,11 @@ def field_deterministic(page, f, ans):
         return bool(contenteditable.fill(page, sel, ans))
     if f["tag"] in ("INPUT", "TEXTAREA"):
         el = page.query_selector(sel) if sel else None
-        return text.fill_text_field(page, f, ans, sel, el)
+        if not el:
+            return False
+        methods = getattr(text, "METHOD_CHAIN", ["fill"])
+        for method in methods:
+            if text.fill_text_field(page, f, ans, sel, el, method=method):
+                return True
+        return False
     return False
