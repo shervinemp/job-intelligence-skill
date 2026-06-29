@@ -1,16 +1,16 @@
 # ADR-001: Auto-fill memory for unattended applications
 
-**Status:** Phase 1 implemented; Phase 2 partial; Phase 3 implemented (OFF by default); Phase 4 deferred
+**Status:** Phases 1–4 implemented (Phase 2 partial); Phases 3–4 OFF by default
 **Date:** 2026-06-29
 **Context owner:** apply pipeline (`apply/`)
 
-> **Phase 3 ships disabled (`use_mappings: false`).** The mapping store is complete
-> and tested, but it changes nothing live until explicitly enabled — so it carries
-> no risk before the shadow-run data exists. Enable it only after reviewing audit
-> logs from a shadow run. **Phase 4 (gating enforcement, advance-on-validated) is
-> still deferred**: it needs that same data to set confidence thresholds and decide
-> what to enforce. Building it blind would be the speculative over-engineering this
-> ADR exists to avoid.
+> **Phases 3 and 4 ship disabled** (`use_mappings`, `enforce_validation`,
+> `gate_submit` all default false; `paused` false). The machinery is complete and
+> tested but changes nothing live until enabled — so it carries no risk before the
+> shadow-run data exists. The rollout order (shadow → review → enable) is in
+> `runbook-shadow-to-mappings.md`. The one judgment that still needs real data is
+> *tuning* (confidence thresholds, which categories to hold) — the enforcement
+> mechanism is built, but enable it against evidence, not blind.
 
 ## Context
 
@@ -171,8 +171,13 @@ Each phase is independently useful and de-risks the next.
   corrected-then-passed mappings on verified submit (ADR #8); `apply.py mappings
   list|confirm|clear <jid>` is the human-review path. Gated by `policy.use_mappings`
   (default false) — enable after reviewing shadow data.
-- **Phase 4 — Policy/gating.** Confidence thresholds, sensitive-category carve-outs, hold vs.
-  live, kill-switch.
+- **Phase 4 — Policy/gating. [IMPLEMENTED — off by default]** `apply/common/gate.py`
+  (`submit_decision`: paused→blocked, non-live→hold, `gate_submit`+invalid→hold, else submit)
+  is the single submit gate in `cmd_submit`. `enforce_validation` escalates fill-time values
+  that fail `validate_value` (the deferred Phase-2 enforcement). `paused` is the kill-switch.
+  Flags `paused`/`enforce_validation`/`gate_submit` all default false. Remaining is data-tuning
+  only: confidence thresholds + finer category carve-outs (mechanism in place, thresholds need
+  shadow evidence).
 
 ## Consequences
 
