@@ -79,15 +79,14 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
 
     tailor_mode = os.environ.get("JI_TAILOR", "agent")
     prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
-    try:
-        with open(prompt_path) as f:
-            instructions = f.read()
-    except FileNotFoundError:
-        instructions = "Write a tailored CV for this job."
+    if not os.path.exists(prompt_path):
+        return False, f"tailor_prompt.md not found at {prompt_path}"
+    with open(prompt_path) as f:
+        instructions = f.read()
     prompt = instructions + "\n\n---\n\n" + prompt
 
     if tailor_mode == "agent":
-        prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
+        prompt += "\n\nWrite the resume.json file with the tailored JSON Resume data."
         print(f"PROMPT: {os.path.join(RESULTS_DIR, job_id, 'prompt.txt')}", file=sys.stderr)
         print(f"  Write resume.json, then: tailor.py build {job_id} && tailor.py admit {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
