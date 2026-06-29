@@ -495,10 +495,7 @@ async function dump(page) {
     }
     if (gems) {
       if (gems[opts.gemName]) GEM_ID = gems[opts.gemName];
-      else {
-        log(`Warning: '${opts.gemName}' not in gems.json, using as raw ID`);
-        GEM_ID = opts.gemName;
-      }
+      else GEM_ID = opts.gemName;
     }
   }
 

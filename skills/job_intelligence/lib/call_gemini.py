@@ -58,6 +58,7 @@ def call_gemini_node(*args, timeout_seconds=600, gem=None, **kwargs):
         arg_list = list(args)
     cmd = [_NODE_BIN, GEMINI_JS] + arg_list
     if gem:
+        # Resolve gem name to ID, or pass raw hex ID directly
         try:
             with open(_GEMS_PATH) as f:
                 gems = json.load(f)
@@ -66,6 +67,9 @@ def call_gemini_node(*args, timeout_seconds=600, gem=None, **kwargs):
         except Exception:
             pass
         cmd += ["--gem", gem]
+        # Suppress gemini.js double-resolve warning by feeding the raw ID
+        if re.match(r'^[0-9a-f]{14}$', gem):
+            cmd += ["--gem-resolved"]
     cmd += [s for k, v in kwargs.items() for s in (f"--{k}", v)]
     gemini_dir = os.path.dirname(GEMINI_JS)
 
@@ -86,12 +90,13 @@ def call_gemini_node(*args, timeout_seconds=600, gem=None, **kwargs):
                 cwd=gemini_dir
             )
             stdout, stderr = proc.communicate(timeout=timeout_seconds)
-            # Forward gemini.js stderr diagnostics (includes deleteChat debug logs)
+            # Forward gemini.js stderr diagnostics (skip info messages, show warnings/errors)
             if stderr:
                 for line in stderr.decode("utf-8", errors="replace").split("\n"):
-                    line = line.strip()
-                    if line:
-                        print(f"  [gemini] {line}", file=sys.stderr)
+                    line = line.strip().replace("[gemini] ", "", 1)
+                    if not line or line.startswith("Navigating to") or line.startswith("3.5 Flash") or line in ("Sent!", "Waiting..."):
+                        continue
+                    print(f"  [gemini] {line}", file=sys.stderr)
             # Read output file first (single source of truth)
             data = read_output()
             if data:
