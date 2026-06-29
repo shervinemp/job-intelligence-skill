@@ -73,6 +73,16 @@ class ProfileFactMatch(unittest.TestCase):
     def test_empty_label(self):
         self.assertIsNone(self._val(""))
 
+    def test_expanded_string_fact_key(self):
+        # Phase 2 widened the resolvable set to string-valued facts.
+        prof = dict(PROFILE, expected_salary=95000)  # numeric on purpose
+        r = resolution_for_fill("Expected salary", prof)
+        self.assertEqual(r.value, "95000")  # coerced to str
+
+    def test_explicit_city_wins_over_derived(self):
+        prof = dict(PROFILE, city="Kanata")  # location says Ottawa
+        self.assertEqual(resolution_for_fill("City", prof).value, "Kanata")
+
 
 class AnswersOverride(unittest.TestCase):
     def _res(self, label, override):

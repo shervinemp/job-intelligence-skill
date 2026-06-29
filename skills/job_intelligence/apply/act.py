@@ -46,6 +46,11 @@ def _domain(url):
         return ""
 
 
+# Typo-detection set for profile.json (warns on unrecognized keys). NOT the same
+# as what gets auto-resolved: deterministic resolution uses the string-valued
+# subset in resolve._PROFILE_KEYS (+ the profile["answers"] map + name/location
+# derivations). Booleans like authorized_to_work are valid keys but are resolved
+# via the mapping layer (ADR-001 Phase 3), not by exact label match.
 _KNOWN_PROFILE_KEYS = {
     "first_name", "last_name", "email", "phone",
     "linkedin_url", "github_url", "portfolio_url", "website",
@@ -229,7 +234,7 @@ def _handle_post_click(state, ps, page):
     return False
 
 
-def _fill_radios(page, fields, answers, ca, profile, jid):
+def _fill_radios(page, fields, answers, profile, jid):
     """Fill radio groups. Returns filled count + unfilled list."""
     filled = 0
     unfilled = []
@@ -435,7 +440,7 @@ def _fill_field_deterministic(page, f, ans):
     return _fd(page, f, ans)
 
 
-def _fill_text(page, fields, answers, ca, profile, jid, state):
+def _fill_text(page, fields, answers, profile, jid, state):
     """Fill text/select/textarea fields. Returns filled count + unfilled list."""
     filled = 0
     unfilled = []
@@ -572,9 +577,13 @@ def _audit_fill(jid, fields, answers, profile, page_num):
             continue
         res = resolution_for_fill(lbl, profile, answers_override=answers)
         cur = (f.get("value", "") or "").strip()
+        validated = None
+        if res.value:
+            from apply.common.validate import validate_value
+            validated, _reason = validate_value(f, res.value)
         audit.log_field(jid, lbl, res.value or cur, provenance=res.provenance,
                         category=audit.categorize(lbl, f.get("options"), f.get("tag")),
-                        filled=bool(cur), page=page_num)
+                        filled=bool(cur), validated=validated, page=page_num)
 
 
 def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False):
@@ -878,7 +887,6 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
             profile = {}
         else:
             _validate_profile(profile)
-    ca = profile.get("common_answers", {})
 
     # Pass 1: Probe — enrich fields with available options and constraints
     ps["fields"] = _probe_fields(page, ps["fields"])
@@ -918,10 +926,10 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
         return
 
     radio_filled, radio_unfilled = _fill_radios(
-        page, ps["fields"], answers, ca, profile, jid
+        page, ps["fields"], answers, profile, jid
     )
     text_filled, text_unfilled = _fill_text(
-        page, ps["fields"], answers, ca, profile, jid, state
+        page, ps["fields"], answers, profile, jid, state
     )
     filled = radio_filled + text_filled
     unfilled = radio_unfilled + text_unfilled
@@ -938,7 +946,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
         for ef in eeo_unfilled:
             res = resolution_for_fill(ef["label"], profile, answers_override=answers)
             if res.value:
-                nf, _ = _fill_text(page, [ef], {ef["label"]: res.value}, ca, profile, jid, state)
+                nf, _ = _fill_text(page, [ef], {ef["label"]: res.value}, profile, jid, state)
                 filled += nf
                 print(f"  EEO: {ef['label'][:50]} -> {res.value[:40]} ({res.provenance})", file=sys.stderr)
             else:
@@ -983,7 +991,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
         ]
         if new_fields:
             text_filled2, text_unfilled2 = _fill_text(
-                page, new_fields, answers, ca, profile, jid, state
+                page, new_fields, answers, profile, jid, state
             )
             filled += text_filled2
             unfilled.extend(text_unfilled2)
@@ -1007,7 +1015,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
             if match and len(match.get("options", [])) > len(
                 cf.get("options", []) or []
             ):
-                nf, nu = _fill_text(page, [match], answers, ca, profile, jid, state)
+                nf, nu = _fill_text(page, [match], answers, profile, jid, state)
                 if nf:
                     filled_any = True
                     filled += nf
@@ -1028,7 +1036,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
         for ml in missing:
             match = next((ff for ff in ps_v["fields"] if ff.get("label", "")[:50] == ml), None)
             if match:
-                nf, _ = _fill_text(page, [match], answers, ca, profile, jid, state)
+                nf, _ = _fill_text(page, [match], answers, profile, jid, state)
                 filled += nf
         if registry and registry.has_hook("post_fill"):
             registry.call_hook("post_fill", page)
@@ -1047,7 +1055,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
         _audit_fill(jid, ps_audit.get("fields", []), answers, profile, page_num)
         asum = audit.summarize(jid)
         emit_status("audit", f"fields={asum['fields']} filled={asum['filled']} "
-                             f"prov={asum['by_provenance']} cat={asum['by_category']}")
+                             f"invalid={asum['invalid']} prov={asum['by_provenance']} cat={asum['by_category']}")
     except Exception as _e:
         print(f"AUDIT_WARN: {_e}", file=sys.stderr)
     if not submits_for_real(mode):

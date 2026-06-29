@@ -1,8 +1,15 @@
 # ADR-001: Auto-fill memory for unattended applications
 
-**Status:** Phase 1 implemented; Phases 2–4 proposed
+**Status:** Phase 1 implemented; Phase 2 partial; Phases 3–4 deliberately deferred
 **Date:** 2026-06-29
 **Context owner:** apply pipeline (`apply/`)
+
+> **Phases 3–4 are intentionally not started.** The mapping store (3) and gating
+> enforcement (4) depend on the Phase-1 shadow-run data to be built correctly —
+> e.g. how often each tier/provenance actually occurs, and how often single-pass
+> values would have been wrong. Building them before that data exists would be the
+> speculative over-engineering this ADR exists to avoid. Run shadow mode on real
+> jobs first, read the audit logs, then design 3–4 against the evidence.
 
 ## Context
 
@@ -145,8 +152,15 @@ Each phase is independently useful and de-risks the next.
   Verify hardened: confirmation-URL signal added; vision is a last-resort fallback gated on
   `ask_api.available()`. Enable via `JI_APPLY_MODE=shadow`, `apply_policy.json`, or `act --shadow`.
   *Next: run across real jobs and read the audit logs to size Phases 2–4.*
-- **Phase 2 — Structured profile + fill-time validation.** Tier-1 KB + validate every value
-  against the live field. Removes most escalations safely, no caching yet.
+- **Phase 2 — Structured profile + fill-time validation. [PARTIAL]** Done: `apply/common/
+  validate.py` (option-match + email/phone/number/url checks) wired into the audit pass
+  (records `validated`, surfaced as `invalid=N` in the fill summary); reconciled
+  resolve._PROFILE_KEYS with act._KNOWN_PROFILE_KEYS (string-valued facts now resolve, with
+  str-coercion and explicit-key-wins location derivation); removed the vestigial `ca`
+  threading and a dead detect.py branch. Deferred: *enforcing* validation at fill time
+  (escalate-on-invalid) — gated on shadow-run data confirming it doesn't break working fills;
+  and wiring `decisions.md` → structured facts (needs the mapping/LLM layer). Booleans
+  (authorized_to_work, requires_sponsorship) still resolve via Phase 3, not here.
 - **Phase 3 — Mapping store.** Fingerprinted label→key mappings, provenance + TTL, promoted
   only on verified submit. Cross-run learning that shrinks the escalation set.
 - **Phase 4 — Policy/gating.** Confidence thresholds, sensitive-category carve-outs, hold vs.

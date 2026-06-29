@@ -37,9 +37,17 @@ def normalize(label: str) -> str:
 
 # ─── Ephemeral answer builder ───────────────────────────────────────
 
+# String-valued profile facts resolved by exact (normalized) label match. Kept in
+# sync with act.py's _KNOWN_PROFILE_KEYS (the typo-detection set), minus the
+# boolean/parameterized facts (authorized_to_work, requires_sponsorship) that need
+# yes/no + country transforms — those are deferred to the mapping layer (ADR-001
+# Phase 3), not resolved here.
 _PROFILE_KEYS = {
     "first_name", "last_name", "email", "phone",
-    "linkedin_url", "github_url", "portfolio_url",
+    "linkedin_url", "github_url", "portfolio_url", "website",
+    "address", "city", "state", "zip", "country",
+    "visa_status", "expected_salary", "salary_currency",
+    "work_preference", "remote_preference", "start_date", "pronouns",
     "resume_path", "location",
 }
 
@@ -50,7 +58,7 @@ def _build_ephemeral(profile: dict) -> dict:
     for k in _PROFILE_KEYS:
         v = profile.get(k)
         if v:
-            ephemeral[k] = (v, "profile")
+            ephemeral[k] = (str(v), "profile")
 
     fn, ln = profile.get("first_name", ""), profile.get("last_name", "")
     if fn and ln:
@@ -58,15 +66,17 @@ def _build_ephemeral(profile: dict) -> dict:
     elif fn or ln:
         ephemeral["full_name"] = (fn or ln, "derived")
 
+    # Derive location parts from "location" only if not given as explicit keys
+    # (explicit profile.city/country/state win over the derivation).
     loc = profile.get("location", "")
     if loc and "," in loc:
         parts = [p.strip() for p in loc.split(",")]
         if len(parts) >= 1 and parts[0]:
-            ephemeral["city"] = (parts[0], "derived")
+            ephemeral.setdefault("city", (parts[0], "derived"))
         if len(parts) >= 2 and parts[1]:
-            ephemeral["state_province"] = (parts[1], "derived")
+            ephemeral.setdefault("state_province", (parts[1], "derived"))
         if len(parts) >= 3 and parts[-1]:
-            ephemeral["country"] = (parts[-1], "derived")
+            ephemeral.setdefault("country", (parts[-1], "derived"))
 
     answers = profile.get("answers", {})
     if isinstance(answers, dict):

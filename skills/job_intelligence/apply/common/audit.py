@@ -56,7 +56,8 @@ def _write(jid, rec):
         print(f"AUDIT_FAIL: {e}", file=sys.stderr)
 
 
-def log_field(jid, label, value, provenance, category="generic", filled=True, page=None):
+def log_field(jid, label, value, provenance, category="generic", filled=True,
+              validated=None, page=None):
     _write(jid, {
         "kind": "field",
         "label": (label or "")[:80],
@@ -64,6 +65,7 @@ def log_field(jid, label, value, provenance, category="generic", filled=True, pa
         "provenance": provenance,
         "category": category,
         "filled": bool(filled),
+        "validated": validated,  # True / False / None (not checked)
         "page": page,
     })
 
@@ -74,7 +76,7 @@ def log_event(jid, event, mode=None, detail=None, page=None):
 
 def summarize(jid):
     """Aggregate the audit log into counts (by provenance, category, filled). Empty if none."""
-    summary = {"fields": 0, "filled": 0, "by_provenance": {}, "by_category": {}, "events": []}
+    summary = {"fields": 0, "filled": 0, "invalid": 0, "by_provenance": {}, "by_category": {}, "events": []}
     try:
         with open(_path(jid), encoding="utf-8") as f:
             lines = f.readlines()
@@ -89,6 +91,8 @@ def summarize(jid):
             summary["fields"] += 1
             if rec.get("filled"):
                 summary["filled"] += 1
+            if rec.get("validated") is False:
+                summary["invalid"] += 1
             p = rec.get("provenance", "?")
             c = rec.get("category", "?")
             summary["by_provenance"][p] = summary["by_provenance"].get(p, 0) + 1

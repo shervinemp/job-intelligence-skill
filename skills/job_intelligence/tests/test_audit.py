@@ -42,13 +42,15 @@ class LogRoundTrip(unittest.TestCase):
 
     def test_write_and_summarize(self):
         jid = "job123"
-        audit.log_field(jid, "Email", "b@x.com", provenance="ephemeral", category="generic", filled=True)
+        audit.log_field(jid, "Email", "b@x.com", provenance="ephemeral", category="generic", filled=True, validated=True)
+        audit.log_field(jid, "Country", "Mars", provenance="user_typed", category="generic", filled=True, validated=False)
         audit.log_field(jid, "Cover letter", "", provenance="no_match", category="freetext", filled=False)
         audit.log_event(jid, "submit_blocked", mode="shadow", detail="Submit application")
 
         s = audit.summarize(jid)
-        self.assertEqual(s["fields"], 2)
-        self.assertEqual(s["filled"], 1)
+        self.assertEqual(s["fields"], 3)
+        self.assertEqual(s["filled"], 2)
+        self.assertEqual(s["invalid"], 1)
         self.assertEqual(s["by_provenance"]["ephemeral"], 1)
         self.assertEqual(s["by_provenance"]["no_match"], 1)
         self.assertEqual(s["by_category"]["freetext"], 1)

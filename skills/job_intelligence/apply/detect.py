@@ -69,11 +69,8 @@ def run(jid):
         emit_next("none")
         _merge_state({"jid": jid})
         sys.exit(0)
-    if stage == "failed":
-        emit_status("failed", "run tailor.py retry first")
-        emit_next("tailor.py retry")
-        _merge_state({"jid": jid})
-        sys.exit(0)
+    # Note: failure is tracked via state='failed' (handled by the state!='active'
+    # guard above), not a 'failed' stage — so no stage=='failed' branch here.
     # Guard: tailored stage must have a resume PDF (may be missing after manual DB edit
     # or admit without --pdf). If missing, treat same as described -> needs re-tailor.
     if stage == "tailored" and not _has_pdf(jid):
