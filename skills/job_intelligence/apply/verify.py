@@ -216,3 +216,11 @@ def _mark_applied(jid):
         "UPDATE jobs SET stage=?, updated_at=? WHERE id=?",
         ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid),
     ).connection.commit()
+    # Promote corrected-then-passed mappings (no-op unless policy.use_mappings).
+    try:
+        from apply.common import mappings
+        n = mappings.promote(jid)
+        if n:
+            print(f"  MAPPINGS: promoted {n} confirmed mapping(s)", file=sys.stderr)
+    except Exception as e:
+        print(f"  MAPPINGS_SKIP: {e}", file=sys.stderr)

@@ -76,10 +76,18 @@ def _validate_profile(profile):
         )
 
 
-def _find_answer(label, answers, profile):
-    """Find answer via resolve chain (--answers override → profile facts)."""
+def _find_answer(label, answers, profile, field=None):
+    """Find answer via resolve chain (--answers override → profile facts →
+    confirmed mapping). The mapping step is a no-op unless policy.use_mappings."""
     res = resolution_for_fill(label, profile, answers_override=answers)
-    return res.value
+    if res.value is not None:
+        return res.value
+    if field is not None:
+        from apply.common import mappings
+        m = mappings.resolve_field(field, profile)
+        if m:
+            return m[0]
+    return None
 
 
 def _page_hash(page):
@@ -287,7 +295,8 @@ def _fill_radios(page, fields, answers, profile, jid):
         q_label = opts[0].split(" - ")[0] if " - " in opts[0] else opts[0]
         q_norm = re.sub(r"[^a-z0-9+#]+", " ", q_label.lower()).strip()
 
-        ans = _find_answer(q_label, answers, profile)
+        ans = _find_answer(q_label, answers, profile,
+                           field={"label": q_label, "options": opts, "tag": "radio"})
         if ans:
             ans_lower = ans.lower()
             matched = False
@@ -503,7 +512,7 @@ def _fill_text(page, fields, answers, profile, jid, state):
         elif current_stripped and len(current_stripped) > 1:
             # For required fields, still check if answer contradicts the current value
             if f.get("required"):
-                ans_check = _find_answer(lbl, answers, profile)
+                ans_check = _find_answer(lbl, answers, profile, field=f)
                 if ans_check:
                     cw = current_stripped.lower().split()
                     aw = ans_check.lower().split()
@@ -516,7 +525,7 @@ def _fill_text(page, fields, answers, profile, jid, state):
             else:
                 continue
 
-        ans = _find_answer(lbl, answers, profile)
+        ans = _find_answer(lbl, answers, profile, field=f)
         if ans is None:
             if f.get("required"):
                 unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
@@ -562,10 +571,14 @@ def _check_already_submitted(state, jid):
     return False
 
 
-def _audit_fill(jid, fields, answers, profile, page_num):
+def _audit_fill(jid, fields, answers, profile, page_num, platform="", corrected_labels=()):
     """Read-only audit pass: for each detected field, record the resolved tier
     (value + provenance + category) and whether it ended up filled. Decoupled
-    from the fill mutation so it cannot affect form state."""
+    from the fill mutation so it cannot affect form state. Also feeds the mapping
+    learner (no-op unless policy.use_mappings)."""
+    from apply.common.validate import validate_value
+    from apply.common import mappings
+    corrected = set(corrected_labels or ())
     for f in fields:
         lbl = f.get("label", "")
         if not lbl:
@@ -579,11 +592,14 @@ def _audit_fill(jid, fields, answers, profile, page_num):
         cur = (f.get("value", "") or "").strip()
         validated = None
         if res.value:
-            from apply.common.validate import validate_value
             validated, _reason = validate_value(f, res.value)
         audit.log_field(jid, lbl, res.value or cur, provenance=res.provenance,
                         category=audit.categorize(lbl, f.get("options"), f.get("tag")),
                         filled=bool(cur), validated=validated, page=page_num)
+        # Learn: record a pending mapping for explicitly-answered fields.
+        if res.value:
+            mappings.learn(jid, f, res.value, res.provenance, profile,
+                           platform=platform, corrected=(lbl in corrected))
 
 
 def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False):
@@ -905,7 +921,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
                 filled += 1
                 continue
             opts = f.get("options", [])
-            ans = _find_answer(lbl, answers, profile)
+            ans = _find_answer(lbl, answers, profile, field=f)
             if ans:
                 if opts and ans not in opts:
                     match = next((o for o in opts if ans.lower() in o.lower()), None)
@@ -1052,7 +1068,10 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
     mode = resolve_mode("shadow" if shadow else None)
     try:
         ps_audit = read_page(page)
-        _audit_fill(jid, ps_audit.get("fields", []), answers, profile, page_num)
+        _platform = state.get("platform", "") or _domain(page.url)
+        _corrected = state.get("_fields_with_errors", [])
+        _audit_fill(jid, ps_audit.get("fields", []), answers, profile, page_num,
+                    platform=_platform, corrected_labels=_corrected)
         asum = audit.summarize(jid)
         emit_status("audit", f"fields={asum['fields']} filled={asum['filled']} "
                              f"invalid={asum['invalid']} prov={asum['by_provenance']} cat={asum['by_category']}")

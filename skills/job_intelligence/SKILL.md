@@ -103,6 +103,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | `apply.py flag <jid>` | Toggle auth wall flag |
 | `apply.py retry [<jid>]` | Re-attempt failed applies |
 | `apply.py undo <jid>` | Move back one stage |
+| `apply.py mappings list\|confirm\|clear <jid>` | Field→meaning mapping store (Phase 3, off unless `use_mappings`). `confirm` promotes a job's pending mappings after review. |
 
 ### Apply tips
 
