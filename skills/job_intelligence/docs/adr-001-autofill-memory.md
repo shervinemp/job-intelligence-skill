@@ -1,6 +1,6 @@
 # ADR-001: Auto-fill memory for unattended applications
 
-**Status:** Proposed
+**Status:** Phase 1 implemented; Phases 2–4 proposed
 **Date:** 2026-06-29
 **Context owner:** apply pipeline (`apply/`)
 
@@ -138,9 +138,13 @@ keys.
 
 Each phase is independently useful and de-risks the next.
 
-- **Phase 1 — Observability (no submission risk).** Audit log + `mode: shadow`. Fill, screenshot,
-  log intended values + provenance; never submit. Run across real jobs to measure how often
-  each tier actually occurs. *Build this first — it tells you what the rest needs.*
+- **Phase 1 — Observability (no submission risk). [IMPLEMENTED]** `apply/common/policy.py`
+  (mode live/shadow/hold, default live) + `apply/common/audit.py` (per-job
+  `results/<jid>/apply_audit.jsonl`: field value + provenance + tier category + filled). In
+  shadow/hold, `act --fill`/`act --submit` fill + screenshot + log but never click submit.
+  Verify hardened: confirmation-URL signal added; vision is a last-resort fallback gated on
+  `ask_api.available()`. Enable via `JI_APPLY_MODE=shadow`, `apply_policy.json`, or `act --shadow`.
+  *Next: run across real jobs and read the audit logs to size Phases 2–4.*
 - **Phase 2 — Structured profile + fill-time validation.** Tier-1 KB + validate every value
   against the live field. Removes most escalations safely, no caching yet.
 - **Phase 3 — Mapping store.** Fingerprinted label→key mappings, provenance + TTL, promoted

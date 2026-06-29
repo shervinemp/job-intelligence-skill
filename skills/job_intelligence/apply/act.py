@@ -33,6 +33,8 @@ from apply.common.output import (
 from apply.common.page_manager import PageManager
 from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
 from apply.common.resolve import resolution_for_fill
+from apply.common.policy import resolve_mode, submits_for_real
+from apply.common import audit
 
 profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 
@@ -555,7 +557,27 @@ def _check_already_submitted(state, jid):
     return False
 
 
-def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
+def _audit_fill(jid, fields, answers, profile, page_num):
+    """Read-only audit pass: for each detected field, record the resolved tier
+    (value + provenance + category) and whether it ended up filled. Decoupled
+    from the fill mutation so it cannot affect form state."""
+    for f in fields:
+        lbl = f.get("label", "")
+        if not lbl:
+            continue
+        if f.get("type") == "file":
+            cur = (f.get("value", "") or "").strip()
+            audit.log_field(jid, lbl, "<resume PDF>" if cur else "", provenance="file",
+                            category="generic", filled=bool(cur), page=page_num)
+            continue
+        res = resolution_for_fill(lbl, profile, answers_override=answers)
+        cur = (f.get("value", "") or "").strip()
+        audit.log_field(jid, lbl, res.value or cur, provenance=res.provenance,
+                        category=audit.categorize(lbl, f.get("options"), f.get("tag")),
+                        filled=bool(cur), page=page_num)
+
+
+def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False):
     answers = {}
     if answers_json:
         if answers_json.startswith("@"):
@@ -1017,6 +1039,25 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
     # answer across jobs, add it to profile.json ("answers" map or a known key).
 
     page_num = state.get("_page", "?")
+
+    # Audit pass (read-only) + shadow-mode evidence.
+    mode = resolve_mode("shadow" if shadow else None)
+    try:
+        ps_audit = read_page(page)
+        _audit_fill(jid, ps_audit.get("fields", []), answers, profile, page_num)
+        asum = audit.summarize(jid)
+        emit_status("audit", f"fields={asum['fields']} filled={asum['filled']} "
+                             f"prov={asum['by_provenance']} cat={asum['by_category']}")
+    except Exception as _e:
+        print(f"AUDIT_WARN: {_e}", file=sys.stderr)
+    if not submits_for_real(mode):
+        try:
+            from apply.common.inspect_lib import capture
+            capture(page, jid, prefix="shadow_fill")
+        except Exception:
+            pass
+        emit_status(f"{mode}_mode", "fill recorded; submit will be blocked (set JI_APPLY_MODE=live to submit)")
+
     emit_fill_report(filled, unfilled, page_num, profile if unfilled else None)
 
     btns = ps.get("buttons", [])
@@ -1276,7 +1317,7 @@ def cmd_back(jid):
     emit_next("act --fill")
 
 
-def cmd_submit(jid, confirm=False, candidate=None):
+def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
     state = load_state()
     if state.get("jid") != jid:
         print(
@@ -1409,6 +1450,19 @@ def cmd_submit(jid, confirm=False, candidate=None):
         f"SUBMIT: {target['text']}\nDISABLED: {target.get('disabled', False)}",
         file=sys.stderr,
     )
+
+    # Shadow / hold mode: capture evidence, log, but DO NOT click submit.
+    mode = resolve_mode("shadow" if shadow else None)
+    if not submits_for_real(mode):
+        try:
+            from apply.common.inspect_lib import capture
+            capture(page, jid, prefix="shadow_submit")
+        except Exception:
+            pass
+        audit.log_event(jid, "submit_blocked", mode=mode, detail=target["text"])
+        emit_status(f"{mode}_mode", f"would submit '{target['text']}' — NOT clicked ({mode})")
+        emit_next("verify, or set JI_APPLY_MODE=live to submit for real")
+        return
 
     # Platform pre-submit hook (e.g., scroll to reveal button)
     reg = resolve_registry(page.url)
@@ -1585,16 +1639,17 @@ def cmd_inspect(jid, candidate=None):
 
 
 def run(args):
+    shadow = getattr(args, "shadow", False)
     if args.inspect:
         cmd_inspect(args.jid, args.candidate)
     elif args.fill:
-        cmd_fill(args.jid, args.answers, args.candidate, args.dry_run)
+        cmd_fill(args.jid, args.answers, args.candidate, args.dry_run, shadow)
     elif args.next:
         cmd_next(args.jid, args.candidate)
     elif args.back:
         cmd_back(args.jid)
     elif args.submit:
-        cmd_submit(args.jid, args.confirm, args.candidate)
+        cmd_submit(args.jid, args.confirm, args.candidate, shadow)
     else:
         print(
             "ERROR: specify --fill, --next, --back, --submit, or --inspect",

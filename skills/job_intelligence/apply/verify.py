@@ -3,12 +3,63 @@
 4 strategies: modal closed, success text, Applied button, DB stage.
 """
 import json, os, sys, time
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
 from lib.chrome_manager import connect
 from apply.common.page_helpers import load_state, page_text
 from apply.common.output import emit_next, emit_status, emit_error
+
+
+# Tokens that, in a post-submit URL, strongly indicate a confirmation page.
+# Conservative set — avoids generic words like "complete" that appear pre-submit.
+_CONFIRM_URL_TOKENS = (
+    "thank", "thankyou", "success", "confirmation", "confirmed",
+    "submitted", "application-received", "received", "applied",
+)
+
+
+def _is_confirmation_url(url):
+    """True if the URL path/query looks like a post-submit confirmation page."""
+    try:
+        u = urlparse(url or "")
+        hay = (u.path + "?" + (u.query or "")).lower()
+    except Exception:
+        return False
+    return any(t in hay for t in _CONFIRM_URL_TOKENS)
+
+
+def _vision_confirms(page, jid):
+    """Last-resort: ask the vision model if the page shows a successful submission.
+    Only call when deterministic signals were inconclusive AND the endpoint is up.
+    Returns True only on a clear YES."""
+    try:
+        from lib.ask_api import available, ask
+        if not available():
+            return False
+        from apply.common.inspect_lib import page_jpeg, save_temp
+        img = save_temp(page_jpeg(page, full=False), ".jpg")
+        try:
+            reply, err = ask(
+                img,
+                "Did this job application submit successfully? Answer only YES or NO.",
+            )
+        finally:
+            try:
+                os.unlink(img)
+            except Exception:
+                pass
+        if err:
+            return False
+        ans = (reply or "").strip().lower()
+        if ans.startswith("yes"):
+            return True
+        if ans:
+            print(f"  VISION: {ans[:60]}", file=sys.stderr)
+    except Exception as e:
+        print(f"  VISION_SKIP: {e}", file=sys.stderr)
+    return False
 
 
 def run(jid):
@@ -71,12 +122,17 @@ def run(jid):
             emit_status("submitted (text match on page)")
             emit_next("none")
             return
+        if _is_confirmation_url(page.url):
+            _mark_applied(jid)
+            emit_status(f"submitted (confirmation URL: {page.url[:60]})")
+            emit_next("none")
+            return
     else:
-        # No matching page — scan ALL pages for success text
+        # No matching page — scan ALL pages for success text / confirmation URL
         for p in ctx.pages:
             try:
                 t = (page_text(p) or "").lower()
-                if any(s in t for s in success_signals):
+                if any(s in t for s in success_signals) or _is_confirmation_url(p.url):
                     _mark_applied(jid)
                     emit_status("submitted (cross-domain redirect)")
                     emit_next("none")
@@ -134,13 +190,20 @@ def run(jid):
         emit_next("act --inspect")
         return
 
-    # Screenshot for optional LLM verification (I run ask_api manually if needed)
+    # Last-resort: auto vision check (only if the endpoint is reachable).
+    if page and _vision_confirms(page, jid):
+        _mark_applied(jid)
+        emit_status("submitted (vision last-resort)")
+        emit_next("none")
+        return
+
+    # Capture the screenshot as an audit artifact (and a manual-check fallback when
+    # no vision endpoint is configured).
     if page:
         try:
             from apply.common.inspect_lib import capture
             img_path = capture(page, str(jid), prefix="verify")
             print(f"  Verify screenshot: {img_path}", file=sys.stderr)
-            print(f"  Run 'lib/ask_api.py --img {img_path} --prompt \"check for success message\"' for vision verification", file=sys.stderr)
         except Exception:
             pass
 

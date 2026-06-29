@@ -52,6 +52,8 @@ def main():
     act_p.add_argument("--answers", help="JSON field->value mapping for --fill")
     act_p.add_argument("--candidate", type=int, default=None)
     act_p.add_argument("--confirm", action="store_true")
+    act_p.add_argument("--shadow", action="store_true",
+                       help="Fill + screenshot + audit, but never click submit (overrides policy/JI_APPLY_MODE for this run)")
 
     verify_p = sub.add_parser("verify", help="Check submission result")
     verify_p.add_argument("jid", help="Job ID")
