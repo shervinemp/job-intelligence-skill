@@ -13,10 +13,10 @@ import re
 import sys
 import time
 
-from playwright.sync_api import TimeoutError, expect
+from playwright.sync_api import TimeoutError
 
 from lib.chrome_manager import connect
-from lib.db import add_job, desc_get, desc_save, get_conn
+from lib.db import add_job, desc_save
 from lib.platforms import clean as clean_desc
 
 DEFAULT_URL = "https://www.linkedin.com/jobs/collections/recommended/"

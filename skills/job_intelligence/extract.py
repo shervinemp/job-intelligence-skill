@@ -8,7 +8,7 @@ import sys
 import shutil
 
 from lib.config import RESULTS_DIR, SNAPSHOTS_DIR, STATE_PATH, REGISTRY_PATH
-from lib.db import stage_list_all, stage_count, setting_get, setting_set
+from lib.db import stage_list_all, setting_get, setting_set
 from lib.db import add_job, pipeline_status, get_conn
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
