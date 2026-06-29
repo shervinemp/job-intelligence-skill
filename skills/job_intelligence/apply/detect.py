@@ -9,6 +9,7 @@ from lib.chrome_manager import connect
 from lib.db import get_conn, desc_exists
 from apply.common.page_helpers import read_page, check_captcha, tag_page, STATE_PATH
 from apply.common.output import emit_next, emit_status, emit_type, emit_error
+from apply.common.apply_state import clear as _as_clear
 from apply.common.registry import resolve as resolve_registry
 from apply.common.platforms import (
     check_page,
@@ -93,6 +94,8 @@ def run(jid):
             _merge_state({"jid": jid})
             sys.exit(0)
 
+    # Clear stale apply state on fresh detect
+    _as_clear(jid)
 
     # Classify type
     b, ctx = connect()

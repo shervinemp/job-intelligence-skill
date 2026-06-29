@@ -9,6 +9,7 @@ from lib.db import get_conn
 from lib.chrome_manager import connect
 from apply.common.page_helpers import load_state, page_text
 from apply.common.output import emit_next, emit_status, emit_error
+from apply.common.apply_state import clear as _as_clear
 from apply.common.resolve import promote_session_cache
 
 
@@ -154,6 +155,7 @@ def _mark_applied(jid):
         "UPDATE jobs SET stage=?, updated_at=? WHERE id=?",
         ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid),
     ).connection.commit()
+    _as_clear(jid)
     # Promote session-cached LLM selections that passed the two-encounter rule
     try:
         promote_session_cache()
