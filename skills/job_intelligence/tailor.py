@@ -176,7 +176,7 @@ def cmd_craft(auto=False):
         if success and os.environ.get("JI_TAILOR", "agent") == "agent":
             print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'", file=sys.stderr)
         elif success:
-            print(f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check quality", file=sys.stderr)
+            print(f"  COMPLETE {jid} — run 'tailor.py review {jid}' then admit", file=sys.stderr)
         else:
             err_str = str(result)[:120]
             if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
