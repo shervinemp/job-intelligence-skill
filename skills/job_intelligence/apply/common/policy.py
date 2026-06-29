@@ -22,6 +22,7 @@ _DEFAULTS = {
     "never_auto": ["freetext"],
     "ttl_days": 90,
     "paused": False,
+    "use_mappings": False,  # ADR-001 Phase 3: enable the field→meaning mapping store
 }
 
 

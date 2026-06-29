@@ -1,15 +1,16 @@
 # ADR-001: Auto-fill memory for unattended applications
 
-**Status:** Phase 1 implemented; Phase 2 partial; Phases 3–4 deliberately deferred
+**Status:** Phase 1 implemented; Phase 2 partial; Phase 3 implemented (OFF by default); Phase 4 deferred
 **Date:** 2026-06-29
 **Context owner:** apply pipeline (`apply/`)
 
-> **Phases 3–4 are intentionally not started.** The mapping store (3) and gating
-> enforcement (4) depend on the Phase-1 shadow-run data to be built correctly —
-> e.g. how often each tier/provenance actually occurs, and how often single-pass
-> values would have been wrong. Building them before that data exists would be the
-> speculative over-engineering this ADR exists to avoid. Run shadow mode on real
-> jobs first, read the audit logs, then design 3–4 against the evidence.
+> **Phase 3 ships disabled (`use_mappings: false`).** The mapping store is complete
+> and tested, but it changes nothing live until explicitly enabled — so it carries
+> no risk before the shadow-run data exists. Enable it only after reviewing audit
+> logs from a shadow run. **Phase 4 (gating enforcement, advance-on-validated) is
+> still deferred**: it needs that same data to set confidence thresholds and decide
+> what to enforce. Building it blind would be the speculative over-engineering this
+> ADR exists to avoid.
 
 ## Context
 
@@ -161,8 +162,15 @@ Each phase is independently useful and de-risks the next.
   (escalate-on-invalid) — gated on shadow-run data confirming it doesn't break working fills;
   and wiring `decisions.md` → structured facts (needs the mapping/LLM layer). Booleans
   (authorized_to_work, requires_sponsorship) still resolve via Phase 3, not here.
-- **Phase 3 — Mapping store.** Fingerprinted label→key mappings, provenance + TTL, promoted
-  only on verified submit. Cross-run learning that shrinks the escalation set.
+- **Phase 3 — Mapping store. [IMPLEMENTED — off by default]** `apply/common/fingerprint.py`
+  (label+options+tag+type key; platform deliberately excluded so mappings reuse cross-ATS) +
+  `apply/common/mappings.py`. Caches field→meaning mappings (profile-key preferred over
+  literal), recomputes the value from the profile each lookup, validates against the live
+  field, and invalidates on profile-version change / TTL. `learn()` records pending mappings
+  from `--answers` fields (skips eeo/freetext); `promote()` auto-promotes only
+  corrected-then-passed mappings on verified submit (ADR #8); `apply.py mappings
+  list|confirm|clear <jid>` is the human-review path. Gated by `policy.use_mappings`
+  (default false) — enable after reviewing shadow data.
 - **Phase 4 — Policy/gating.** Confidence thresholds, sensitive-category carve-outs, hold vs.
   live, kill-switch.
 
