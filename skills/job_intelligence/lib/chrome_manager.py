@@ -200,8 +200,10 @@ def connect(timeout=15):
     Reuses a previously-started pipeline Chrome (from config file), or starts a new one.
     Never connects to the user's personal Chrome."""
     global CDP_PORT, CDP_URL
-    pw = _pw()
     for attempt in range(3):
+        # (Re)start Playwright each attempt — close() below stops it on failure, so a
+        # handle fetched once before the loop would be dead on retries.
+        pw = _pw()
         # Read persisted port from last start(), or env default
         port = _read_port()
         CDP_PORT = port
@@ -210,7 +212,7 @@ def connect(timeout=15):
         if not running:
             # Our Chrome is not running — start a fresh one on a free port
             if not start():
-                print("ERROR: could not start Chrome", file=__import__('sys').stderr)
+                print("ERROR: could not start Chrome", file=sys.stderr)
                 return None, None
         # Try connecting
         for _ in range(timeout):
@@ -225,10 +227,9 @@ def connect(timeout=15):
                 if "Target closed" in err or "Connection" in err or "Not connected" in err:
                     break  # Chrome died — restart
                 time.sleep(1)
-        # Chrome was running but connection failed — restart
-        print(f"Chrome unresponsive (attempt {attempt+1}/3), restarting...", file=__import__('sys').stderr)
+        # Chrome was running but connection failed — restart (close() resets _PW)
+        print(f"Chrome unresponsive (attempt {attempt+1}/3), restarting...", file=sys.stderr)
         close()
-        _PW = None
         time.sleep(2)
     return None, None
 

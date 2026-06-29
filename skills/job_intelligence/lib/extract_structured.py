@@ -3,6 +3,18 @@ import json
 import re
 
 
+def _num(v):
+    """Coerce a JSON-LD numeric-ish value (int/float or string like '85,000') to a
+    number, or None. JSON-LD salary fields are often strings, which would crash the
+    ',' format spec."""
+    if isinstance(v, (int, float)):
+        return v
+    try:
+        return float(re.sub(r"[,$\s]", "", str(v)))
+    except (ValueError, TypeError):
+        return None
+
+
 def extract_job_postings(html):
     """Extract JobPosting structured data from JSON-LD in HTML.
     Returns list of dicts with title, company, location, salary."""
@@ -15,8 +27,11 @@ def extract_job_postings(html):
             data = json.loads(m.group(1).strip())
         except (json.JSONDecodeError, AttributeError):
             continue
-        # Handle @graph wrapper
-        items = data if isinstance(data, list) else [data]
+        # Unwrap @graph if present, else handle list / single object
+        if isinstance(data, dict) and isinstance(data.get("@graph"), list):
+            items = data["@graph"]
+        else:
+            items = data if isinstance(data, list) else [data]
         for item in items:
             if isinstance(item, dict) and item.get("@type") == "JobPosting":
                 result = {}
@@ -39,13 +54,13 @@ def extract_job_postings(html):
                 if isinstance(salary, dict):
                     val = salary.get("value", {})
                     if isinstance(val, dict):
-                        min_v = val.get("minValue") or val.get("value")
-                        max_v = val.get("maxValue")
+                        min_v = _num(val.get("minValue") or val.get("value"))
+                        max_v = _num(val.get("maxValue"))
                         currency = val.get("currency", salary.get("currency", ""))
-                        if min_v:
-                            result["salary"] = f"${min_v:,}"
-                            if max_v:
-                                result["salary"] += f" - ${max_v:,}"
+                        if min_v is not None:
+                            result["salary"] = f"${min_v:,.0f}"
+                            if max_v is not None:
+                                result["salary"] += f" - ${max_v:,.0f}"
                             if currency:
                                 result["salary"] += f" {currency}"
                 results.append(result)
