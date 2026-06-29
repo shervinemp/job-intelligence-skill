@@ -20,6 +20,7 @@ from apply.common.page_helpers import (
     DEFAULT_EXCLUDED_BUTTONS as _EXCLUDED_BUTTONS,
 )
 from apply.common.registry import resolve as resolve_registry
+from apply.common.apply_state import init as _as_init, save as _as_save, record_fill as _as_record, advance_page as _as_advance, mark_submitted as _as_submitted, clear as _as_clear
 from apply.common.inspector import probe as probe_page
 from apply.common.learner import ButtonIntentClassifier
 from apply.common.field_reader import scan_errors
@@ -661,6 +662,14 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
     # Track page number for progress indicator
     state["_page"] = state.get("_page", 0) + 1
 
+    # Initialize/reconcile apply state for crash recovery
+    try:
+        _as = _as_init(jid, state.get("external_url", ""), state.get("platform", ""))
+        if _as:
+            _as_advance(jid)
+    except Exception:
+        pass
+
     # Probe: try standard first, cascade on failure
     ps = read_page(page)
     # Poll for React SPA fields that render 3-8s after DOMContentLoaded
@@ -1032,6 +1041,13 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         and not b["disabled"]
         for b in btns
     )
+    # Track fill progress in apply state for crash recovery
+    if not unfilled:
+        filled_fields = {f.get("label", f.get("_sel", f"field_{i}")): "" for i, f in enumerate(ps.get("fields", [])) if f.get("filled")}
+        try:
+            _as_record(jid, state.get("_page", 1), filled_fields)
+        except Exception:
+            pass
     if unfilled:
         emit_next('act --fill --answers \'{"<question>": "<answer>"}\'')
     elif has_submit:
@@ -1478,6 +1494,8 @@ def cmd_submit(jid, confirm=False, candidate=None):
             ).connection.commit()
             state["_last_submit"] = ""
             save_state(state)
+            _as_submitted(jid)
+            _as_clear(jid)
             emit_status("submitted (via AJAX)")
             emit_next("verify")
             return
