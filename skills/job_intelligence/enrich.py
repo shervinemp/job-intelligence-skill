@@ -457,7 +457,7 @@ def main():
     if args.command == "admit":
         cmd_admit(*args.jids, title=args.title, company=args.company, location=args.location, salary=args.salary, category=args.category, notes=args.notes, url=args.url)
     elif args.command == "reject":
-        cmd_reject(*args.jids)
+        cmd_skip(*args.jids)
     elif args.command == "flag":
         cmd_flag(*args.jids)
     elif args.command == "open":
