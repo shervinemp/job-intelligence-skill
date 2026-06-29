@@ -465,6 +465,7 @@ def main():
     done_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
     sub.add_parser("reject", help="Reject job").add_argument("jids", nargs="+")
     review_p = sub.add_parser("review", help="Review tailored jobs (strategy + cover letter)")
+    review_p.add_argument("--jid", help="Specific job ID to review")
     review_p.add_argument("--jobs", type=int, default=1, help="Jobs to review (default 1, -1 = all)")
     retry_p = sub.add_parser("retry", help="Retry failed, or re-process a specific job")
     retry_p.add_argument("jid", nargs="?")
@@ -479,7 +480,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "review":
-        cmd_review(count=args.jobs)
+        cmd_review(jid=args.jid, count=args.jobs)
     elif args.command in ("admit", "done"):
         cmd_admit(*args.jids, pdf_path=args.pdf)
     elif args.command == "reject":
