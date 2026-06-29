@@ -77,6 +77,15 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         prompt += f"\n\n--- YOUR PREVIOUS OUTPUT (address feedback below) ---\n{prev_response[:3000]}"
         prompt += f"\n\n--- FEEDBACK FROM REVIEW ---\n{feedback}"
 
+    # Reinforce accuracy rules (gem has the profile, but doesn't always follow them)
+    prompt += """
+Accuracy Rules (MUST follow):
+- Use EXACT company names from your attached profile — do NOT rename or rephrase them
+- Do NOT inflate titles: "Collaborated" stays "collaborated", not "Led" or "Spearheaded"
+- Company name must appear in the summary or a work highlight
+- Metrics: use ONLY numbers from the profile — no invented values
+- Cover letter: mention the target company and role by name"""
+
     tailor_mode = os.environ.get("JI_TAILOR", "agent")
     if tailor_mode == "agent":
         prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
