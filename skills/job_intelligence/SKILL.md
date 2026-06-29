@@ -83,6 +83,8 @@ The builder also validates the JSON before generating PDFs — run `--validate` 
 
 ## Apply pipeline
 
+> Auto-fill memory / unattended-submission design: `docs/adr-001-autofill-memory.md`.
+
 ```
 detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --submit --confirm <jid> → verify <jid>
 ```
@@ -190,8 +192,9 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 - **JI_TAILOR**: `"agent"` (default) = SLM writes `resume.json`, `admit` confirms. `"gem"` = Gemini Web gem.
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
 - **LinkedIn title dedup**: Cards repeat title — `linkedin.py` deduplicates by matching repeated half.
-- **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
-- **EEO detection**: Uses decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic, zero false positives. Saved under `common_answers.eeo` sub-key.
+- **Answer resolution**: `--answers` (exact normalized-label, or ≥10-char prefix for field_reader's 60-char truncation) → profile facts/derivations + `profile.answers` map. No cross-job persistence — to reuse an answer, add it to `profile.json`. See `docs/adr-001-autofill-memory.md`.
+- **EEO detection**: by decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic. Reported, not auto-filled — the LLM decides via `--answers`.
+- **Tests**: `python -m unittest discover -s tests -p "test_*.py"` (stdlib, no install; pytest also discovers them). Import smoke + resolve/learner unit tests. Runs in CI on push/PR.
 - **Chrome lifecycle**: Pipeline starts its own Chrome instance on a free port (never reuses user's browser). Port persisted to `chrome-config.json` across processes.
 - **PDF guard**: `detect` refuses to proceed if stage is `tailored` but no Resume PDF exists. Run `tailor.py undo <jid> && tailor.py --jid <jid>` to regenerate.
 - **Platform registry**: `apply/registry/*.yaml` defines per-ATS configs (`widget_parent` selector, custom widgets). Auto-resolved from page URL — no caller changes needed.

@@ -69,9 +69,9 @@ def _validate_profile(profile):
         )
 
 
-def _find_answer(label, label_norm, answers, ca, profile, required=False, available_options=None):
-    """Find answer via resolve chain. Ignores ca (old common_answers) — resolve reads profile directly."""
-    res = resolution_for_fill(label, profile, answers_override=answers, available_options=available_options)
+def _find_answer(label, answers, profile):
+    """Find answer via resolve chain (--answers override → profile facts)."""
+    res = resolution_for_fill(label, profile, answers_override=answers)
     return res.value
 
 
@@ -280,7 +280,7 @@ def _fill_radios(page, fields, answers, ca, profile, jid):
         q_label = opts[0].split(" - ")[0] if " - " in opts[0] else opts[0]
         q_norm = re.sub(r"[^a-z0-9+#]+", " ", q_label.lower()).strip()
 
-        ans = _find_answer(q_label, q_norm, answers, ca, profile)
+        ans = _find_answer(q_label, answers, profile)
         if ans:
             ans_lower = ans.lower()
             matched = False
@@ -496,7 +496,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
         elif current_stripped and len(current_stripped) > 1:
             # For required fields, still check if answer contradicts the current value
             if f.get("required"):
-                ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, available_options=f.get("options"))
+                ans_check = _find_answer(lbl, answers, profile)
                 if ans_check:
                     cw = current_stripped.lower().split()
                     aw = ans_check.lower().split()
@@ -509,7 +509,7 @@ def _fill_text(page, fields, answers, ca, profile, jid, state):
             else:
                 continue
 
-        ans = _find_answer(lbl, lbl_norm, answers, ca, profile, available_options=f.get("options"))
+        ans = _find_answer(lbl, answers, profile)
         if ans is None:
             if f.get("required"):
                 unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
@@ -874,9 +874,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
                 print(f"  [{f['tag']}] {lbl[:50]} -> <resume PDF>", file=sys.stderr)
                 filled += 1
                 continue
-            lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
             opts = f.get("options", [])
-            ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False), available_options=opts)
+            ans = _find_answer(lbl, answers, profile)
             if ans:
                 if opts and ans not in opts:
                     match = next((o for o in opts if ans.lower() in o.lower()), None)
@@ -915,7 +914,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
     )]
     if eeo_unfilled:
         for ef in eeo_unfilled:
-            res = resolution_for_fill(ef["label"], profile, answers_override=answers, available_options=ef.get("options"))
+            res = resolution_for_fill(ef["label"], profile, answers_override=answers)
             if res.value:
                 nf, _ = _fill_text(page, [ef], {ef["label"]: res.value}, ca, profile, jid, state)
                 filled += nf
@@ -1014,8 +1013,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False):
         state.pop("_fields_with_errors", None)
         read_and_save(page, state)
 
-    # Save ephemeral resolutions after verify (handled by caller on success).
-    # --answers values are saved to profile.answers via resolve's commit flow.
+    # --answers values apply only to this run; they are not persisted. To reuse an
+    # answer across jobs, add it to profile.json ("answers" map or a known key).
 
     page_num = state.get("_page", "?")
     emit_fill_report(filled, unfilled, page_num, profile if unfilled else None)
@@ -1543,7 +1542,7 @@ def cmd_inspect(jid, candidate=None):
     if state.get("jid") != jid:
         emit_error(f"state is for job {state.get('jid','?')}, not {jid}")
         print("  Run detect first.", file=sys.stderr)
-    return
+        return
 
     from apply.common.inspect_lib import capture, probe_state
     from lib.ask_api import available as _vision_available

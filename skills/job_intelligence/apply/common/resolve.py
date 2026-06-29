@@ -1,38 +1,27 @@
-"""resolve.py — Label→value resolution chain with two-encounter rule and decisions.md context.
+"""resolve.py — Label→value resolution for form auto-fill.
 
-No answer values hardcoded in Python. All facts, derivations, and static answers
-live in profile.json. decisions.md is a plain markdown the user edits.
+No answer values are hardcoded here. Facts and derivations come from profile.json;
+per-run overrides come from the --answers dict. Resolution is deterministic:
 
-Resolution order (strict):
-  1. session_cache      (LLM guesses from current run, ephemeral)
-  2. label_map          (persistent cache from prior confirmations)
-  3. prefix match       (handles 60-char field_reader truncation)
-  4. ephemeral exact    (profile facts + derivations + answers dict)
-  5. --answers          (user override for this run)
-  6. LLM selection      (selects among existing keys OR suggests new:key|value from .md)
+  1. --answers override   exact normalized-label match, or prefix match for
+                          field_reader's 60-char label truncation
+  2. profile ephemeral    profile facts + name/location derivations + the
+                          profile["answers"] static map, exact key match
+
+Anything unresolved returns no_match and is surfaced to the caller as an unfilled
+field; the LLM then supplies it via --answers.
 """
 from __future__ import annotations
 
-import hashlib, json, os, re, time
+import re
 from typing import Optional
-
-# ─── Paths (anchored to profile.json directory) ──────────────────────
-
-_JI_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_LABEL_MAP_PATH = os.path.join(
-    os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), "label_map.json"
-)
-_SESSION_CACHE_PATH = os.path.join(
-    os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), "session_cache.json"
-)
-_DECISIONS_PATH = os.path.join(_JI_DIR, "decisions.md")
 
 
 # ─── Resolution result ───────────────────────────────────────────────
 
 class Resolution:
     __slots__ = ("value", "key", "label", "provenance", "ephemeral_only")
-    def __init__(self, value, key, label, provenance, ephemeral_only):
+    def __init__(self, value, key, label, provenance, ephemeral_only=False):
         self.value = value
         self.key = key
         self.label = label
@@ -46,36 +35,6 @@ def normalize(label: str) -> str:
     return re.sub(r"[^a-z0-9+#]+", " ", (label or "").lower()).strip()
 
 
-# ─── Load / Save helpers ─────────────────────────────────────────────
-
-def _load_json(path: str, default=None):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return default if default is not None else {}
-
-
-def _save_json(path: str, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
-
-
-def _load_decisions_md() -> str:
-    try:
-        with open(_DECISIONS_PATH, encoding="utf-8") as f:
-            return f.read()
-    except (FileNotFoundError, OSError):
-        return ""
-
-def _decisions_md_hash() -> str:
-    c = _load_decisions_md()
-    return hashlib.md5(c.encode()).hexdigest()[:12] if c else ""
-
-
 # ─── Ephemeral answer builder ───────────────────────────────────────
 
 _PROFILE_KEYS = {
@@ -83,6 +42,7 @@ _PROFILE_KEYS = {
     "linkedin_url", "github_url", "portfolio_url",
     "resume_path", "location",
 }
+
 
 def _build_ephemeral(profile: dict) -> dict:
     ephemeral = {}
@@ -114,13 +74,6 @@ def _build_ephemeral(profile: dict) -> dict:
             if v:
                 ephemeral[k] = (v, "static")
 
-    # derived_answers: LLM-generated from decisions.md, hash-gated
-    da = profile.get("derived_answers", {})
-    if isinstance(da, dict) and profile.get("decisions_md_hash") == _decisions_md_hash():
-        for k, v in da.items():
-            if v and k not in ephemeral:
-                ephemeral[k] = (v, "derived")
-
     return ephemeral
 
 
@@ -134,93 +87,31 @@ def _find_ephemeral_value(key: str, ephemeral: dict) -> Optional[str]:
 def resolve(
     label: str,
     profile: dict,
-    session_cache: Optional[dict] = None,
-    label_map: Optional[dict] = None,
     answers_override: Optional[dict] = None,
-    available_options: Optional[list] = None,
 ) -> Resolution:
-    if session_cache is None:
-        session_cache = {}
-    if label_map is None:
-        label_map = {}
     if answers_override is None:
         answers_override = {}
 
     norm = normalize(label)
     if not norm:
-        return Resolution(None, None, label, "no_match", False)
+        return Resolution(None, None, label, "no_match")
 
-    nf = lambda s: normalize(s)
-    ephemeral = _build_ephemeral(profile)
-
-    # Step 1: session_cache
-    sc = session_cache.get(norm)
-    if sc:
-        val = _find_ephemeral_value(sc["key"], ephemeral)
-        if val is not None:
-            return Resolution(val, sc["key"], label, "session_cache", False)
-
-    # Step 2: label_map
-    lm = label_map.get(norm)
-    if lm:
-        val = _find_ephemeral_value(lm["key"], ephemeral)
-        if val is not None:
-            lm["hit_count"] = lm.get("hit_count", 0) + 1
-            return Resolution(val, lm["key"], label, "label_map", False)
-        label_map.pop(norm, None)
-
-    # Step 3: prefix match (field_reader truncation)
-    for cached_norm, entry in dict(session_cache, **label_map).items():
-        if norm.startswith(cached_norm):
-            val = _find_ephemeral_value(entry.get("key", ""), ephemeral)
-            if val is not None:
-                return Resolution(val, entry["key"], label, "label_map", False)
-
-    # Step 4: --answers override (explicit user/assistant override, highest priority)
+    # Step 1: --answers override (explicit user/assistant value for this run)
     for k, v in answers_override.items():
-        nk = nf(k)
+        nk = normalize(k)
         if nk == norm:
-            return Resolution(v, "answers_override", label, "user_typed", False)
-        # Prefix match for truncated labels — only when key is clearly truncated (< 40 chars)
+            return Resolution(v, "answers_override", label, "user_typed")
+        # Prefix match for field_reader's 60-char label truncation
         if len(nk) >= 10 and norm.startswith(nk):
-            return Resolution(v, "answers_override", label, "user_typed", False)
+            return Resolution(v, "answers_override", label, "user_typed")
 
-    # Step 5: ephemeral exact match (profile.json answers, deterministic)
+    # Step 2: profile ephemeral exact match (deterministic facts/derivations)
+    ephemeral = _build_ephemeral(profile)
     for key, (val, _source) in ephemeral.items():
-        if nf(key.replace("_", " ")) == norm:
-            return Resolution(val, key, label, "ephemeral", False)
+        if normalize(key.replace("_", " ")) == norm:
+            return Resolution(val, key, label, "ephemeral")
 
-    return Resolution(None, None, label, "no_match", False)
-
-
-# ─── Post-verify promotion ──────────────────────────────────────────
-
-def promote_session_cache() -> int:
-    """Promote session_cache entries that passed the two-encounter rule to label_map.
-    Called after verify confirms submission. Returns count of new entries."""
-    sc = _load_json(_SESSION_CACHE_PATH, {})
-    if not sc:
-        return 0
-    lm = _load_json(_LABEL_MAP_PATH, {})
-    now = time.strftime("%Y-%m-%d")
-    promoted = 0
-
-    for norm, entry in dict(sc).items():
-        if entry.get("encounter_count", 1) >= 2 and norm not in lm:
-            lm[norm] = {
-                "key": entry["key"],
-                "provenance": "encountered_twice",
-                "created": now,
-                "hit_count": 1,
-            }
-            sc.pop(norm, None)
-            promoted += 1
-
-    if promoted:
-        _save_json(_LABEL_MAP_PATH, lm)
-        _save_json(_SESSION_CACHE_PATH, sc)
-
-    return promoted
+    return Resolution(None, None, label, "no_match")
 
 
 # ─── Entry point for act.py ─────────────────────────────────────────
@@ -229,10 +120,5 @@ def resolution_for_fill(
     label: str,
     profile: dict,
     answers_override: Optional[dict] = None,
-    available_options: Optional[list] = None,
 ) -> Resolution:
-    label_map = _load_json(_LABEL_MAP_PATH, {})
-    session_cache = _load_json(_SESSION_CACHE_PATH, {})
-    return resolve(label, profile, session_cache=session_cache,
-                   label_map=label_map, answers_override=answers_override,
-                   available_options=available_options)
+    return resolve(label, profile, answers_override=answers_override)
