@@ -451,6 +451,9 @@ def _fill_field_deterministic(page, f, ans):
 
 def _fill_text(page, fields, answers, profile, jid, state):
     """Fill text/select/textarea fields. Returns filled count + unfilled list."""
+    from apply.common.policy import load_policy
+    from apply.common.validate import validate_value
+    _enforce_validation = bool(load_policy().get("enforce_validation", False))
     filled = 0
     unfilled = []
     file_uploaded = False
@@ -530,6 +533,15 @@ def _fill_text(page, fields, answers, profile, jid, state):
             if f.get("required"):
                 unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
             continue
+
+        # Phase 4: escalate values that fail validation instead of filling them.
+        if _enforce_validation:
+            ok_v, _vr = validate_value(f, ans)
+            if not ok_v:
+                print(f"  VALIDATION_SKIP: {lbl[:50]} -> {str(ans)[:30]} ({_vr})", file=sys.stderr)
+                if f.get("required"):
+                    unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
+                continue
 
         if _fill_field_deterministic(page, f, ans):
             filled += 1
@@ -1478,17 +1490,20 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
         file=sys.stderr,
     )
 
-    # Shadow / hold mode: capture evidence, log, but DO NOT click submit.
+    # Gate the submit: shadow/hold mode, kill-switch, or validation gate (Phase 4).
+    from apply.common.policy import load_policy
+    from apply.common import gate
     mode = resolve_mode("shadow" if shadow else None)
-    if not submits_for_real(mode):
+    action, reason = gate.submit_decision(mode, load_policy(), audit.summarize(jid))
+    if action != "submit":
         try:
             from apply.common.inspect_lib import capture
             capture(page, jid, prefix="shadow_submit")
         except Exception:
             pass
-        audit.log_event(jid, "submit_blocked", mode=mode, detail=target["text"])
-        emit_status(f"{mode}_mode", f"would submit '{target['text']}' — NOT clicked ({mode})")
-        emit_next("verify, or set JI_APPLY_MODE=live to submit for real")
+        audit.log_event(jid, "submit_blocked", mode=mode, detail=f"{target['text']} | {reason}")
+        emit_status(f"submit_{action}", f"would submit '{target['text']}' — {reason}")
+        emit_next("verify, or resolve the reason above and set JI_APPLY_MODE=live")
         return
 
     # Platform pre-submit hook (e.g., scroll to reveal button)

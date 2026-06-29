@@ -21,8 +21,10 @@ _DEFAULTS = {
     "auto_submit_min_confidence": 0.9,
     "never_auto": ["freetext"],
     "ttl_days": 90,
-    "paused": False,
-    "use_mappings": False,  # ADR-001 Phase 3: enable the field→meaning mapping store
+    "paused": False,            # ADR-001 Phase 4: kill-switch — block all submits
+    "use_mappings": False,      # ADR-001 Phase 3: enable the field→meaning mapping store
+    "enforce_validation": False,  # ADR-001 Phase 4: escalate values failing validate_value at fill
+    "gate_submit": False,       # ADR-001 Phase 4: hold submit when the job has invalid fields
 }
 
 

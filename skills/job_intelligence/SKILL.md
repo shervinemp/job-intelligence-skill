@@ -83,7 +83,11 @@ The builder also validates the JSON before generating PDFs — run `--validate` 
 
 ## Apply pipeline
 
-> Auto-fill memory / unattended-submission design: `docs/adr-001-autofill-memory.md`.
+> Design + rollout: `docs/adr-001-autofill-memory.md` (memory design),
+> `docs/runbook-shadow-to-mappings.md` (how to enable safely),
+> `docs/pipeline-trace.md` (full stage/branch/preference trace).
+> Policy flags live in `~/.ji/apply_policy.json` (mode, paused, use_mappings,
+> enforce_validation, gate_submit) — all default to current behavior.
 
 ```
 detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --submit --confirm <jid> → verify <jid>
