@@ -93,10 +93,10 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 |------|-------------|
 | `detect [<jid>]` | Pre-flight: DB stage, PDF, classify type. Omit JID to auto-pick first tailored. Outputs `TYPE:` + `NEXT:`. |
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS. Auto-clicks "Apply now" on job listing pages. Prompts for login on auth wall — cookies persist via Chrome profile. |
-| `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
+| `act --fill <jid> [--answers '{}'] [--dry-run] [--shadow]` | Fill all fields. `--answers` exact → profile facts. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. Writes audit log. |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
-| `act --submit <jid> --confirm` | Submit. **`--confirm` req'd** — dry-run w/o. Checks validation errors, CAPTCHA, success text. |
+| `act --submit <jid> --confirm [--shadow]` | Submit. **`--confirm` req'd** — dry-run w/o. Checks validation errors, CAPTCHA, success text. `--shadow` (or `JI_APPLY_MODE=shadow`) fills + screenshots but never clicks submit. |
 | `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 | `apply.py reject <jid>` | Skip permanently |
@@ -111,6 +111,8 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 - `--answers` — normalized exact match (case/punctuation insensitive). Full label text.
 - `--candidate N` — picks from CANDIDATES list. Works on --fill/--next/--submit/--inspect.
 - `--dry-run` on `--fill` shows resolved answers without DOM modification. Validates field detection first.
+- **Shadow mode** (`--shadow`, `JI_APPLY_MODE=shadow`, or `apply_policy.json {"mode":"shadow"}`): fill + screenshot + audit, never submit. Use to validate the pipeline on real jobs without applying. Default mode is `live`. See `docs/adr-001-autofill-memory.md`.
+- **Audit log**: every `act --fill` appends to `~/.ji/results/<jid>/apply_audit.jsonl` (field value, provenance, tier category, filled). Read it to see what would be submitted and why.
 - Multi-page: fill → next → fill → ... until Submit appears or verify passes.
 - Guest apply: auto-clicks "continue without signing in" when available.
 - Pipeline cannot create accounts, remember passwords, or handle 2FA.
