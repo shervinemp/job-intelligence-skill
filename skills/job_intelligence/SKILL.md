@@ -202,7 +202,4 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 - **PDF guard**: `detect` refuses to proceed if stage is `tailored` but no Resume PDF exists. Run `tailor.py undo <jid> && tailor.py --jid <jid>` to regenerate.
 - **Platform registry**: `apply/registry/*.yaml` defines per-ATS configs (`widget_parent` selector, custom widgets). Auto-resolved from page URL — no caller changes needed.
 - **Gems**: `categories.json` → `gems.json` → `gemini.js` resolution chain.
-- **Strategy fallbacks**: `strategies/select.py` and `strategies/text.py` try multiple methods per field (select_option, dispatch, native_setter, js_click) before giving up. Configure per-ATS via registry YAML.
-- **Apply state machine**: `apply/common/apply_state.py` tracks multi-page form progress (`~/.ji/state/apply/{jid}.json`). Enables crash recovery — state is created on first fill, advanced on next, cleared on successful verify.
-- **ATS plugin system**: `apply/registry/plugins/` — drop a Python file with an `ATSPlugin` subclass for platform-specific hooks. Base class at `ats_plugin.py`.
-- **deleteChat fix**: Gemini Web sidebar conversations are now deleted after each call (button selector was `button[data-test-id]` but Gemini uses `<gem-icon-button>` custom element).
+- **ATS plugins**: `apply/registry/plugins/` — add a Python file with an `ATSPlugin` subclass for platform-specific behavior.
