@@ -3,7 +3,6 @@ import os, base64
 
 
 def fill_file_upload(page, f, results_dir, jid, state):
-    lbl_lower = (f.get("label") or "").lower()
     if not os.path.isdir(results_dir) or not any("Resume" in fn and fn.endswith(".pdf") for fn in os.listdir(results_dir)):
         return "unfilled"
     candidates = []

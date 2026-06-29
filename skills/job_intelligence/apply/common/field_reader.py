@@ -220,26 +220,6 @@ def read_fields(page, scope="document", custom_widgets=None):
                 "hasRequiredFile": False, "url": ""}
 
 
-def count_fields(page):
-    """Quick field count without full field details. ~2x faster than read_fields."""
-    try:
-        return page.evaluate("""(scope) => {
-            const root = scope === 'dialog'
-                ? (document.querySelector('[role="dialog"]') || document)
-                : document;
-            const sel = 'input:not([type=hidden]):not([type=submit]), select, textarea';
-            let count = root.querySelectorAll(sel).length;
-            // Shadow DOM
-            root.querySelectorAll(':defined').forEach(el => {
-                if (el.shadowRoot) count += el.shadowRoot.querySelectorAll(sel).length;
-            });
-            return count;
-        }""", scope)
-    except Exception as e:
-        print(f"FIELD_READ_ERROR: count_fields failed — {e}", file=sys.stderr)
-        return 0
-
-
 _ERROR_SCAN_JS = """() => {
     const roots = [document.querySelector('[role="dialog"], dialog') || document];
 

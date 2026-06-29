@@ -2,7 +2,7 @@
 """verify.py — Check if a job was submitted. No state mutation.
 4 strategies: modal closed, success text, Applied button, DB stage.
 """
-import json, os, sys, time
+import os, sys, time
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

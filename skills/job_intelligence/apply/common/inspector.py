@@ -11,11 +11,8 @@ Probe strategies:
 """
 
 import json
-import os
 import sys
-import time
 from datetime import datetime
-from pathlib import Path
 
 from apply.common.field_reader import read_fields
 from lib.config import SNAPSHOTS_DIR

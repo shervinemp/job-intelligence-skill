@@ -6,7 +6,7 @@ Usage:
 
 On success prints the model reply. On failure prints the error."""
 
-import argparse, base64, json, os, sys, time, urllib.request, urllib.error
+import argparse, base64, json, os, time, urllib.request, urllib.error
 
 _PING_CACHE = os.path.join(os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), ".ask_api_ping")
 
@@ -58,7 +58,7 @@ def ask(image_path, prompt, temperature=0.3, max_tokens=2048, file_path=None):
             with open(file_path, encoding="utf-8") as f:
                 file_content = f.read()
             combined = f"Context from {os.path.basename(file_path)}:\n{file_content[:3000]}\n\n{prompt}"
-        except Exception as e:
+        except Exception:
             pass
     content.append({"type": "text", "text": combined})
     return ask_bytes(image_data, content, temperature, max_tokens)

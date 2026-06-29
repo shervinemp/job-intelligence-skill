@@ -61,6 +61,16 @@ class LogRoundTrip(unittest.TestCase):
         self.assertEqual(s["fields"], 0)
         self.assertEqual(s["events"], [])
 
+    def test_refill_dedupes_last_wins(self):
+        # A field logged invalid then valid (same page+label) on re-fill must count
+        # once, as valid — otherwise the submit gate would stay wedged.
+        jid = "refill"
+        audit.log_field(jid, "Country", "Mars", provenance="user_typed", filled=True, validated=False, page=1)
+        audit.log_field(jid, "Country", "Canada", provenance="user_typed", filled=True, validated=True, page=1)
+        s = audit.summarize(jid)
+        self.assertEqual(s["fields"], 1)
+        self.assertEqual(s["invalid"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -29,7 +29,6 @@ def run(jid):
     external_url = state.get("external_url", "")
     if not external_url or "linkedin.com" in external_url:
         # Fallback: detect may not have found it — try opening LinkedIn job page
-        from apply.common.page_helpers import tag_page as _tp
         b, ctx = connect()
         p = ctx.new_page()
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
