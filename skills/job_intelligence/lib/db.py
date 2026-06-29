@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sqlite3
-import sys
 from datetime import datetime
 
 from .config import DB_PATH, STATE_DIR as DB_DIR, AUTH_WALLS_PATH

@@ -2,7 +2,7 @@
 Finds the right page for a job, detects what happened after actions.
 Uses persistent DOM attribute (data-opencode-jid) for cross-process page identity."""
 
-import json, os, time
+import json, os
 from urllib.parse import urlparse
 
 from lib.config import REGISTRY_PATH
@@ -53,7 +53,6 @@ class PageManager:
         _save(self.reg)
 
     def find(self, fallback_url=""):
-        from urllib.parse import urlparse
         fallback_domain = urlparse(fallback_url).netloc.lower() if fallback_url else ""
 
         tagged = None

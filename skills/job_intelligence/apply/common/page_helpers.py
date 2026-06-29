@@ -1,5 +1,5 @@
 """apply/common/page_helpers.py — Shared page reading, state persistence, page finding."""
-import json, os, random, re, sys, time
+import json, os, random, sys, time
 import webbrowser
 
 from lib.config import STATE_PATH
@@ -315,7 +315,7 @@ def retry_with_backoff(fn, max_retries=2, base_delay=2, is_rate_limit=None):
                     time.sleep(delay)
                     continue
             return result
-        except Exception as e:
+        except Exception:
             if attempt < max_retries:
                 delay = base_delay * (2 ** attempt) + random.random()
                 time.sleep(delay)

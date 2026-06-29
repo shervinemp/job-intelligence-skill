@@ -192,8 +192,11 @@ def easy_apply_flow(page, jid):
     unfilled = []
 
     profile = _profile_answers()
-    answers = profile.get("answers", {})
 
+    # NOTE: the flow hook is not handed the per-run --answers dict, so it resolves
+    # from profile facts + profile["answers"] only. Explicit --answers overrides do
+    # not reach LinkedIn Easy Apply auto-fill (acceptable: the LLM can drive the
+    # standard fill path instead).
     for f in fields:
         if f.get("isEmpty", True):
             lbl = f["label"]

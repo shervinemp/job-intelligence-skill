@@ -117,9 +117,10 @@ def _expired(entry, ttl_days):
 
 # ─── Read path (fill) ────────────────────────────────────────────────
 
-def resolve_field(field, profile):
+def resolve_field(field, profile, bump=True):
     """Return (value, 'mapping') from a confirmed mapping, or None.
-    Validates against the live field and invalidates on drift/version/TTL."""
+    Validates against the live field and invalidates on drift/version/TTL.
+    bump=False does a side-effect-free lookup (used by the audit pass)."""
     if not enabled():
         return None
     fp = field_fingerprint(field)
@@ -146,9 +147,10 @@ def resolve_field(field, profile):
     if not ok:
         return None
 
-    m["hit_count"] = m.get("hit_count", 0) + 1
-    m["last_used"] = _today()
-    _save(_persist_path(), store)
+    if bump:
+        m["hit_count"] = m.get("hit_count", 0) + 1
+        m["last_used"] = _today()
+        _save(_persist_path(), store)
     return value, "mapping"
 
 

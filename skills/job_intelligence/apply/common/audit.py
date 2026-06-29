@@ -75,28 +75,36 @@ def log_event(jid, event, mode=None, detail=None, page=None):
 
 
 def summarize(jid):
-    """Aggregate the audit log into counts (by provenance, category, filled). Empty if none."""
+    """Aggregate the audit log into counts (by provenance, category, filled/invalid).
+
+    The log is append-only and a field is re-logged on every `act --fill`, so we keep
+    only the LATEST record per (page, label) before counting — otherwise a field that
+    was invalid once and fixed later would still count as invalid (which would wedge
+    the submit gate). Events are kept in full. Empty summary if no log."""
     summary = {"fields": 0, "filled": 0, "invalid": 0, "by_provenance": {}, "by_category": {}, "events": []}
     try:
         with open(_path(jid), encoding="utf-8") as f:
             lines = f.readlines()
     except OSError:
         return summary
+    latest = {}  # (page, label) -> most recent field record
     for line in lines:
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
         if rec.get("kind") == "field":
-            summary["fields"] += 1
-            if rec.get("filled"):
-                summary["filled"] += 1
-            if rec.get("validated") is False:
-                summary["invalid"] += 1
-            p = rec.get("provenance", "?")
-            c = rec.get("category", "?")
-            summary["by_provenance"][p] = summary["by_provenance"].get(p, 0) + 1
-            summary["by_category"][c] = summary["by_category"].get(c, 0) + 1
+            latest[(rec.get("page"), rec.get("label"))] = rec
         elif rec.get("kind") == "event":
             summary["events"].append(rec.get("event"))
+    for rec in latest.values():
+        summary["fields"] += 1
+        if rec.get("filled"):
+            summary["filled"] += 1
+        if rec.get("validated") is False:
+            summary["invalid"] += 1
+        p = rec.get("provenance", "?")
+        c = rec.get("category", "?")
+        summary["by_provenance"][p] = summary["by_provenance"].get(p, 0) + 1
+        summary["by_category"][c] = summary["by_category"].get(c, 0) + 1
     return summary

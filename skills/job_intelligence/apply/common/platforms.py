@@ -1,7 +1,6 @@
 """Platform-specific patterns for common ATS systems.
 Used by the apply pipeline to detect already-applied, login walls, etc.
 """
-import re
 
 # Per-platform patterns for "already applied" text
 ALREADY_APPLIED = {

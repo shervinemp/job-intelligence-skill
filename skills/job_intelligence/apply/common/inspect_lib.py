@@ -8,7 +8,7 @@ Capture vs file handling separated:
   save_temp(data, suffix) — saves to system temp dir, caller must clean up
   capture(page, jid, prefix) — combines them for the standard persistent flow
 """
-import json, os, sys, tempfile
+import os, sys, tempfile
 from urllib.parse import urlparse
 
 from lib.config import JI_HOME

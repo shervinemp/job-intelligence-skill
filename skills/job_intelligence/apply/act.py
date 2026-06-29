@@ -293,7 +293,6 @@ def _fill_radios(page, fields, answers, profile, jid):
     for gk, group in groups.items():
         opts = [rf["label"] for rf in group]
         q_label = opts[0].split(" - ")[0] if " - " in opts[0] else opts[0]
-        q_norm = re.sub(r"[^a-z0-9+#]+", " ", q_label.lower()).strip()
 
         ans = _find_answer(q_label, answers, profile,
                            field={"label": q_label, "options": opts, "tag": "radio"})
@@ -342,7 +341,6 @@ def _normalize_label(lbl):
 
 def _fill_file_upload(page, f, results_dir, jid, state):
     """Upload resume PDF to a file input. Returns 'skip', 'filled', 'unfilled', or None."""
-    lbl_lower = (f.get("label", "") or "").lower()
     if not os.path.isdir(results_dir) or not any("Resume" in fn and fn.endswith(".pdf") for fn in os.listdir(results_dir)):
         return "unfilled"
     candidates = []
@@ -501,7 +499,6 @@ def _fill_text(page, fields, answers, profile, jid, state):
 
         # Standard field
         lbl = f["label"]
-        lbl_norm = _normalize_label(lbl)
         _seen_labels.add(lbl)
 
         # Skip pre-filled fields with valid data (any non-empty value is filled,
@@ -601,16 +598,22 @@ def _audit_fill(jid, fields, answers, profile, page_num, platform="", corrected_
                             category="generic", filled=bool(cur), page=page_num)
             continue
         res = resolution_for_fill(lbl, profile, answers_override=answers)
+        value, provenance = res.value, res.provenance
+        if value is None:
+            # Reflect a mapping-store fill too (read-only — don't bump hit_count here).
+            m = mappings.resolve_field(f, profile, bump=False)
+            if m:
+                value, provenance = m
         cur = (f.get("value", "") or "").strip()
         validated = None
-        if res.value:
-            validated, _reason = validate_value(f, res.value)
-        audit.log_field(jid, lbl, res.value or cur, provenance=res.provenance,
+        if value:
+            validated, _reason = validate_value(f, value)
+        audit.log_field(jid, lbl, value or cur, provenance=provenance,
                         category=audit.categorize(lbl, f.get("options"), f.get("tag")),
                         filled=bool(cur), validated=validated, page=page_num)
         # Learn: record a pending mapping for explicitly-answered fields.
-        if res.value:
-            mappings.learn(jid, f, res.value, res.provenance, profile,
+        if value:
+            mappings.learn(jid, f, value, provenance, profile,
                            platform=platform, corrected=(lbl in corrected))
 
 
@@ -1672,7 +1675,7 @@ def cmd_inspect(jid, candidate=None):
     print(f"Platform: {state.get('platform', '?')}", file=sys.stderr)
     print(f"Filled: {state.get('filled', 0)} fields", file=sys.stderr)
 
-    img_path = capture(page, jid)
+    capture(page, jid)
     if _vision_available():
         print(f"  ask: lib/ask_api.py --img <path> --prompt '?'", file=sys.stderr)
     fc, _, _, _ = probe_state(page)
