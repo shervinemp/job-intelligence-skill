@@ -77,31 +77,23 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         prompt += f"\n\n--- YOUR PREVIOUS OUTPUT (address feedback below) ---\n{prev_response[:3000]}"
         prompt += f"\n\n--- FEEDBACK FROM REVIEW ---\n{feedback}"
 
-    # Reinforce accuracy rules (gem has the profile, but doesn't always follow them)
-    prompt += """
-Accuracy Rules (MUST follow):
-- Use EXACT company names from your attached profile — do NOT rename or rephrase them
-- Do NOT inflate titles: "Collaborated" stays "collaborated", not "Led" or "Spearheaded"
-- Company name must appear in the summary or a work highlight
-- Metrics: use ONLY numbers from the profile — no invented values
-- Cover letter: mention the target company and role by name"""
-
     tailor_mode = os.environ.get("JI_TAILOR", "agent")
+    prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
+    try:
+        with open(prompt_path) as f:
+            instructions = f.read()
+    except FileNotFoundError:
+        instructions = "Write a tailored CV for this job."
+    prompt = instructions + "\n\n---\n\n" + prompt
+
     if tailor_mode == "agent":
-        prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
-        try:
-            with open(prompt_path) as f:
-                agent_instructions = f.read()
-        except FileNotFoundError:
-            agent_instructions = "Write a Python script that generates a tailored CV PDF for this job."
-        prompt = agent_instructions + "\n\n---\n\n" + prompt
         prompt += "\n\nPut the PDF generation script in a single ```python\n...\n``` fenced code block."
         print(f"PROMPT: {os.path.join(RESULTS_DIR, job_id, 'prompt.txt')}", file=sys.stderr)
         print(f"  Write resume.json, then: tailor.py build {job_id} && tailor.py admit {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
-    # Gem route — wrap in JSON block for reliable extraction
-    prompt = "Output the full JSON Resume (including coverLetter) in a ```json code block.\n\n" + prompt
+    # Gem route — output JSON block
+    prompt += "\n\nOutput the full JSON Resume (including coverLetter) in a ```json code block."
 
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
