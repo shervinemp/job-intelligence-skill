@@ -18,7 +18,7 @@ Before running pipeline, read these:
 | `tailor.py [--auto]` | admit/reject/undo/retry. See tailoring section |
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
 
-> `tailor.py` crafts one job at a time. Use `--auto` to process all described jobs with rate-limit handling.
+> `tailor.py` crafts one job at a time via the `JI_TAILOR=gem` route (Gemini Web gem with built-in prompt). The gem route generates resume.json, builds PDFs, and deletes the conversation automatically.
 
 ## Commands
 
@@ -49,6 +49,12 @@ Before running pipeline, read these:
 ## Tailoring
 
 Data/build separation: the LLM writes a `resume.json` data file (no code). A shared builder (`lib/build_resume.py`) reads the JSON and produces PDFs. The JSON is easy to review for quality issues (pandering, hallucination, title creep) without parsing code.
+
+Accuracy rules from `tailor_prompt.md` and `gem_prompt.md` enforce:
+- Exact company names from profile (no renaming/generalizing)
+- No title inflation ("Collaborated" not "Led")
+- Company name in summary or work highlights
+- Metrics only from profile
 
 Two backends via `JI_TAILOR` env var:
 
@@ -206,3 +212,4 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 - **PDF guard**: `detect` refuses to proceed if stage is `tailored` but no Resume PDF exists. Run `tailor.py undo <jid> && tailor.py --jid <jid>` to regenerate.
 - **Platform registry**: `apply/registry/*.yaml` defines per-ATS configs (`widget_parent` selector, custom widgets). Auto-resolved from page URL — no caller changes needed.
 - **Gems**: `categories.json` → `gems.json` → `gemini.js` resolution chain.
+- **ATS plugins**: `apply/registry/plugins/` — add a Python file with an `ATSPlugin` subclass for platform-specific behavior.

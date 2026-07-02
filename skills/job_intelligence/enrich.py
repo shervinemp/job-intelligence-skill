@@ -194,10 +194,8 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
             need_company = not entry.get("company")
             need_location = not entry.get("location")
             need_salary = not entry.get("salary")
-            # Enrich from JSON-LD structured data (only backfill empty fields)
             if raw_html:
                 _enrich_from_ld(raw_html, entry)
-            # Build updates for any newly-filled fields
             sets, vals = [], []
             if page_title and need_title:
                 sets.append("title=?")
@@ -220,7 +218,6 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
                 conn.commit()
             limit = 2000 if verbose else 500
             snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
-            print(f"IS THIS A JOB POSTING? (admit/reject)", file=sys.stderr)
             print(f"DESC:{jid}:{snippet}")
             auth_walls.remove(jid)
             fetched += 1
@@ -230,6 +227,8 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
             advance(entry, entry.get("stage"), state="failed", error=str(result))
             failed += 1
     print(f"FETCHED:{fetched} FAILED:{failed}", file=sys.stderr)
+    if fetched:
+        print(f"NEXT: enrich.py admit <jid> --category ...  OR  enrich.py reject <jid>", file=sys.stderr)
 
 
 def cmd_flag(*jids):
@@ -291,7 +290,7 @@ def cmd_admit(*jids, **fields):
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
 
 
-def cmd_skip(*jids):
+def cmd_reject(*jids):
     state = load()
     count = 0
     for jid in jids:
@@ -457,7 +456,7 @@ def main():
     if args.command == "admit":
         cmd_admit(*args.jids, title=args.title, company=args.company, location=args.location, salary=args.salary, category=args.category, notes=args.notes, url=args.url)
     elif args.command == "reject":
-        cmd_skip(*args.jids)
+        cmd_reject(*args.jids)
     elif args.command == "flag":
         cmd_flag(*args.jids)
     elif args.command == "open":

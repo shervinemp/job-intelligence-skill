@@ -10,6 +10,7 @@ from lib.db import get_conn
 from lib.chrome_manager import connect
 from apply.common.page_helpers import load_state, page_text
 from apply.common.output import emit_next, emit_status, emit_error
+from apply.common.apply_state import clear as _as_clear
 
 
 # Tokens that, in a post-submit URL, strongly indicate a confirmation page.
@@ -38,8 +39,11 @@ def _vision_confirms(page, jid):
         from lib.ask_api import available, ask
         if not available():
             return False
-        from apply.common.inspect_lib import page_jpeg, save_temp
-        img = save_temp(page_jpeg(page, full=False), ".jpg")
+        from apply.common.inspect_lib import page_jpeg
+        import tempfile
+        fd, img = tempfile.mkstemp(suffix=".jpg")
+        with os.fdopen(fd, "wb") as _f:
+            _f.write(page_jpeg(page, full=False))
         try:
             reply, err = ask(
                 img,
@@ -216,6 +220,7 @@ def _mark_applied(jid):
         "UPDATE jobs SET stage=?, updated_at=? WHERE id=?",
         ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid),
     ).connection.commit()
+    _as_clear(jid)
     # Promote corrected-then-passed mappings (no-op unless policy.use_mappings).
     try:
         from apply.common import mappings

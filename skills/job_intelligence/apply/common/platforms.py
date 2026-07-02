@@ -80,6 +80,7 @@ PLATFORM_LABELS = {
     "workday": "Workday",
     "icims": "iCIMS",
     "taleo": "Taleo",
+    "sapsf": "SAP SuccessFactors",
 }
 
 
@@ -105,6 +106,7 @@ def detect_platform(url):
         ("myworkdayjobs", "workday"), ("workday.com", "workday"),
         ("ashbyhq", "ashby"), ("icims", "icims"), ("taleo", "taleo"),
         ("smartrecruiters", "smartrecruiters"), ("bamboohr", "bamboohr"),
+        ("sapsf.com", "sapsf"), ("successfactors", "sapsf"),
     ]:
         if kw in host or kw in url:
             return plat

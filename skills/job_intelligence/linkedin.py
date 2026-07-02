@@ -40,7 +40,6 @@ def _scroll_load(page, idle_timeout=3):
                 el = el.parentElement;
             }
         }''')
-        import time
         deadline = time.time() + idle_timeout
         card_count = last_count
         while time.time() < deadline:
