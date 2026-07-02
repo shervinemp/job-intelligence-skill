@@ -1,3 +1,9 @@
+---
+name: job_intelligence
+description: Automate job applications — discover jobs from email, extract and enrich postings, tailor CVs, and apply across ATS platforms via browser automation.
+metadata: {"clawdbot":{"emoji":"💼","requires":{"bins":["python","node"]}}}
+---
+
 # Job Intelligence Pipeline
 
 ## Read First

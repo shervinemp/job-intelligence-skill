@@ -1,3 +1,9 @@
+---
+name: gemini-browser
+description: Controls Gemini custom gems via a real Chrome session (no API key) — activate a gem, send a prompt, read the response, delete the conversation.
+metadata: {"clawdbot":{"emoji":"💎","requires":{"bins":["node"]}}}
+---
+
 # Gemini Browser
 
 Controls Gemini custom gems via real Chrome session (no API key). Playwright connects to running Chrome CDP → navigates gem URL → sets 3.5 Flash + Extended thinking → sends prompt → reads response → deletes conversation.
