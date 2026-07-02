@@ -102,12 +102,13 @@ def cmd_auto():
             jid = add_job({"url": url, "email_id": tid, "source": "Email", "source_url": url})
             if jid:
                 ctx = _snippet(content, url)
-                print(f"REAL JOB? (admit/reject)", file=sys.stderr)
                 print(f"JOB:{jid}:{url}  [{ctx}]")
                 total += 1
         extracted_ids.append(tid)
     setting_set(EXTRACTED_IDS_KEY, extracted_ids)
     print(f"EXTRACTED:{total}", file=sys.stderr)
+    if total:
+        print(f"NEXT: extract.py admit --category tech|general <jid>  OR  extract.py reject <jid>", file=sys.stderr)
 
 
 def cmd_admit(*jids, category=None, notes=None):

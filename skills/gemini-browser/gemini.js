@@ -405,7 +405,6 @@ async function ensureSidebar(page, open = true) {
 
 async function deleteChat(page) {
   try {
-    // Extract conversation ID from current URL (gem, app, or main page)
     const convId = await page.evaluate(() => {
       const mGem = location.href.match(/\/gem\/[^\/]+\/([^\/\?]+)/);
       if (mGem) return mGem[1];
@@ -414,20 +413,16 @@ async function deleteChat(page) {
       const mMain = location.href.match(/\/c\/([^\/\?]+)/);
       return mMain ? mMain[1] : null;
     });
-    if (!convId) { log('deleteChat: could not extract conv id'); return; }
-    log(`deleteChat: targeting conv ${convId}`);
+    if (!convId) { log('deleteChat: exit@convId null'); return; }
 
-    // Navigate to home to ensure sidebar is current
     await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await wait(3000);
+    await wait(5000);
 
-    // Ensure sidebar is expanded so conversation elements are interactive
     await ensureSidebar(page, true);
 
-    // Find conversation by convId and click its actions menu
     let clicked = 'not_found';
     for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await wait(2000);
+      if (attempt > 0) await wait(3000);
       clicked = await page.evaluate((cid) => {
         const convs = document.querySelectorAll('[data-test-id="conversation"]');
         for (const c of convs) {
@@ -436,7 +431,7 @@ async function deleteChat(page) {
           const lastSegment = href.split('/').pop().split('?')[0];
           if (lastSegment !== cid) continue;
           c.scrollIntoView({ block: 'center' });
-          const btn = c.querySelector('button[data-test-id="actions-menu-button"]');
+          const btn = c.querySelector('[data-test-id="actions-menu-button"]');
           if (!btn) return 'no_button';
           btn.click();
           return 'ok';
@@ -445,12 +440,12 @@ async function deleteChat(page) {
       }, convId);
       if (clicked !== 'not_found') break;
     }
-    if (clicked === 'not_found') { log('deleteChat: conversation not found'); return; }
-    if (clicked === 'no_button') { log('deleteChat: no actions button'); return; }
+    if (clicked === 'not_found') { log('deleteChat: exit@not_found'); return; }
+    if (clicked === 'no_button') { log('deleteChat: exit@no_button'); return; }
     await wait(1500);
 
     const deleteBtn = await page.$('[data-test-id="delete-button"]');
-    if (!deleteBtn) { await page.keyboard.press('Escape'); return; }
+    if (!deleteBtn) { log('deleteChat: exit@no_delete_btn'); await page.keyboard.press('Escape'); return; }
     await deleteBtn.click();
     await wait(1000);
 
@@ -462,7 +457,6 @@ async function deleteChat(page) {
       await confirmBtn.click();
     }
     await wait(1500);
-    log('deleteChat: done');
   } catch (e) { log(`deleteChat error: ${e.message}`); }
 }
 
@@ -501,10 +495,7 @@ async function dump(page) {
     }
     if (gems) {
       if (gems[opts.gemName]) GEM_ID = gems[opts.gemName];
-      else {
-        log(`Warning: '${opts.gemName}' not in gems.json, using as raw ID`);
-        GEM_ID = opts.gemName;
-      }
+      else GEM_ID = opts.gemName;
     }
   }
 
