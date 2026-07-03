@@ -31,11 +31,14 @@ def _acquire_lock():
         try:
             pid = int(_LOCK_PATH.read_text().strip())
             if os.name == "nt":
-                # Windows: check if process exists via tasklist
-                import subprocess as sp
-                r = sp.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                # Windows: check if process exists via tasklist. CSV + exact column
+                # compare — substring matching would let PID 123 match PID 1234.
+                # (Do NOT use os.kill(pid, 0) here: on Windows it terminates the target.)
+                import csv, io, subprocess as sp
+                r = sp.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                           capture_output=True, timeout=5)
-                alive = str(pid) in r.stdout.decode()
+                rows = csv.reader(io.StringIO(r.stdout.decode(errors="replace")))
+                alive = any(len(row) > 1 and row[1] == str(pid) for row in rows)
             else:
                 os.kill(pid, 0)
                 alive = True

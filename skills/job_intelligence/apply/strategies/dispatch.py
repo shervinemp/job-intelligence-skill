@@ -1,12 +1,18 @@
 """Field fill dispatch — routes to correct strategy by field type.
 Tries each method in the strategy's METHOD_CHAIN before giving up."""
 from apply.strategies import combobox, text, select
+from apply.steps.probe import resolve_selector
 
 
 def field_deterministic(page, f, ans):
     sel = f.get("_sel", "")
     if not sel:
-        return False
+        # Callers with freshly re-read fields (conditional fields, re-fill retries)
+        # haven't run the probe pass — resolve the selector lazily so every path fills.
+        sel = resolve_selector(page, f)
+        if not sel:
+            return False
+        f["_sel"] = sel
     if f["tag"] == "INPUT" and f.get("type") == "checkbox":
         lbl = (f.get("label") or "").lower()
         if any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm", "understand"]):

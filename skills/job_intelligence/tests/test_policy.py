@@ -35,9 +35,16 @@ class PolicyModes(unittest.TestCase):
         self.assertEqual(policy.resolve_mode(), "shadow")
         self.assertFalse(policy.submits_for_real("shadow"))
 
-    def test_invalid_mode_falls_back_to_live(self):
+    def test_invalid_mode_fails_closed_to_hold(self):
+        # A typo in a safety control must never cause real submits.
         os.environ["JI_APPLY_MODE"] = "bogus"
-        self.assertEqual(policy.resolve_mode(), "live")
+        self.assertEqual(policy.resolve_mode(), "hold")
+        self.assertFalse(policy.submits_for_real(policy.resolve_mode()))
+
+    def test_invalid_file_mode_fails_closed_to_hold(self):
+        with open(os.path.join(self._home, "apply_policy.json"), "w") as f:
+            f.write('{"mode": "shdow"}')
+        self.assertEqual(policy.resolve_mode(), "hold")
 
     def test_cli_override_wins(self):
         os.environ["JI_APPLY_MODE"] = "live"

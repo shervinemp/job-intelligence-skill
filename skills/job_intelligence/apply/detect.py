@@ -109,7 +109,8 @@ def run(jid):
             page_owner = False
 
     if "linkedin.com/jobs/view" in url:
-        job_id = url.split("/jobs/view/")[1].split("/")[0]
+        # Strip path/query/fragment — "/jobs/view/12345?refId=x" must yield "12345"
+        job_id = url.split("/jobs/view/")[1].split("/")[0].split("?")[0].split("#")[0]
 
         # Intercept LinkedIn GraphQL response for Easy Apply field detection
         apply_fields = []

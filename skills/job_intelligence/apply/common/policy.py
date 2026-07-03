@@ -13,8 +13,11 @@ fields below are recorded for later phases and are not yet enforced.
 """
 import json
 import os
+import sys
 
 _VALID_MODES = ("live", "shadow", "hold")
+
+_warned_invalid_mode = False
 
 _DEFAULTS = {
     "mode": "live",
@@ -47,7 +50,16 @@ def load_policy():
     if env_mode:
         pol["mode"] = env_mode
     if pol.get("mode") not in _VALID_MODES:
-        pol["mode"] = "live"
+        # Fail closed: a typo in a safety control must never cause real submits.
+        global _warned_invalid_mode
+        if not _warned_invalid_mode:
+            _warned_invalid_mode = True
+            print(
+                f"ERROR: invalid apply mode '{pol.get('mode')}' — failing closed to "
+                f"'hold' (valid: {', '.join(_VALID_MODES)})",
+                file=sys.stderr,
+            )
+        pol["mode"] = "hold"
     return pol
 
 

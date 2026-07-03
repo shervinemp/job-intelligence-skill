@@ -2,15 +2,15 @@
 """verify.py — Check if a job was submitted. No state mutation.
 4 strategies: modal closed, success text, Applied button, DB stage.
 """
-import os, sys, time
+import os, sys
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
 from lib.chrome_manager import connect
-from apply.common.page_helpers import load_state, page_text
+from apply.common.page_helpers import load_state, page_text, mark_applied
 from apply.common.output import emit_next, emit_status, emit_error
-from apply.common.apply_state import clear as _as_clear
+from apply.common.signals import SUCCESS_STRICT, has_success_text
 
 
 # Tokens that, in a post-submit URL, strongly indicate a confirmation page.
@@ -29,6 +29,17 @@ def _is_confirmation_url(url):
     except Exception:
         return False
     return any(t in hay for t in _CONFIRM_URL_TOKENS)
+
+
+def _registrable_domain(url):
+    """Last two host labels ('careers.foo.com' -> 'foo.com'). Coarse but adequate
+    for scoping the redirect scan to the ATS's site."""
+    try:
+        host = urlparse(url or "").netloc.lower().split(":")[0]
+    except Exception:
+        return ""
+    parts = [p for p in host.split(".") if p]
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
 def _vision_confirms(page, jid):
@@ -86,6 +97,9 @@ def run(jid):
 
     b, ctx = connect()
     state = load_state()
+    if state.get("jid") != jid:
+        # Stale state from another job — never use its URL/flags for this one.
+        state = {}
     last_submit = state.get("_last_submit", "")
 
     # Context from previous stage: guide what to look for
@@ -111,38 +125,36 @@ def run(jid):
             page = p
             break
 
-    # Fallback: scan all pages for success text (handles cross-domain redirects)
-    success_signals = [
-        "your application has been",
-        "your application was",
-        "has been sent",
-        "application received",
-        "you have applied",
-    ]
     if page:
-        text = (page_text(page) or "").lower()
-        if any(s in text for s in success_signals):
-            _mark_applied(jid)
+        text = page_text(page) or ""
+        if has_success_text(text):
+            mark_applied(jid)
             emit_status("submitted (text match on page)")
             emit_next("none")
             return
         if _is_confirmation_url(page.url):
-            _mark_applied(jid)
+            mark_applied(jid)
             emit_status(f"submitted (confirmation URL: {page.url[:60]})")
             emit_next("none")
             return
     else:
-        # No matching page — scan ALL pages for success text / confirmation URL
-        for p in ctx.pages:
-            try:
-                t = (page_text(p) or "").lower()
-                if any(s in t for s in success_signals) or _is_confirmation_url(p.url):
-                    _mark_applied(jid)
-                    emit_status("submitted (cross-domain redirect)")
-                    emit_next("none")
-                    return
-            except Exception:
-                pass
+        # No matching page — scan same-site pages only (handles post-submit
+        # redirects within the ATS domain). Never scan unrelated tabs: this runs
+        # against the user's real Chrome, and generic phrases like "has been sent"
+        # appear in webmail etc.
+        site = _registrable_domain(state.get("external_url", ""))
+        if site:
+            for p in ctx.pages:
+                try:
+                    if _registrable_domain(p.url) != site:
+                        continue
+                    if has_success_text(page_text(p)) or _is_confirmation_url(p.url):
+                        mark_applied(jid)
+                        emit_status("submitted (same-site redirect)")
+                        emit_next("none")
+                        return
+                except Exception:
+                    pass
         emit_status("unknown", "no active pages")
         emit_next("act --fill or check manually")
         return
@@ -161,16 +173,16 @@ def run(jid):
                 or False
             )
             if not has_inputs:
-                _mark_applied(jid)
+                mark_applied(jid)
                 emit_status("submitted (modal closed, no inputs)")
                 emit_next("none")
                 return
 
         # Strategy 2: Success text in body (including shadow DOM)
         text = (page_text(page) or "").lower()
-        for signal in success_signals:
+        for signal in SUCCESS_STRICT:
             if signal in text:
-                _mark_applied(jid)
+                mark_applied(jid)
                 emit_status(f"submitted (text: '{signal}')")
                 emit_next("none")
                 return
@@ -185,7 +197,7 @@ def run(jid):
         )
         if any(b.lower() == "applied" for b in buttons):
             print(f"  SIGNAL: Applied button found (high confidence)", file=sys.stderr)
-            _mark_applied(jid)
+            mark_applied(jid)
             emit_status("submitted (Applied button)")
             emit_next("none")
             return
@@ -196,7 +208,7 @@ def run(jid):
 
     # Last-resort: auto vision check (only if the endpoint is reachable).
     if page and _vision_confirms(page, jid):
-        _mark_applied(jid)
+        mark_applied(jid)
         emit_status("submitted (vision last-resort)")
         emit_next("none")
         return
@@ -213,19 +225,3 @@ def run(jid):
 
     emit_status("unknown", f"DB stage: {stage}" + (f", last: {last_submit}" if last_submit else ""))
     emit_next("act --fill or check manually")
-
-
-def _mark_applied(jid):
-    get_conn().execute(
-        "UPDATE jobs SET stage=?, updated_at=? WHERE id=?",
-        ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid),
-    ).connection.commit()
-    _as_clear(jid)
-    # Promote corrected-then-passed mappings (no-op unless policy.use_mappings).
-    try:
-        from apply.common import mappings
-        n = mappings.promote(jid)
-        if n:
-            print(f"  MAPPINGS: promoted {n} confirmed mapping(s)", file=sys.stderr)
-    except Exception as e:
-        print(f"  MAPPINGS_SKIP: {e}", file=sys.stderr)
