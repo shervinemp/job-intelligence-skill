@@ -33,6 +33,9 @@ CHROME_PROFILE = os.path.join(JI_HOME, "chrome-profile")
 
 DB_PATH = os.path.join(STATE_DIR, "jobs.db")
 STATE_PATH = os.path.join(STATE_DIR, "apply_state.json")
+# The user's answer profile lives with the skill, not JI_HOME (it is the input
+# users edit; JI_HOME holds derived state).
+PROFILE_PATH = str(Path(__file__).resolve().parent.parent / "profile.json")
 REGISTRY_PATH = os.path.join(STATE_DIR, "page_registry.json")
 AUTH_WALLS_PATH = os.path.join(STATE_DIR, "needs_auth.json")
 CHROME_CONFIG = os.path.join(JI_HOME, "chrome-config.json")
