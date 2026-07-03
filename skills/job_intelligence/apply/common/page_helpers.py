@@ -32,27 +32,38 @@ def tag_page(page, jid):
 
 
 def mark_applied(jid):
-    """Update DB stage to applied."""
+    """Single writer for "this job is applied": DB stage + timestamps, crash-recovery
+    state cleanup, and mapping promotion. Every success path must go through here."""
     from lib.db import get_conn
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
     get_conn().execute(
         "UPDATE jobs SET stage='applied', updated_at=?, applied_at=? WHERE id=?",
         (ts, ts, jid),
     ).connection.commit()
+    try:
+        from apply.common.apply_state import clear as _as_clear
+        _as_clear(jid)
+    except Exception:
+        pass
+    # Promote corrected-then-passed mappings (no-op unless policy.use_mappings).
+    try:
+        from apply.common import mappings
+        n = mappings.promote(jid)
+        if n:
+            print(f"  MAPPINGS: promoted {n} confirmed mapping(s)", file=sys.stderr)
+    except Exception as e:
+        print(f"  MAPPINGS_SKIP: {e}", file=sys.stderr)
 
 
 def check_applied_signal(page):
     """Check page for successful application signals. Returns True if applied."""
+    from apply.common.signals import has_success_text
     try:
-        body = (page.evaluate("() => document.body.innerText") or "").lower()
+        body = page.evaluate("() => document.body.innerText") or ""
     except Exception:
         return False
-    signals = ["your application has been", "your application was",
-               "has been sent", "application received", "you have applied",
-               "thank you for applying", "application submitted"]
-    for s in signals:
-        if s in body:
-            return True
+    if has_success_text(body):
+        return True
     try:
         found = page.evaluate("""() => {
             const all = document.querySelectorAll('button, a, span, div');
@@ -139,15 +150,17 @@ def check_captcha(page):
         return False
 
 
-def handle_captcha(page, state):
-    """If CAPTCHA detected, notify user and pause."""
+def handle_captcha(page, state, wait_s=300, poll_s=3):
+    """If CAPTCHA detected, notify the user and poll until it is solved in the
+    browser (no keyboard interaction needed) or the timeout elapses.
+    Returns False when solved (caller proceeds), True when still blocked."""
     if not check_captcha(page):
         return False
     url = page.url[:120]
     print(f"\n*** CAPTCHA DETECTED ***", file=sys.stderr)
     print(f"  URL: {url}", file=sys.stderr)
-    print(f"  Solve it in your Chrome browser, then press Enter to continue", file=sys.stderr)
-    print(f"  (Pipeline will wait up to 300s, then abort)", file=sys.stderr)
+    print(f"  Solve it in your Chrome browser — resuming automatically once solved", file=sys.stderr)
+    print(f"  (waiting up to {wait_s}s, then aborting this step)", file=sys.stderr)
     try:
         page.bring_to_front()
     except Exception:
@@ -156,11 +169,14 @@ def handle_captcha(page, state):
         webbrowser.open(url)
     except Exception:
         pass
-    try:
-        input()
-    except (EOFError, KeyboardInterrupt):
-        print(f"\n  CAPTCHA wait aborted.", file=sys.stderr)
-    print(f"  Resuming...", file=sys.stderr)
+    waited = 0
+    while waited < wait_s:
+        time.sleep(poll_s)
+        waited += poll_s
+        if not check_captcha(page):
+            print(f"  CAPTCHA solved after {waited}s — resuming.", file=sys.stderr)
+            return False
+    print(f"  CAPTCHA still present after {wait_s}s — aborting this step.", file=sys.stderr)
     return True
 
 
@@ -338,7 +354,8 @@ def scan_actions(page, keywords, exclude=None):
             if (el.offsetParent === null) continue;
             const text = (el.textContent || '').trim().toLowerCase();
             if (excl.has(text)) continue;
-            const href = (el.href || '').toLowerCase().replace(/\\/$/, '');
+            const rawHref = (el.href || '').replace(/\\/$/, '');
+            const href = rawHref.toLowerCase();  // for scoring/comparison only
             // Skip self-referencing links
             if (el.tagName === 'A' && href === currentUrl) continue;
             let score = 0;
@@ -351,7 +368,7 @@ def scan_actions(page, keywords, exclude=None):
             if (score > 0) {
                 candidates.push({
                     text: text.slice(0, 30), score: score, tag: el.tagName,
-                    href: href,
+                    href: rawHref,  // original case — hrefs get navigated to
                     disabled: el.disabled || false
                 });
             }
