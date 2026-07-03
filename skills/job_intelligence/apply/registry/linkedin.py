@@ -1,4 +1,10 @@
-"""LinkedIn Easy Apply flow hook. Handles ephemeral modal in one process."""
+"""LinkedIn Easy Apply flow hook. Handles ephemeral modal in one process.
+
+Hook contract (see cmd_fill): receives profile/answers from the caller and an
+allow_submit flag from the submit gate. It must never click a submit-intent
+button when allow_submit is False, and must only mark_applied on positive
+evidence (success signal, or modal closed right after *this call* clicked submit).
+"""
 
 import json, os, sys, time
 
@@ -6,18 +12,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from apply.common.resolve import resolution_for_fill
 from apply.common.page_helpers import check_applied_signal, mark_applied
 from apply.common.output import emit_status, emit_next, emit_fill_report
+from apply.common import audit
 
-
-def _profile_answers():
-    """Load profile answers without importing act.py's profile loader."""
-    p = os.path.join(os.path.dirname(__file__), "..", "profile.json")
-    if os.path.exists(p):
-        try:
-            with open(p) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
+_SUBMIT_KWS = ("submit application", "submit", "send application")
 
 
 def _select_resume(page, jid):
@@ -141,14 +138,15 @@ def _click_dialog_button(page, btn_info):
     }}""")
 
 
-def easy_apply_flow(page, jid):
+def easy_apply_flow(page, jid, profile=None, answers=None, allow_submit=True):
     """Handle one page of LinkedIn Easy Apply flow. Re-entrant — each call handles one step.
-    
+
     Returns:
         "done" — application submitted successfully
-        "paused" — needs LLM input (unfilled fields without answers). State saved.
-        "failed" — can't proceed (no dialog, no buttons)
+        "paused" — needs LLM input, verification, or submit is gated. State saved.
+        "failed" — can't proceed (dialog open but no usable buttons)
     """
+    profile = profile or {}
     # Ensure dialog is open (poll for up to 10s — LinkedIn loads async)
     has_dialog = page.evaluate("() => !!document.querySelector('[role=dialog], dialog')")
     if not has_dialog:
@@ -191,16 +189,10 @@ def easy_apply_flow(page, jid):
     fields = _get_dialog_fields(page)
     unfilled = []
 
-    profile = _profile_answers()
-
-    # NOTE: the flow hook is not handed the per-run --answers dict, so it resolves
-    # from profile facts + profile["answers"] only. Explicit --answers overrides do
-    # not reach LinkedIn Easy Apply auto-fill (acceptable: the LLM can drive the
-    # standard fill path instead).
     for f in fields:
         if f.get("isEmpty", True):
             lbl = f["label"]
-            res = resolution_for_fill(lbl, profile, answers_override=None)
+            res = resolution_for_fill(lbl, profile, answers_override=answers)
             if res and res.value:
                 try:
                     if f["tag"] == "SELECT":
@@ -212,6 +204,11 @@ def easy_apply_flow(page, jid):
                     else:
                         page.locator(f'#{f["id"]}').fill(res.value)
                         print(f"  FILLED: {lbl[:40]} -> {res.value}", file=sys.stderr)
+                    audit.log_field(
+                        jid, lbl, res.value, provenance=res.provenance,
+                        category=audit.categorize(lbl, f.get("options"), f.get("tag")),
+                        filled=True,
+                    )
                 except Exception as e:
                     print(f"  FILL_WARN: {lbl[:40]} — {e}", file=sys.stderr)
                     unfilled.append({"label": lbl, "options": f.get("options", []), "tag": f["tag"]})
@@ -229,28 +226,37 @@ def easy_apply_flow(page, jid):
         return "done"
 
     # Find and click action button
-    btn = _find_dialog_button(page, ["submit application", "submit", "send application",
-                                     "review", "next", "continue", "done"])
+    btn = _find_dialog_button(page, list(_SUBMIT_KWS) + ["review", "next", "continue", "done"])
     if not btn:
         if check_applied_signal(page):
             mark_applied(jid)
             return "done"
-        # No buttons — modal might have closed after submit
+        # No buttons and no dialog, but WE never clicked submit — that is not
+        # positive evidence (the user may have dismissed the modal). Let verify
+        # decide the DB write.
         has_dialog = page.evaluate("() => !!document.querySelector('[role=dialog], dialog')")
         if not has_dialog:
-            mark_applied(jid)
-            return "done"
+            emit_status("dialog_closed", "modal gone without a submit click — needs verification")
+            emit_next("verify")
+            return "paused"
         return "failed"
+
+    is_submit = any(btn["text"].startswith(k) for k in _SUBMIT_KWS)
+    if is_submit and not allow_submit:
+        audit.log_event(jid, "submit_blocked", detail=f"easy_apply: {btn['text']}")
+        emit_status("submit_hold", f"would click '{btn['text']}' — submit suppressed by policy")
+        emit_next("verify, or set JI_APPLY_MODE=live and re-run act --fill")
+        return "paused"
 
     _click_dialog_button(page, btn)
     time.sleep(3)
 
     # After submit button, check for success
-    if btn["text"] in ("submit application", "submit", "send application"):
+    if is_submit:
         if check_applied_signal(page):
             mark_applied(jid)
             return "done"
-        # If modal closed after submit, assume success
+        # Modal closed immediately after *this call* clicked submit — positive evidence
         time.sleep(1)
         has_dialog = page.evaluate("() => !!document.querySelector('[role=dialog], dialog')")
         if not has_dialog:
