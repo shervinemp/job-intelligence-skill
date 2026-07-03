@@ -25,8 +25,12 @@ def run(jid):
     print(f"JOB: {title or '?'} @ {company or '?'}", file=sys.stderr)
 
     # External URL was stored by detect — use it directly, skip LinkedIn re-navigation
-    state = load_state()
-    external_url = state.get("external_url", "")
+    st = load_state()
+    if st.get("jid") != jid:
+        # Never navigate using another job's URL — require detect to run first.
+        emit_error(f"state is for job {st.get('jid','?')}, not {jid} — run detect {jid} first")
+        sys.exit(1)
+    external_url = st.get("external_url", "")
     if not external_url or "linkedin.com" in external_url:
         # Fallback: detect may not have found it — try opening LinkedIn job page
         b, ctx = connect()
