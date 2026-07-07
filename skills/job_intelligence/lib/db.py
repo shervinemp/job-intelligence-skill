@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from datetime import datetime
 
 from .config import DB_PATH, STATE_DIR as DB_DIR, AUTH_WALLS_PATH
@@ -932,9 +933,9 @@ def pipeline_status():
 
     next_step = ""
     if pending_staged > 0:
-        next_step = f"extract.py --count {min(3, pending_staged)}"
+        next_step = "extract.py"
     elif state["stages"].get("extracted", 0) > 0:
-        next_step = "enrich.py --count 3"
+        next_step = "enrich.py"
     elif state["stages"].get("described", 0) > 0:
         next_step = "tailor.py"
     elif state["stages"].get("tailored", 0) > 0:

@@ -227,6 +227,20 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
             advance(entry, entry.get("stage"), state="failed", error=str(result))
             failed += 1
     print(f"FETCHED:{fetched} FAILED:{failed}", file=sys.stderr)
+
+    # Auto-admit LinkedIn jobs that already have descriptions (pre-scraped by linkedin.py)
+    conn = get_conn()
+    auto = conn.execute(
+        "SELECT id FROM jobs WHERE stage='extracted' AND state='active' AND source='LinkedIn'"
+    ).fetchall()
+    if auto:
+        auto_ids = [r[0] for r in auto]
+        for jid in auto_ids:
+            if jid in state.get("jobs", {}):
+                advance(state["jobs"][jid], "described")
+        conn.commit()
+        print(f"AUTO_ADMIT: {len(auto_ids)} LinkedIn jobs", file=sys.stderr)
+
     if fetched:
         print(f"NEXT: enrich.py admit <jid> --category ...  OR  enrich.py reject <jid>", file=sys.stderr)
 
