@@ -144,6 +144,7 @@ def run(jid):
 
         from apply.common.page_manager import PageManager
         pm = PageManager(ctx, jid)
+        pm.register(p)
         pm.close_stale(target_url=url)
 
         # First check the regular job page for external apply button
@@ -153,8 +154,6 @@ def run(jid):
         except Exception:
             pass
         time.sleep(2)
-
-        pm.register(p)
 
         # Read buttons BEFORE clicking Easy Apply (the click may remove the button)
         buttons = p.evaluate(
