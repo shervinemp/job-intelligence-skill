@@ -314,7 +314,7 @@ async function send(page, text) {
 
   await el.click();
   await wait(500);
-  await el.type(text, { delay: 10 });
+  await page.keyboard.insertText(text);
   await wait(2000);
 
   await page.keyboard.press('Enter');
