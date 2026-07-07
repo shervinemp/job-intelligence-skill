@@ -172,77 +172,72 @@ def save_description(jid, text):
 
 
 def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
+    # One-at-a-time: fetch one job description, show DESC, wait for LLM admit/reject.
     state = load()
     stage = "described" if refresh else "extracted"
     pending = [(jid, e) for jid, e in state["jobs"].items()
                if e.get("stage") == stage and e.get("state") == "active" and (force or not desc_exists(jid))]
 
+    # First, auto-admit all pending LinkedIn jobs (pre-scraped descriptions, no review needed)
+    linkedin = [(jid, e) for jid, e in pending if e.get("source") == "LinkedIn"]
+    if linkedin:
+        for jid, entry in linkedin:
+            advance(entry, "described")
+        get_conn().commit()
+        print(f"AUTO_ADMIT: {len(linkedin)} LinkedIn jobs", file=sys.stderr)
+        state = load()  # reload after advances
+        pending = [(jid, e) for jid, e in state["jobs"].items()
+                   if e.get("stage") == stage and e.get("state") == "active" and (force or not desc_exists(jid))]
+
     if not pending:
         print("NO_PENDING_FETCH", file=sys.stderr)
         return
 
-    fetched = failed = 0
-    for jid, entry in pending:
-        title = entry.get("title", "")
-        company = entry.get("company", "")
-        url = entry.get("url", "")
-        ok, result, page_title, raw_html = _fetch_from_url(url, use_playwright=use_playwright)
-        if ok:
-            save_description(jid, result)
-            conn = get_conn()
-            need_title = not entry.get("title")
-            need_company = not entry.get("company")
-            need_location = not entry.get("location")
-            need_salary = not entry.get("salary")
-            if raw_html:
-                _enrich_from_ld(raw_html, entry)
-            sets, vals = [], []
-            if page_title and need_title:
-                sets.append("title=?")
-                vals.append(page_title[:200])
-            elif entry.get("title") and need_title:
-                sets.append("title=?")
-                vals.append(entry["title"])
-            if entry.get("company") and need_company:
-                sets.append("company=?")
-                vals.append(entry["company"])
-            if entry.get("location") and need_location:
-                sets.append("location=?")
-                vals.append(entry["location"])
-            if entry.get("salary") and need_salary:
-                sets.append("salary=?")
-                vals.append(entry["salary"])
-            if sets:
-                vals.append(jid)
-                conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
-                conn.commit()
-            limit = 2000 if verbose else 500
-            snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
-            print(f"DESC:{jid}:{snippet}")
-            auth_walls.remove(jid)
-            fetched += 1
-        else:
-            if result == "auth_wall":
-                auth_walls.add(jid, url, title, company)
-            advance(entry, entry.get("stage"), state="failed", error=str(result))
-            failed += 1
-    print(f"FETCHED:{fetched} FAILED:{failed}", file=sys.stderr)
-
-    # Auto-admit LinkedIn jobs that already have descriptions (pre-scraped by linkedin.py)
-    conn = get_conn()
-    auto = conn.execute(
-        "SELECT id FROM jobs WHERE stage='extracted' AND state='active' AND source='LinkedIn'"
-    ).fetchall()
-    if auto:
-        auto_ids = [r[0] for r in auto]
-        for jid in auto_ids:
-            if jid in state.get("jobs", {}):
-                advance(state["jobs"][jid], "described")
-        conn.commit()
-        print(f"AUTO_ADMIT: {len(auto_ids)} LinkedIn jobs", file=sys.stderr)
-
-    if fetched:
-        print(f"NEXT: enrich.py admit <jid> --category ...  OR  enrich.py reject <jid>", file=sys.stderr)
+    # One job at a time — LLM-in-the-middle handoff
+    jid, entry = pending[0]
+    title = entry.get("title", "")
+    company = entry.get("company", "")
+    url = entry.get("url", "")
+    ok, result, page_title, raw_html = _fetch_from_url(url, use_playwright=use_playwright)
+    if ok:
+        save_description(jid, result)
+        conn = get_conn()
+        need_title = not entry.get("title")
+        need_company = not entry.get("company")
+        need_location = not entry.get("location")
+        need_salary = not entry.get("salary")
+        if raw_html:
+            _enrich_from_ld(raw_html, entry)
+        sets, vals = [], []
+        if page_title and need_title:
+            sets.append("title=?")
+            vals.append(page_title[:200])
+        elif entry.get("title") and need_title:
+            sets.append("title=?")
+            vals.append(entry["title"])
+        if entry.get("company") and need_company:
+            sets.append("company=?")
+            vals.append(entry["company"])
+        if entry.get("location") and need_location:
+            sets.append("location=?")
+            vals.append(entry["location"])
+        if entry.get("salary") and need_salary:
+            sets.append("salary=?")
+            vals.append(entry["salary"])
+        if sets:
+            vals.append(jid)
+            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
+            conn.commit()
+        limit = 2000 if verbose else 500
+        snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
+        print(f"DESC:{jid}:{snippet}")
+        print(f"NEXT: enrich.py admit {jid} --category tech|general  OR  enrich.py reject {jid}")
+        auth_walls.remove(jid)
+    else:
+        if result == "auth_wall":
+            auth_walls.add(jid, url, title, company)
+        advance(entry, entry.get("stage"), state="failed", error=str(result))
+        print(f"NEXT: enrich.py reject {jid}")
 
 
 def cmd_flag(*jids):
