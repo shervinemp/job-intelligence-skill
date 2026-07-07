@@ -17,40 +17,51 @@ from apply.common import audit
 _SUBMIT_KWS = ("submit application", "submit", "send application")
 
 
+def _get_resume_filename(jid):
+    """Return the tailored resume filename (without .pdf) from the results dir."""
+    from lib.config import RESULTS_DIR
+    rd = os.path.join(RESULTS_DIR, jid)
+    if os.path.isdir(rd):
+        for f in os.listdir(rd):
+            if "Resume" in f and f.endswith(".pdf"):
+                return f.replace(".pdf", "")
+    return None
+
+
 def _select_resume(page, jid):
-    """Select tailored resume on LinkedIn's resume page. Returns True if action taken."""
-    return page.evaluate("""() => {
+    """Select tailored resume on LinkedIn's resume page.
+    
+    Finds the radio button whose label contains the tailored resume filename.
+    Uses Playwright native click for reliable event dispatch.
+    Returns True if the right resume is now selected, False if not found.
+    """
+    target_name = _get_resume_filename(jid)
+    if not target_name:
+        return False
+    # Find the radio input whose label contains target_name
+    info = page.evaluate(f"""() => {{
         const d = document.querySelector('[role="dialog"], dialog');
-        if (!d) return false;
+        if (!d) return null;
         const radios = d.querySelectorAll('input[type="radio"]');
-        if (radios.length === 0) return false;
-        // Check if the right resume is already selected
-        for (const r of radios) {
+        for (const r of radios) {{
             const lbl = d.querySelector('label[for="' + r.id + '"]');
             const t = lbl ? lbl.textContent.trim() : '';
-            if (r.checked && t.includes('.pdf')) return 'already_selected';
-        }
-        // Click label for the tailored resume (triggers LinkedIn's event handlers)
-        const labels = d.querySelectorAll('label');
-        for (const lbl of labels) {
-            const t = lbl.textContent.trim();
-            if (t.includes('.pdf') && !t.startsWith('Select resume') && !t.startsWith('Deselect')) continue;
-            if (t.includes('.pdf')) {
-                lbl.click();
-                const forId = lbl.getAttribute('for');
-                if (forId) {
-                    const radio = d.querySelector('#' + CSS.escape(forId));
-                    if (radio) {
-                        radio.dispatchEvent(new Event('change', {bubbles: true}));
-                        radio.dispatchEvent(new Event('input', {bubbles: true}));
-                        radio.dispatchEvent(new Event('click', {bubbles: true}));
-                    }
-                }
-                return true;
-            }
-        }
-        return false;
-    }""")
+            if (t.includes('.pdf') && t.includes({json.dumps(target_name)})) {{
+                return {{ id: r.id, checked: r.checked, labelText: t }};
+            }}
+        }}
+        return null;
+    }}""")
+    if not info:
+        return False
+    if info.get("checked"):
+        return 'already_selected'
+    # Use Playwright native click on the label for proper Ember.js event dispatch
+    try:
+        page.locator(f'label[for="{info["id"]}"]').first.click(timeout=5000)
+        return True
+    except Exception:
+        return False
 
 
 def _get_dialog_fields(page):
@@ -58,7 +69,7 @@ def _get_dialog_fields(page):
     return page.evaluate("""() => {
         const d = document.querySelector('[role=dialog], dialog');
         if (!d) return [];
-        const sel = 'input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable="true"]';
+        const sel = 'input:not([type=hidden]):not([type=submit]):not([type=radio]), select, textarea, [contenteditable="true"]';
         const inputs = d.querySelectorAll(sel);
         return Array.from(inputs).filter(el => el.offsetParent !== null).map(el => {
             const lbl = d.querySelector('label[for="' + el.id + '"]');
@@ -174,11 +185,46 @@ def easy_apply_flow(page, jid, profile=None, answers=None, allow_submit=True):
 
     time.sleep(1.5)
 
-    # Try resume selection
+    # Expand resume list if needed
+    page.evaluate("""() => {
+        const d = document.querySelector('[role="dialog"], dialog');
+        if (!d) return;
+        const btns = d.querySelectorAll('button');
+        for (const b of btns) {
+            if (b.offsetParent !== null && !b.disabled && (b.textContent || '').trim() === 'Show 3 more resumes') {
+                b.click(); return;
+            }
+        }
+    }""")
+    time.sleep(1)
+    # Try resume selection — returns False if tailored resume not found on LinkedIn
     res = _select_resume(page, jid)
     if res:
         print(f"RESUME:{jid} selected tailored resume", file=sys.stderr)
         time.sleep(1)
+    else:
+        # Fallback: select first available resume if tailored one not found
+        fallback_id = page.evaluate("""() => {
+            const d = document.querySelector('[role="dialog"], dialog');
+            if (!d) return null;
+            const radios = d.querySelectorAll('input[type="radio"]');
+            for (const r of radios) {
+                if (!r.checked) {
+                    const lbl = d.querySelector('label[for="' + r.id + '"]');
+                    if (lbl && lbl.textContent.trim().includes('.pdf')) {
+                        return r.id;
+                    }
+                }
+            }
+            return null;
+        }""")
+        if fallback_id:
+            try:
+                page.locator(f'label[for="{fallback_id}"]').first.click(timeout=5000)
+                print(f"RESUME:{jid} selected first available resume (tailored not found)", file=sys.stderr)
+                time.sleep(1)
+            except Exception as e:
+                print(f"RESUME:{jid} fallback click failed — {e}", file=sys.stderr)
 
     # Check for success before proceeding
     if check_applied_signal(page):
