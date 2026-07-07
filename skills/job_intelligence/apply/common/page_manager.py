@@ -150,9 +150,10 @@ class PageManager:
         for p in self.ctx.pages:
             jid = read_page_tag(p)
             if jid and jid == self.jid:
-                continue  # don't close the page we're about to use
+                continue
             url = p.url.lower()
-            if "about:blank" in url or "chrome-error" in url or "newtab" in url or (jid and jid != self.jid):
+            if "about:blank" in url:
+                continue  # will be navigated or closed naturally
+            if "chrome-error" in url or "newtab" in url or (jid and jid != self.jid):
                 try: p.close()
                 except Exception: pass
-                continue
