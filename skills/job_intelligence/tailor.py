@@ -13,12 +13,12 @@ Usage:
   tailor.py reset --state <state>     Reset by state (failed, skipped)
 """
 
-import hashlib, json, os, re, sys
+import hashlib, json, os, re, subprocess, sys
 from datetime import datetime
 
 from lib.db import load, advance, get_failed, pipeline_status
-from lib.db import desc_get, app_save
-from lib.call_gemini import call_gemini_node
+from lib.db import desc_get, app_save, app_get, app_list
+from lib.call_gemini import call_gemini_node, list_gems
 from lib.config import RESULTS_DIR
 # JSON extraction is done inline in the gem route
 from lib.platforms import clean as clean_desc
@@ -78,20 +78,19 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         prompt += f"\n\n--- FEEDBACK FROM REVIEW ---\n{feedback}"
 
     tailor_mode = os.environ.get("JI_TAILOR", "agent")
-    prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
-    if not os.path.exists(prompt_path):
-        return False, f"tailor_prompt.md not found at {prompt_path}"
-    with open(prompt_path) as f:
-        instructions = f.read()
-    prompt = instructions + "\n\n---\n\n" + prompt
-
     if tailor_mode == "agent":
+        prompt_path = os.path.join(os.path.dirname(__file__), "tailor_prompt.md")
+        if not os.path.exists(prompt_path):
+            return False, f"tailor_prompt.md not found at {prompt_path}"
+        with open(prompt_path) as f:
+            instructions = f.read()
+        prompt = instructions + "\n\n---\n\n" + prompt
         prompt += "\n\nWrite the resume.json file with the tailored JSON Resume data."
         print(f"PROMPT: {os.path.join(RESULTS_DIR, job_id, 'prompt.txt')}", file=sys.stderr)
         print(f"  Write resume.json, then: tailor.py build {job_id} && tailor.py admit {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
-    # Gem route — output JSON block
+    # Gem route — output JSON block (gem has instructions built-in)
     prompt += "\n\nOutput the full JSON Resume (including coverLetter) in a ```json code block."
 
     app_dir = os.path.join(RESULTS_DIR, job_id)
