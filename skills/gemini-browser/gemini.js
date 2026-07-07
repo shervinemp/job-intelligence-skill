@@ -312,33 +312,13 @@ async function send(page, text) {
   const el = await page.$('[contenteditable="true"]');
   if (!el) die('No chat input');
 
-  const box = await el.boundingBox();
-  if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await el.click();
   await wait(500);
-
-  await page.evaluate(t => {
-    const e = document.querySelector('[contenteditable="true"]');
-    if (e) {
-      e.textContent = t;
-      e.dispatchEvent(new Event('input', { bubbles: true }));
-      e.dispatchEvent(new Event('compositionend', { bubbles: true }));
-    }
-  }, text);
+  await el.type(text, { delay: 10 });
   await wait(2000);
 
-  let sendBtn = await page.$('button[aria-label="Send message"]');
-  if (!sendBtn) sendBtn = await page.$('[data-test-id="send-button-container"] button');
-  if (sendBtn) {
-    for (let i = 0; i < 5; i++) {
-      const disabled = await sendBtn.isDisabled().catch(() => true);
-      if (!disabled) break;
-      await wait(1000);
-    }
-    await sendBtn.click();
-  } else {
-    await page.keyboard.press('Enter');
-  }
-  await wait(1500);
+  await page.keyboard.press('Enter');
+  await wait(2000);
   log('Sent!');
 }
 
