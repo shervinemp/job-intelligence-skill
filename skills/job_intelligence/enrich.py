@@ -35,6 +35,13 @@ def _detect_auth_wall(text):
 
 
 def _pw_fetch(url, timeout=30):
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    # Skip root URLs (no meaningful path) — they load feed pages, not job descriptions
+    path = parsed.path.strip("/")
+    if not path or len(path.split("/")) < 2:
+        return False, "root_url", None, None
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
