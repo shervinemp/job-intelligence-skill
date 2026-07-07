@@ -318,13 +318,22 @@ async function send(page, text) {
 
   await page.evaluate(t => {
     const e = document.querySelector('[contenteditable="true"]');
-    if (e) { e.textContent = t; e.dispatchEvent(new Event('input', { bubbles: true })); }
+    if (e) {
+      e.textContent = t;
+      e.dispatchEvent(new Event('input', { bubbles: true }));
+      e.dispatchEvent(new Event('compositionend', { bubbles: true }));
+    }
   }, text);
-  await wait(1000);
+  await wait(2000);
 
   let sendBtn = await page.$('button[aria-label="Send message"]');
   if (!sendBtn) sendBtn = await page.$('[data-test-id="send-button-container"] button');
   if (sendBtn) {
+    for (let i = 0; i < 5; i++) {
+      const disabled = await sendBtn.isDisabled().catch(() => true);
+      if (!disabled) break;
+      await wait(1000);
+    }
     await sendBtn.click();
   } else {
     await page.keyboard.press('Enter');
