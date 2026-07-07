@@ -2,7 +2,7 @@
 Finds the right page for a job, detects what happened after actions.
 Uses persistent DOM attribute (data-opencode-jid) for cross-process page identity."""
 
-import json, os
+import json, os, time
 from urllib.parse import urlparse
 
 from lib.config import REGISTRY_PATH
@@ -53,6 +53,7 @@ class PageManager:
         _save(self.reg)
 
     def find(self, fallback_url=""):
+        from urllib.parse import urlparse
         fallback_domain = urlparse(fallback_url).netloc.lower() if fallback_url else ""
 
         tagged = None
@@ -147,12 +148,11 @@ class PageManager:
 
     def close_stale(self, target_url=""):
         for p in self.ctx.pages:
+            jid = read_page_tag(p)
+            if jid and jid == self.jid:
+                continue  # don't close the page we're about to use
             url = p.url.lower()
-            if "about:blank" in url or "chrome-error" in url or "newtab" in url:
+            if "about:blank" in url or "chrome-error" in url or "newtab" in url or (jid and jid != self.jid):
                 try: p.close()
                 except Exception: pass
                 continue
-            jid = read_page_tag(p)
-            if jid and jid != self.jid:
-                try: p.close()
-                except Exception: pass
