@@ -463,23 +463,20 @@ def run_modal_flow(
             handler.ensure_modal_open(page)
             continue
 
-        # Preview mode: show all resolved answers without filling
+        # Preview mode: show all field→value mappings without modifying DOM
         if dry_run:
-            preview = []
+            print(f"\n  ── PREVIEW ({len(state.fields)} fields) ──", file=sys.stderr)
             for f in state.fields:
-                if f.required and not f.value:
+                if f.value:
+                    print(f"  ✓ [{f.type.name:6s}] {f.label[:45]:45s} = {f.value[:50]}", file=sys.stderr)
+                else:
                     res = resolution_for_fill(f.key, profile)
                     val = res.value if res and res.value else ""
-                    preview.append((f.key, f.label, f.type.name, val))
-            if preview:
-                print("\n  PREVIEW — fields that need answers:", file=sys.stderr)
-                for key, label, typ, val in preview:
-                    fill = val or "(unsure — needs your input)"
-                    print(f"    [{typ:8s}] {label[:50]:50s} → {fill}", file=sys.stderr)
-                print(f"  Use --answers '{{\"<label>\": \"<value>\"}}' to provide values\n", file=sys.stderr)
-            else:
-                print("  PREVIEW: all fields already filled or no required fields", file=sys.stderr)
-            emit_status("paused", "dry-run — review answers above, then run without --dry-run")
+                    if val:
+                        print(f"  ∼ [{f.type.name:6s}] {f.label[:45]:45s} → {val[:50]} (from profile)", file=sys.stderr)
+                    else:
+                        print(f"  ? [{f.type.name:6s}] {f.label[:45]:45s}  <-- needs your input", file=sys.stderr)
+            emit_status("paused", "review answers above, then re-run without --dry-run")
             emit_next("act --fill --answers '{\"<label>\": \"<value>\"}'")
             return "paused"
 
