@@ -148,7 +148,6 @@ class PageManager:
 
     def close_stale(self, target_url=""):
         target_domain = urlparse(target_url).netloc.lower() if target_url else ""
-        target_path = urlparse(target_url).path.rstrip("/") if target_url else ""
         kept_one_untagged = False
 
         for p in self.ctx.pages:
