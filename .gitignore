@@ -1,33 +1,3 @@
-__pycache__/
+tmp/
 *.pyc
-node_modules/
-.env
-.env.local
-*.private.json
-session.json
-page-dump.json
-*.log
-.DS_Store
-Thumbs.db
-
-# Personal data
-**/profile.json
-
-# Pipeline runtime data (PII) — protects it even if JI_HOME is set inside the repo.
-# Contains resolved field values (name/email/phone), screenshots of filled forms,
-# learned mappings, and session state.
-.ji/
-**/results/
-**/screenshots/
-**/snapshots/
-**/chrome-profile/
-**/*.jsonl
-mappings.json
-mappings_pending.json
-apply_policy.json
-apply_state.json
-page_registry.json
-needs_auth.json
-chrome-config.json
-label_map.json
-session_cache.json
+__pycache__/
