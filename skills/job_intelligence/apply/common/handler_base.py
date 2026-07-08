@@ -369,30 +369,6 @@ def upload_file_by_text(page, dialog_selector: str, text: str, file_path: str) -
         return False
 
 
-# ─── Smart default guesser for screening questions ────────────────────
-
-def _guess_field(f: Field, profile: dict = {}) -> str:
-    """Only fills fields where the answer is directly derivable from profile.
-    Returns empty string for anything uncertain — user must provide via --answers.
-    """
-    label = f.key.lower()
-    ph = f.placeholder.lower()
-    combined = f"{label} {ph}"
-
-    # LinkedIn / GitHub / Portfolio / Website URLs (directly from profile)
-    if any(w in combined for w in ("linkedin", "linked in")):
-        return profile.get("linkedin_url", "")
-    if any(w in combined for w in ("github", "git hub")):
-        return profile.get("github_url", "")
-    if any(w in combined for w in ("portfolio", "website", "personal site", "web site")):
-        return profile.get("portfolio_url") or profile.get("website", "")
-
-    # Phone, email — leave empty, profile handles via resolution_for_fill
-    # Name — same
-    # Everything else requires user judgment
-    return ""
-
-
 # ─── Generic flow runner ──────────────────────────────────────────────
 
 def run_modal_flow(
@@ -494,9 +470,8 @@ def run_modal_flow(
                 if val:
                     r = handler.fill(page, f, val)
                     if r.ok:
-                        audit.log_field(jid, f.key, val, provenance=r.error or "profile")
+                        audit.log_field(jid, f.key, val, provenance="profile")
                         filled_any = True
-                continue
 
         # Don't pause on validation errors — try advancing anyway.
         # The error might clear, be non-blocking, or surface on the next page.
