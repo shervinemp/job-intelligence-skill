@@ -80,6 +80,8 @@ def _dialog_open(page):
 
 
 def _open_modal(page):
+    if _dialog_open(page):
+        return True
     """Click Easy Apply button if dialog isn't open. Returns True if open."""
     if _dialog_open(page):
         return True
@@ -164,38 +166,43 @@ def _ensure_tailored_resume(page, jid, profile):
     # Phase 2: upload the tailored resume using file chooser
     print(f"RESUME:{jid} uploading...", file=sys.stderr)
     try:
-        # Set up file chooser handler before triggering the click
-        fc_result = []
-        def _handle_fc(fc):
-            fc_result.append(fc)
-            try:
-                fc.set_files(pdf_path)
-                print(f"RESUME:{jid} file set in chooser", file=sys.stderr)
-            except Exception as e2:
-                print(f"RESUME:{jid} file chooser set error: {e2}", file=sys.stderr)
-        page.once('filechooser', _handle_fc)
-        # Click "Upload resume" — triggered via JS for reliable element finding
-        clicked = page.evaluate("""() => {
+        # First, find the upload element
+        upload_sel = page.evaluate("""() => {
             const d = document.querySelector('[role="dialog"], dialog');
-            if (!d) return false;
+            if (!d) return null;
             const all = d.querySelectorAll('button, a, span, div, label');
             for (const el of all) {
                 if (el.offsetParent === null) continue;
                 const t = (el.textContent || '').trim();
                 if (t === 'Upload resume') {
-                    el.click();
-                    return true;
+                    // Return a selector path
+                    if (el.id) return '#' + CSS.escape(el.id);
+                    if (el.getAttribute('data-test-id')) return '[data-test-id="' + el.getAttribute('data-test-id') + '"]';
+                    return el.tagName + ':has-text("Upload resume")';
                 }
             }
-            return false;
+            return null;
         }""")
-        if not clicked:
+        if not upload_sel:
             print(f"RESUME:{jid} Upload resume element not found", file=sys.stderr)
             return False
-        time.sleep(3)
-        if not fc_result:
-            print(f"RESUME:{jid} file chooser did not open", file=sys.stderr)
-            return False
+        # Use expect_file_chooser to capture the file dialog
+        with page.expect_file_chooser() as fc_info:
+            page.evaluate(f"""() => {{
+                const d = document.querySelector('[role="dialog"], dialog');
+                if (!d) return;
+                const all = d.querySelectorAll('button, a, span, div, label');
+                for (const el of all) {{
+                    if (el.offsetParent === null) continue;
+                    if ((el.textContent || '').trim() === 'Upload resume') {{
+                        el.click();
+                        return;
+                    }}
+                }}
+            }}""")
+        fc = fc_info.value
+        fc.set_files(pdf_path)
+        print(f"RESUME:{jid} uploaded {os.path.basename(pdf_path)}", file=sys.stderr)
         print(f"RESUME:{jid} uploaded {os.path.basename(pdf_path)}", file=sys.stderr)
         time.sleep(4)
         # Select the newly uploaded resume
