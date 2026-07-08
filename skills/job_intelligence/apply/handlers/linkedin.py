@@ -338,7 +338,8 @@ def _get_buttons(page) -> list[str]:
 def _click_button_texts(page, texts: list[str]) -> bool:
     for t in texts:
         try:
-            btn = page.locator(f'{_DIALOG} button:has-text("{t}")')
+            sel = f'[role="dialog"] button:has-text("{t}"), dialog button:has-text("{t}")'
+            btn = page.locator(sel)
             if btn.count() > 0 and btn.first.is_visible():
                 btn.first.click()
                 return True
