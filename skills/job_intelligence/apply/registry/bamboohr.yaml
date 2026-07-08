@@ -1,17 +1,14 @@
-name: lever
-version: 2
+name: bamboohr
+version: 1
 detect:
   domains:
-    - lever.co
+    - bamboohr.com
 handler_class: apply.handlers.standard_form.StandardFormHandler
 probe:
   best_strategy: standard
 patterns:
   already_applied:
     - "already applied"
-  guest_apply:
-    - "apply as guest"
-    - "continue without signing in"
 properties:
   multi_page: false
   has_eeo: false
