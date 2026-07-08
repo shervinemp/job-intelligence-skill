@@ -177,7 +177,11 @@ class LinkedinHandler(PlatformHandler):
         if not ok:
             return ActionResult(ok=False)
         time.sleep(3)
-        return ActionResult(ok=True, navigated=not _dialog_open(page))
+        try:
+            dlg = _dialog_open(page)
+        except Exception:
+            dlg = False  # page navigated during evaluate
+        return ActionResult(ok=True, navigated=not dlg)
 
     def ensure_modal_open(self, page) -> bool:
         if _dialog_open(page):

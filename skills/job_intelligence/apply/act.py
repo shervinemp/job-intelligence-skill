@@ -772,7 +772,6 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
     # fill/navigate/submit chain for platforms with ephemeral state.
     handler = registry.get_handler() if registry else None
     if handler:
-        print(f"HANDLER: {type(handler).__name__} loaded", file=sys.stderr)
         from apply.common import gate
         from apply.common.policy import load_policy
         from apply.common.handler_base import run_modal_flow
