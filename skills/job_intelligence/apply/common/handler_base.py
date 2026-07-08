@@ -5,10 +5,16 @@ The flow runner calls detect → fill → advance/submit in a loop.
 """
 
 from __future__ import annotations
+import json, os, time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
+
+from apply.common.page_helpers import check_applied_signal, mark_applied
+from apply.common.output import emit_status, emit_next
+from apply.common.resolve import resolution_for_fill
+from apply.common import audit
 
 
 # ─── Enums ──────────────────────────────────────────────────────────────
@@ -26,22 +32,22 @@ class FieldType(Enum):
 
 class Framework(Enum):
     """How the framework exposes its controlled input values."""
-    REACT = auto()      # nativeValueSetter + dispatch input/change
-    EMBER = auto()      # Ember.set() or trigger custom events
-    VUE = auto()        # __v_model + dispatch input
-    ANGULAR = auto()    # dispatch input/change on native element
-    VANILLA = auto()    # element.value = x + dispatchEvent
-    CONTENTEDITABLE = auto()  # element.innerText = x + dispatch
+    REACT = auto()
+    EMBER = auto()
+    VUE = auto()
+    ANGULAR = auto()
+    VANILLA = auto()
+    CONTENTEDITABLE = auto()
 
 
 class FlowType(Enum):
     """Top-level flow pattern. The runner dispatches on this."""
-    MODAL = auto()      # Ephemeral overlay (LinkedIn Easy Apply)
-    PAGE = auto()       # Multi-step form on sequential pages (Workday)
-    REDIRECT = auto()   # Redirects to external ATS (Greenhouse)
-    SINGLE = auto()     # Single-page form, one-shot submit (most)
-    MAILTO = auto()     # Opens mail client (cannot automate)
-    LOGIN_WALL = auto()  # Auth required before form
+    MODAL = auto()
+    PAGE = auto()
+    REDIRECT = auto()
+    SINGLE = auto()
+    MAILTO = auto()
+    LOGIN_WALL = auto()
 
 
 # ─── Dataclasses ───────────────────────────────────────────────────────
@@ -50,16 +56,16 @@ class FlowType(Enum):
 class Field:
     """One fillable field on the current page."""
 
-    key: str                     # Normalized label — matches resolution_for_fill
-    label: str                   # Original text (for display / answers key)
+    key: str
+    label: str
     type: FieldType
     required: bool
-    framework: Framework         # How to set this field
-    selector: str                # Playwright locator string
-    value: str = ""              # Current value; empty = unfilled
-    options: list[str] = field(default_factory=list)  # SELECT / RADIO choices
+    framework: Framework
+    selector: str
+    value: str = ""
+    options: list[str] = field(default_factory=list)
     placeholder: str = ""
-    name: str = ""               # HTML name attribute
+    name: str = ""
 
 
 @dataclass
@@ -67,10 +73,10 @@ class PageState:
     """Snapshot of the current form page."""
 
     flow_type: FlowType = FlowType.MODAL
-    step: int = 0                # 0 = unknown, 1+ = which step
-    total_steps: int = 0         # 0 = unknown
+    step: int = 0
+    total_steps: int = 0
     has_dialog: bool = False
-    captured: bool = False       # CAPTCHA / Turnstile present
+    captured: bool = False
     login_required: bool = False
     session_timed_out: bool = False
     rate_limited: bool = False
@@ -81,13 +87,10 @@ class PageState:
     submit_button: Optional[str] = None
     errors: list[str] = field(default_factory=list)
 
-    resume_step: bool = False    # Page is asking for resume selection
-    has_file_input: bool = False  # <input type="file"> present
+    resume_step: bool = False
+    has_file_input: bool = False
+    progress_pct: float = -1.0
 
-    progress_pct: float = -1.0   # -1 when unknown
-
-
-# ─── Results ────────────────────────────────────────────────────────────
 
 @dataclass
 class FillResult:
@@ -100,127 +103,98 @@ class FillResult:
 class ActionResult:
     ok: bool
     error: str = ""
-    navigated: bool = False      # Page URL changed after action
+    navigated: bool = False
 
 
 # ─── Handler interface ─────────────────────────────────────────────────
 
 class PlatformHandler(ABC):
-    """Implement one per platform/ATS. See docstrings for contract."""
+    """Implement one per platform/ATS."""
 
     name: str = ""
-    domains: list[str] = field(default_factory=list)
+    domains: list[str] = []
 
     # ── Page state ────────────────────────────────────────────────────
 
     @abstractmethod
     def detect(self, page) -> PageState:
-        """Full snapshot of the current form page.
-        
-        Must return a PageState that accurately reflects what's on screen.
-        Called at the start of each flow iteration.
-        """
         ...
 
     @abstractmethod
     def classify(self, page) -> str:
-        """Quick page-type string: 'form', 'review', 'success', 'login', 'error'."""
         ...
 
     # ── Field ops ─────────────────────────────────────────────────────
 
     @abstractmethod
     def extract_fields(self, page) -> list[Field]:
-        """Discover all visible fillable fields and their current values.
-        
-        Must return Fields with meaningful `key` values that
-        resolution_for_fill() can match against profile + answers.
-        The label discovery heuristic is per-platform because every
-        ATS renders fields differently.
-        """
         ...
 
     @abstractmethod
     def fill(self, page, field: Field, value: str) -> FillResult:
-        """Set a field's value using the right framework setter.
-        
-        React:  nativeValueSetter + input/change dispatch
-        Ember:  Ember.set() or label.click + custom events
-        Vue:    __v_model setter + input dispatch
-        Vanilla: element.value + change dispatch
-        """
         ...
 
     @abstractmethod
     def upload(self, page, field: Field, file_path: str) -> bool:
-        """Upload a file. Handles <input type="file"> and custom chooser widgets."""
         ...
 
     # ── Navigation ────────────────────────────────────────────────────
 
     @abstractmethod
     def can_proceed(self, page) -> bool:
-        """True if a next/continue/submit button exists and is enabled.
-        Checks both visible submit buttons and disabled states."""
         ...
 
     @abstractmethod
     def click_next(self, page) -> ActionResult:
-        """Click the next/continue button. Returns True if page changed."""
         ...
 
     @abstractmethod
     def click_submit(self, page) -> ActionResult:
-        """Click the submit button. Returns True if page changed or dialog closed."""
         ...
 
     @abstractmethod
     def ensure_modal_open(self, page) -> bool:
-        """For MODAL flow_type: open the ephemeral overlay if closed.
-        
-        Called before the first detect and on session_timeout recovery.
-        Returns True if modal is now open.
-        """
         ...
 
     # ── Resume ────────────────────────────────────────────────────────
 
     @abstractmethod
     def ensure_resume(self, page, jid: str) -> bool:
-        """Select or upload the tailored resume.
-        
-        Returns False if the right resume can't be found and can't be
-        uploaded — the flow runner must not proceed without it.
-        """
         ...
 
     # ── Signals ───────────────────────────────────────────────────────
 
     @abstractmethod
     def is_applied(self, page) -> bool:
-        """Positive success signal: thank-you text, "You applied", page redirect."""
         ...
 
     @abstractmethod
     def get_errors(self, page) -> list[str]:
-        """Validation errors currently visible on the page."""
         ...
+
+
+# ─── JS helper: safe string interpolation ──────────────────────────────
+
+def _js(val: str) -> str:
+    """JSON-encode a Python string for safe embedding in a JS template literal."""
+    return json.dumps(val)
 
 
 # ─── Framework setters (shared) ────────────────────────────────────────
 
-# These can be used by any handler.fill() implementation.
-# They live here so they're co-located with the Framework enum.
+def _dialog_sel() -> str:
+    return '[role="dialog"], dialog'
+
 
 def set_react_input(page, selector: str, value: str) -> bool:
     """React-aware value setter: nativeValueSetter + input/change dispatch."""
     return page.evaluate(f"""() => {{
-        const el = document.querySelector({selector!r});
+        const el = document.querySelector({_js(selector)});
         if (!el) return false;
         const setter = Object.getOwnPropertyDescriptor(
             window.HTMLInputElement.prototype, 'value'
         ).set;
-        setter.call(el, {value!r});
+        setter.call(el, {_js(value)});
         el.dispatchEvent(new Event('input', {{bubbles: true}}));
         el.dispatchEvent(new Event('change', {{bubbles: true}}));
         return true;
@@ -228,11 +202,9 @@ def set_react_input(page, selector: str, value: str) -> bool:
 
 
 def set_ember_input(page, selector: str, value: str) -> bool:
-    """Ember.js value setter: click + change/input/click dispatch on radio.
-    For text inputs, tries nativeValueSetter first, then Ember.set().
-    """
+    """Ember.js value setter: click + events for radios, nativeValueSetter for text."""
     return page.evaluate(f"""() => {{
-        const el = document.querySelector({selector!r});
+        const el = document.querySelector({_js(selector)});
         if (!el) return false;
         if (el.tagName === 'INPUT' && el.type === 'radio') {{
             const lbl = document.querySelector('label[for="' + el.id + '"]');
@@ -244,7 +216,7 @@ def set_ember_input(page, selector: str, value: str) -> bool:
             const setter = Object.getOwnPropertyDescriptor(
                 window.HTMLInputElement.prototype, 'value'
             ).set;
-            setter.call(el, {value!r});
+            setter.call(el, {_js(value)});
             el.dispatchEvent(new Event('input', {{bubbles: true}}));
             el.dispatchEvent(new Event('change', {{bubbles: true}}));
         }}
@@ -255,9 +227,9 @@ def set_ember_input(page, selector: str, value: str) -> bool:
 def set_vanilla_input(page, selector: str, value: str) -> bool:
     """Vanilla JS setter: element.value + change dispatch."""
     return page.evaluate(f"""() => {{
-        const el = document.querySelector({selector!r});
+        const el = document.querySelector({_js(selector)});
         if (!el) return false;
-        el.value = {value!r};
+        el.value = {_js(value)};
         el.dispatchEvent(new Event('change', {{bubbles: true}}));
         return true;
     }}""")
@@ -265,18 +237,18 @@ def set_vanilla_input(page, selector: str, value: str) -> bool:
 
 # ─── DOM traversal helpers (shared) ────────────────────────────────────
 
-def find_text_in_dialog(page, text: str) -> Optional[str]:
+def find_text_in_dialog(page, text: str) -> Optional[dict]:
     """Search all visible elements in the dialog for the given text.
-    Returns the element tag name + first matching text, or None.
+    Returns {tag, text} dict, or None.
     """
+    dsel = _dialog_sel()
     return page.evaluate(f"""() => {{
-        const d = document.querySelector('[role="dialog"], dialog');
+        const d = document.querySelector({_js(dsel)});
         if (!d) return null;
-        const all = d.querySelectorAll('button, a, span, div, label, p');
-        for (const el of all) {{
+        for (const el of d.querySelectorAll('button, a, span, div, label, p')) {{
             if (el.offsetParent === null) continue;
             const t = (el.textContent || '').trim();
-            if (t.includes({text!r})) return {{ tag: el.tagName, text: t.slice(0, 60) }};
+            if (t.includes({_js(text)})) return {{ tag: el.tagName, text: t.slice(0, 60) }};
         }}
         return null;
     }}""")
@@ -284,17 +256,14 @@ def find_text_in_dialog(page, text: str) -> Optional[str]:
 
 def click_text_element(page, dialog_selector: str, text: str) -> bool:
     """Find an element containing `text` and click the first clickable ancestor.
-    
-    Walks up 15 parents looking for <a>, <button>, or [tabindex].
-    Returns True if clicked.
+    Walks up 15 parents looking for <a> or <button>.
     """
     return page.evaluate(f"""() => {{
-        const d = document.querySelector({dialog_selector!r});
+        const d = document.querySelector({_js(dialog_selector)});
         if (!d) return false;
-        const all = d.querySelectorAll('button, a, span, div, label, p');
-        for (const el of all) {{
+        for (const el of d.querySelectorAll('button, a, span, div, label, p')) {{
             if (el.offsetParent === null) continue;
-            if (!(el.textContent || '').trim().includes({text!r})) continue;
+            if (!(el.textContent || '').trim().includes({_js(text)})) continue;
             let parent = el;
             for (let i = 0; i < 15 && parent; i++) {{
                 if ((parent.tagName === 'A' || parent.tagName === 'BUTTON') && parent.offsetParent !== null) {{
@@ -309,22 +278,18 @@ def click_text_element(page, dialog_selector: str, text: str) -> bool:
 
 
 def upload_file_by_text(page, dialog_selector: str, text: str, file_path: str) -> bool:
-    """Click an element with `text` (e.g. 'Upload resume') and set the file.
-    Uses Playwright's file chooser API. Returns True if upload was triggered.
-    """
-    import time, os
+    """Click an element with `text` and set the file via file chooser."""
     try:
-        from playwright.sync_api import expect
-    except ImportError:
+        with page.expect_file_chooser() as fc_info:
+            clicked = click_text_element(page, dialog_selector, text)
+            if not clicked:
+                return False
+        fc = fc_info.value
+        fc.set_files(file_path)
+        time.sleep(3)
+        return True
+    except Exception:
         return False
-    with page.expect_file_chooser() as fc_info:
-        clicked = click_text_element(page, dialog_selector, text)
-        if not clicked:
-            return False
-    fc = fc_info.value
-    fc.set_files(file_path)
-    time.sleep(3)
-    return True
 
 
 # ─── Generic flow runner ──────────────────────────────────────────────
@@ -339,18 +304,14 @@ def run_modal_flow(
     max_steps: int = 10,
 ) -> str:
     """Generic multi-step modal flow.
-    
-    Loops: detect → fill fields → try submit → try next → repeat.
-    
+
+    Loops: detect → fill required fields → try submit → try next → repeat.
+
     Returns:
         "done"    — application submitted successfully
         "paused"  — needs LLM input or manual action
         "failed"  — cannot proceed
     """
-    import time
-    from apply.common.page_helpers import check_applied_signal, mark_applied
-    from apply.common.output import emit_status, emit_next
-
     if not handler.ensure_modal_open(page):
         if handler.is_applied(page):
             mark_applied(jid)
@@ -362,7 +323,7 @@ def run_modal_flow(
         emit_next("detect to retry")
         return "failed"
 
-    for step in range(max_steps):
+    for _ in range(max_steps):
         state = handler.detect(page)
 
         if state.is_applied:
@@ -373,7 +334,7 @@ def run_modal_flow(
             if handler.is_applied(page):
                 mark_applied(jid)
                 return "done"
-            emit_status("dialog_closed", "modal closed without submit reply")
+            emit_status("dialog_closed", "modal closed without submit")
             emit_next("verify")
             return "paused"
 
@@ -400,9 +361,6 @@ def run_modal_flow(
         filled_any = False
         for f in state.fields:
             if f.required and not f.value:
-                from apply.common.resolve import resolution_for_fill
-                from apply.common import audit
-
                 res = resolution_for_fill(f.key, profile)
                 if res and res.value:
                     r = handler.fill(page, f, res.value)
