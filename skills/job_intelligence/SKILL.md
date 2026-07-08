@@ -1,9 +1,3 @@
----
-name: job_intelligence
-description: Automate job applications — discover jobs from email, extract and enrich postings, tailor CVs, and apply across ATS platforms via browser automation.
-metadata: {"clawdbot":{"emoji":"💼","requires":{"bins":["python","node"]}}}
----
-
 # Job Intelligence Pipeline
 
 ## Read First
@@ -24,7 +18,7 @@ Before running pipeline, read these:
 | `tailor.py [--auto]` | admit/reject/undo/retry. See tailoring section |
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
 
-> `tailor.py` crafts one job at a time via the `JI_TAILOR=gem` route (Gemini Web gem with built-in prompt). The gem route generates resume.json, builds PDFs, and deletes the conversation automatically.
+> `tailor.py` crafts one job at a time. Use `--auto` to process all described jobs with rate-limit handling.
 
 ## Commands
 
@@ -55,12 +49,6 @@ Before running pipeline, read these:
 ## Tailoring
 
 Data/build separation: the LLM writes a `resume.json` data file (no code). A shared builder (`lib/build_resume.py`) reads the JSON and produces PDFs. The JSON is easy to review for quality issues (pandering, hallucination, title creep) without parsing code.
-
-Accuracy rules from `tailor_prompt.md` and `gem_prompt.md` enforce:
-- Exact company names from profile (no renaming/generalizing)
-- No title inflation ("Collaborated" not "Led")
-- Company name in summary or work highlights
-- Metrics only from profile
 
 Two backends via `JI_TAILOR` env var:
 
@@ -95,12 +83,6 @@ The builder also validates the JSON before generating PDFs — run `--validate` 
 
 ## Apply pipeline
 
-> Design + rollout: `docs/adr-001-autofill-memory.md` (memory design),
-> `docs/runbook-shadow-to-mappings.md` (how to enable safely),
-> `docs/pipeline-trace.md` (full stage/branch/preference trace).
-> Policy flags live in `~/.ji/apply_policy.json` (mode, paused, use_mappings,
-> enforce_validation, gate_submit) — all default to current behavior.
-
 ```
 detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --submit --confirm <jid> → verify <jid>
 ```
@@ -109,17 +91,16 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 |------|-------------|
 | `detect [<jid>]` | Pre-flight: DB stage, PDF, classify type. Omit JID to auto-pick first tailored. Outputs `TYPE:` + `NEXT:`. |
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS. Auto-clicks "Apply now" on job listing pages. Prompts for login on auth wall — cookies persist via Chrome profile. |
-| `act --fill <jid> [--answers '{}'] [--dry-run] [--shadow]` | Fill all fields. `--answers` exact → profile facts. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. Writes audit log. |
+| `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
-| `act --submit <jid> --confirm [--shadow]` | Submit. **`--confirm` req'd** — dry-run w/o. Checks validation errors, CAPTCHA, success text. `--shadow` (or `JI_APPLY_MODE=shadow`) fills + screenshots but never clicks submit. |
+| `act --submit <jid> --confirm` | Submit. For LinkedIn: handled by the flow hook (handler) automatically during `--fill`. Direct submit for other ATS. |
 | `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 | `apply.py reject <jid>` | Skip permanently |
 | `apply.py flag <jid>` | Toggle auth wall flag |
 | `apply.py retry [<jid>]` | Re-attempt failed applies |
 | `apply.py undo <jid>` | Move back one stage |
-| `apply.py mappings list\|confirm\|clear <jid>` | Field→meaning mapping store (Phase 3, off unless `use_mappings`). `confirm` promotes a job's pending mappings after review. |
 
 ### Apply tips
 
@@ -128,14 +109,12 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 - `--answers` — normalized exact match (case/punctuation insensitive). Full label text.
 - `--candidate N` — picks from CANDIDATES list. Works on --fill/--next/--submit/--inspect.
 - `--dry-run` on `--fill` shows resolved answers without DOM modification. Validates field detection first.
-- **Shadow mode** (`--shadow`, `JI_APPLY_MODE=shadow`, or `apply_policy.json {"mode":"shadow"}`): fill + screenshot + audit, never submit. Use to validate the pipeline on real jobs without applying. Default mode is `live`. See `docs/adr-001-autofill-memory.md`.
-- **Audit log**: every `act --fill` appends to `~/.ji/results/<jid>/apply_audit.jsonl` (field value, provenance, tier category, filled). Read it to see what would be submitted and why.
 - Multi-page: fill → next → fill → ... until Submit appears or verify passes.
 - Guest apply: auto-clicks "continue without signing in" when available.
 - Pipeline cannot create accounts, remember passwords, or handle 2FA.
 - 3x guard: same page 3 fills in a row → warns.
 - EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `common_answers.eeo` for reuse.
-- Platform registry (`apply/registry/*.yaml`): per-ATS widget overrides. `widget_parent` config controls dropdown parent selector.
+- Platform registry (`apply/registry/*.yaml`): per-ATS config. Each YAML can set `handler_class` (e.g. `apply.handlers.linkedin.LinkedinHandler`) to use the PlatformHandler interface instead of the legacy flow hook. New platforms: implement `PlatformHandler` in `apply/handlers/`, add YAML with `handler_class`, done. See `apply/common/handler_base.py` for the full guide.
 
 ## Platform quirks
 
@@ -145,7 +124,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | Greenhouse | No `<select>` — all custom autocomplete. Country = `<input>`. "Submit application" = real button ("Apply" = scroll trigger). |
 | Lever | 0 fields → follow apply-link → `/apply`. Labels: `<label><div>Text</div><div><input></div></label>`. No Select/Radio. |
 | Workday | 7-step SPA (Info → Experience → Questions → Disclosures → Review). DROPDOWN=`button[aria-haspopup]`. Phone: strip +1 prefix. Skills: type + Enter. Per-company login. |
-| LinkedIn | Easy Apply (modal, Next/Review/Submit) vs External (`<a>` tag, safety redirect). detect checks `<a>` + `<button>`. |
+| LinkedIn | Easy Apply (modal) handled by `LinkedinHandler` (`apply/handlers/linkedin.py`) — implements `PlatformHandler` with `run_modal_flow()`. Ember.js framework: uses click+events instead of nativeValueSetter. Resume filenames in `<span>` elements (labels are empty). Upload via file chooser. External (`<a>` tag) handled by legacy flow. |
 
 ## Account & login notes
 
@@ -210,12 +189,10 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 
 - **JI_TAILOR**: `"agent"` (default) = SLM writes `resume.json`, `admit` confirms. `"gem"` = Gemini Web gem.
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
-- **LinkedIn title dedup**: Cards repeat title — `linkedin.py` deduplicates by matching repeated half.
-- **Answer resolution**: `--answers` (exact normalized-label, or ≥10-char prefix for field_reader's 60-char truncation) → profile facts/derivations + `profile.answers` map. No cross-job persistence — to reuse an answer, add it to `profile.json`. See `docs/adr-001-autofill-memory.md`.
-- **EEO detection**: by decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic. Reported, not auto-filled — the LLM decides via `--answers`.
-- **Tests**: `python -m unittest discover -s tests -p "test_*.py"` (stdlib, no install; pytest also discovers them). Import smoke + resolve/learner unit tests. Runs in CI on push/PR.
+- **LinkedIn title dedup**: Cards repeat title — `linkedin_scraper.py` deduplicates by matching repeated half.
+- **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
+- **EEO detection**: Uses decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic, zero false positives. Saved under `common_answers.eeo` sub-key.
 - **Chrome lifecycle**: Pipeline starts its own Chrome instance on a free port (never reuses user's browser). Port persisted to `chrome-config.json` across processes.
 - **PDF guard**: `detect` refuses to proceed if stage is `tailored` but no Resume PDF exists. Run `tailor.py undo <jid> && tailor.py --jid <jid>` to regenerate.
 - **Platform registry**: `apply/registry/*.yaml` defines per-ATS configs (`widget_parent` selector, custom widgets). Auto-resolved from page URL — no caller changes needed.
 - **Gems**: `categories.json` → `gems.json` → `gemini.js` resolution chain.
-- **ATS plugins**: `apply/registry/plugins/` — add a Python file with an `ATSPlugin` subclass for platform-specific behavior.
