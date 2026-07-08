@@ -3,7 +3,7 @@ version: 1
 detect:
   domains:
     - ashbyhq.com
-handler_class: apply.handlers.standard_form.StandardFormHandler
+handler_class: apply.handlers.ashby.AshbyHandler
 probe:
   best_strategy: standard
 patterns:

@@ -231,7 +231,9 @@ class StandardFormHandler(PlatformHandler):
     def can_proceed(self, page) -> bool:
         btns = self._get_buttons(page)
         cfg = self._cfg(page.url)
-        kws = cfg.get("submit_btn", _SUBMIT_TEXTS) + cfg.get("next_btn", _NEXT_TEXTS) + ("review",)
+        kws = list(cfg.get("submit_btn", list(_SUBMIT_TEXTS)))
+        kws += list(cfg.get("next_btn", list(_NEXT_TEXTS)))
+        kws.append("review")
         return any(any(k in b for k in kws) for b in btns)
 
     def _click_by_text(self, page, texts: list[str]) -> bool:
