@@ -5,8 +5,6 @@ detect:
   domains:
     - linkedin.com
 
-flow_hook: ""
-
 probe:
   best_strategy: dialog
   widgets: {}
