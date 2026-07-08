@@ -270,27 +270,34 @@ class StandardFormHandler(PlatformHandler):
         return ActionResult(ok=False)
 
     def ensure_modal_open(self, page) -> bool:
-        """Open the apply form. Handles login wall, guest apply, and 'Apply Now' buttons."""
-        fields = self.extract_fields(page)
-        if len(fields) > 2:
-            return True
+        """Open the apply form. Waits for React SPA fields to render."""
+        # Wait up to 12s for React SPA to render form fields
+        for _ in range(24):
+            if len(self.extract_fields(page)) > 2:
+                return True
+            time.sleep(0.5)
 
         text = (page.evaluate("() => document.body.innerText") or "").lower()
         cfg = self._cfg(page.url)
 
-        # Guest apply first
+        # Guest apply
         for bt in cfg.get("guest_btn", ["apply as guest", "continue without signing in"]):
-            if any(bt in t for t in [text]):
+            if bt in text:
                 if self._click_by_text(page, [bt]):
                     time.sleep(3)
-                    if len(self.extract_fields(page)) > 1:
-                        return True
+                    for _ in range(12):
+                        if len(self.extract_fields(page)) > 1:
+                            return True
+                        time.sleep(0.5)
 
         # Apply Now
         apply_texts = cfg.get("apply_btn", ["apply now", "apply for this job", "apply", "quick apply"])
         if self._click_by_text(page, apply_texts):
             time.sleep(3)
-            return True
+            for _ in range(12):
+                if len(self.extract_fields(page)) > 1:
+                    return True
+                time.sleep(0.5)
 
         return len(self.extract_fields(page)) > 1
 
