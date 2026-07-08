@@ -308,7 +308,7 @@ def find_text_in_dialog(page, text: str) -> Optional[dict]:
 
 def click_text_element(page, dialog_selector: str, text: str) -> bool:
     """Find an element containing `text` and click the first clickable ancestor.
-    Walks up 15 parents looking for <a> or <button>.
+    Walks up 15 parents looking for <a>, <button>, [tabindex], [role=button].
     """
     return page.evaluate(f"""() => {{
         const d = document.querySelector({_js(dialog_selector)});
@@ -318,7 +318,10 @@ def click_text_element(page, dialog_selector: str, text: str) -> bool:
             if (!(el.textContent || '').trim().includes({_js(text)})) continue;
             let parent = el;
             for (let i = 0; i < 15 && parent; i++) {{
-                if ((parent.tagName === 'A' || parent.tagName === 'BUTTON') && parent.offsetParent !== null) {{
+                const clickable = parent.tagName === 'A' || parent.tagName === 'BUTTON'
+                    || parent.getAttribute('tabindex') === '0'
+                    || parent.getAttribute('role') === 'button';
+                if (clickable && parent.offsetParent !== null) {{
                     parent.click();
                     return true;
                 }}
