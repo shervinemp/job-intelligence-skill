@@ -349,7 +349,7 @@ def upload_file_by_text(page, dialog_selector: str, text: str, file_path: str) -
 
 # ─── Smart default guesser for screening questions ────────────────────
 
-def _guess_field(f: Field) -> str:
+def _guess_field(f: Field, profile: dict = {}) -> str:
     """Try to guess a safe default value for an unfilled required field.
     Uses field type, options, label, and placeholder to make a reasonable guess.
     Returns empty string if no good guess is possible.
@@ -403,6 +403,14 @@ def _guess_field(f: Field) -> str:
     # Location
     if any(w in combined for w in ("city", "town", "location")):
         return ""
+
+    # LinkedIn / GitHub / Portfolio / Website URLs
+    if any(w in combined for w in ("linkedin", "linked in")):
+        return profile.get("linkedin_url", "")
+    if any(w in combined for w in ("github", "git hub")):
+        return profile.get("github_url", "")
+    if any(w in combined for w in ("portfolio", "website", "personal site", "web site")):
+        return profile.get("portfolio_url") or profile.get("website", "")
 
     # Name — leave empty, profile handles it
     if any(w in combined for w in ("first name", "last name", "full name", "given name", "family name")):
@@ -502,7 +510,7 @@ def run_modal_flow(
         for f in state.fields:
             if f.required and not f.value:
                 res = resolution_for_fill(f.key, profile)
-                val = res.value if res and res.value else _guess_field(f)
+                val = res.value if res and res.value else _guess_field(f, profile)
                 if val:
                     r = handler.fill(page, f, val)
                     if r.ok:

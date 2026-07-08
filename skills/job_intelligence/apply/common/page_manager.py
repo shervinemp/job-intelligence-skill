@@ -150,21 +150,27 @@ class PageManager:
         target_domain = urlparse(target_url).netloc.lower() if target_url else ""
         for p in self.ctx.pages:
             jid = read_page_tag(p)
+            # Keep our own tagged page
             if jid and jid == self.jid:
-                continue  # keep our page
+                continue
+            # Close pages from OTHER jobs (different JID)
+            if jid and jid != self.jid:
+                try:
+                    p.close()
+                except Exception:
+                    pass
+                continue
             url = p.url.lower()
             if "about:blank" in url:
                 continue
-            # Keep new-tab and chrome pages (Chrome needs them)
             if "chrome://" in url or "chrome-error" in url:
                 continue
-            # Keep pages on our target domain (likely the same job)
+            # Keep untagged pages on our domain (tag lost from SPA nav)
             if target_domain:
                 try:
                     if urlparse(url).netloc.lower() == target_domain:
                         continue
                 except Exception:
                     pass
-            # Close everything else
             try: p.close()
             except Exception: pass

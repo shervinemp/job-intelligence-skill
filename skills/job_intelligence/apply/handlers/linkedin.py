@@ -104,39 +104,94 @@ class LinkedinHandler(PlatformHandler):
         raw: list[dict[str, Any]] = page.evaluate(f"""() => {{
             const d = document.querySelector('{_DIALOG}');
             if (!d) return [];
-            const sel = 'input:not([type=hidden]):not([type=submit]):not([type=radio]), select, textarea';
-            return Array.from(d.querySelectorAll(sel))
-                .filter(el => el.offsetParent !== null)
-                .map(el => {{
-                    const lbl = d.querySelector('label[for="' + el.id + '"]');
-                    let label = lbl ? lbl.textContent.trim() : '';
-                    if (!label) label = el.placeholder || el.getAttribute('aria-label') || el.name || '';
-                    if (!label) {{
-                        const parent = el.closest('div,fieldset,section');
-                        if (parent) {{
-                            const h = parent.querySelector('label, legend, strong, span');
-                            if (h) label = h.textContent.trim();
+
+            function findLabel(el) {{
+                let lbl = d.querySelector('label[for="' + el.id + '"]');
+                if (lbl && lbl.textContent.trim()) return lbl.textContent.trim();
+                if (el.placeholder) return el.placeholder;
+                if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
+                const parent = el.closest('div,fieldset,section,label');
+                if (parent) {{
+                    const h = parent.querySelector('label, legend, strong, span, p');
+                    if (h && h.textContent.trim()) return h.textContent.trim();
+                }}
+                // Check parent div's own text (excluding child input text)
+                if (parent) {{
+                    let txt = '';
+                    for (const node of parent.childNodes) {{
+                        if (node.nodeType === 3) {{ txt += node.textContent; }}
+                        else if (node.nodeType === 1 && !node.matches('input, select, textarea')) {{
+                            txt += node.textContent;
                         }}
                     }}
-                    const val = (el.value || '').trim();
-                    const empty = !val || ['select an option','select one','select...','no selection'].includes(val.toLowerCase());
-                    let type = 'TEXT';
-                    if (el.tagName === 'SELECT') type = 'SELECT';
-                    else if (el.type === 'file') type = 'FILE';
-                    else if (el.tagName === 'TEXTAREA') type = 'TEXTAREA';
-                    return {{
-                        key: label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(),
-                        label: label.slice(0, 80),
-                        type: type,
-                        required: !!el.required,
-                        framework: 'EMBER',
-                        selector: '#' + CSS.escape(el.id),
-                        value: empty ? '' : val,
-                        options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text) : [],
-                        placeholder: el.placeholder || '',
-                        name: el.name || '',
-                    }};
+                    const cleaned = txt.replace(el.value || '', '').trim();
+                    if (cleaned) return cleaned.slice(0, 80);
+                }}
+                return el.name || 'unlabeled';
+            }}
+
+            function isEmpty(val) {{
+                return !val || ['select an option','select one','select...','no selection'].includes(val.toLowerCase());
+            }}
+
+            // Non-radio inputs: text, email, phone, select, textarea, file
+            const nonRadio = 'input:not([type=hidden]):not([type=submit]):not([type=radio]), select, textarea';
+            const results = [];
+            for (const el of d.querySelectorAll(nonRadio)) {{
+                if (el.offsetParent === null) continue;
+                const label = findLabel(el);
+                const val = (el.value || '').trim();
+                let type = 'TEXT';
+                if (el.tagName === 'SELECT') type = 'SELECT';
+                else if (el.type === 'file') type = 'FILE';
+                else if (el.tagName === 'TEXTAREA') type = 'TEXTAREA';
+                results.push({{
+                    key: label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() || el.name,
+                    label: label.slice(0, 80) || el.name || 'unlabeled',
+                    type: type,
+                    required: !!el.required || el.hasAttribute('aria-required'),
+                    framework: 'EMBER',
+                    selector: '#' + CSS.escape(el.id),
+                    value: isEmpty(val) ? '' : val,
+                    options: el.tagName === 'SELECT' ? Array.from(el.options).map(o => o.text) : [],
+                    placeholder: el.placeholder || '',
+                    name: el.name || '',
                 }});
+            }}
+
+            // Radio inputs: group by name, return one field per group
+            const radios = d.querySelectorAll('input[type="radio"]');
+            const groups = {{}};
+            for (const r of radios) {{
+                if (r.offsetParent === null) continue;
+                const name = r.name || r.id;
+                if (!groups[name]) groups[name] = {{ options: [], checked: null, label: '' }};
+                const lbl = findLabel(r);
+                const parent = r.closest('div,fieldset,section,label');
+                const text = lbl || (parent ? parent.textContent.trim().replace(r.textContent, '').trim() : '') || r.value || 'Option ' + groups[name].options.length;
+                groups[name].options.push({{ text: text, value: r.value, id: r.id }});
+                if (r.checked) groups[name].checked = r.value;
+                if (!groups[name].label && lbl) groups[name].label = lbl;
+            }}
+            for (const [name, g] of Object.entries(groups)) {{
+                if (g.options.length < 2) continue;  // not a real question
+                const label = g.label || name;
+                const opts = g.options.map(o => o.text);
+                const checkedVal = g.checked || '';
+                results.push({{
+                    key: label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() || name,
+                    label: label.slice(0, 80) || name,
+                    type: 'RADIO',
+                    required: true,
+                    framework: 'EMBER',
+                    selector: g.options.find(o => o.value === checkedVal) ? '#' + CSS.escape(g.options.find(o => o.value === checkedVal).id) : g.options[0] ? '#' + CSS.escape(g.options[0].id) : '',
+                    value: checkedVal,
+                    options: opts,
+                    name: name,
+                }});
+            }}
+
+            return results;
         }}""")
         return [_raw_to_field(r) for r in raw]
 
@@ -186,7 +241,8 @@ class LinkedinHandler(PlatformHandler):
     def ensure_modal_open(self, page) -> bool:
         if _dialog_open(page):
             return True
-        if not page.evaluate("""() => {
+        # Try clicking the Easy Apply button
+        clicked = page.evaluate("""() => {
             for (const el of document.querySelectorAll('button, a')) {
                 if (el.offsetParent === null) continue;
                 const t = (el.textContent || '').trim().toLowerCase();
@@ -195,13 +251,26 @@ class LinkedinHandler(PlatformHandler):
                 }
             }
             return false;
-        }"""):
-            return False
-        time.sleep(2)
-        for _ in range(10):
-            if _dialog_open(page):
-                return True
-            time.sleep(0.5)
+        }""")
+        if clicked:
+            time.sleep(2)
+            for _ in range(10):
+                if _dialog_open(page):
+                    return True
+                time.sleep(0.5)
+        # Fallback: navigate directly to the apply URL
+        if not _dialog_open(page):
+            import re
+            m = re.search(r'/jobs/view/(\d+)', page.url)
+            if m:
+                apply_url = f"https://www.linkedin.com/jobs/view/{m.group(1)}/apply/"
+                try:
+                    page.goto(apply_url, wait_until='domcontentloaded', timeout=15000)
+                    time.sleep(3)
+                    if _dialog_open(page):
+                        return True
+                except Exception:
+                    pass
         return _dialog_open(page)
 
     # ── Resume ────────────────────────────────────────────────────────
@@ -248,6 +317,26 @@ class LinkedinHandler(PlatformHandler):
             print(f"RESUME:{jid} resume selection: {selected}", file=sys.stderr)
 
         _expand_resume_list(page)
+        # Re-check after expanding — resume might already be on LinkedIn from a previous run
+        selected2 = page.evaluate(f"""() => {{
+            const d = document.querySelector('{_DIALOG}');
+            if (!d) return false;
+            for (const s of d.querySelectorAll('span')) {{
+                const txt = s.textContent.trim();
+                if (!txt.includes('.pdf') || !txt.includes({safe})) continue;
+                let el = s;
+                for (let i = 0; i < 15 && el; i++) {{
+                    const a = el.closest('a');
+                    if (a && a.offsetParent !== null) {{ a.click(); return true; }}
+                    el = el.parentElement;
+                }}
+            }}
+            return false;
+        }}""")
+        if selected2:
+            print(f"RESUME:{jid} selected existing {target_name}", file=sys.stderr)
+            return True
+
         if not upload_file_by_text(page, _DIALOG, "Upload resume", pdf_path):
             print(f"RESUME:{jid} upload failed", file=sys.stderr)
             return False
@@ -270,8 +359,24 @@ class LinkedinHandler(PlatformHandler):
             return false;
         }}"""):
             print(f"RESUME:{jid} selected after upload", file=sys.stderr)
-            return True
-        print(f"RESUME:{jid} uploaded, proceeding", file=sys.stderr)
+        else:
+            print(f"RESUME:{jid} uploaded, proceeding", file=sys.stderr)
+
+        # Also upload cover letter if present
+        cover_path = None
+        for f in sorted(os.listdir(rd)):
+            if "Cover" in f and f.endswith(".pdf"):
+                cover_path = os.path.join(rd, f)
+                break
+        if cover_path and os.path.exists(cover_path):
+            if upload_file_by_text(page, _DIALOG, "Cover letter", cover_path):
+                print(f"COVER:{jid} uploaded {os.path.basename(cover_path)}", file=sys.stderr)
+                time.sleep(3)
+            else:
+                # Try alternate button text
+                if upload_file_by_text(page, _DIALOG, "Add cover letter", cover_path):
+                    print(f"COVER:{jid} uploaded {os.path.basename(cover_path)}", file=sys.stderr)
+                    time.sleep(3)
         return True
 
     # ── Signals ───────────────────────────────────────────────────────
