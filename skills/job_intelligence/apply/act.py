@@ -1727,7 +1727,7 @@ def run(args):
     if args.inspect:
         cmd_inspect(args.jid, args.candidate)
     elif args.fill:
-        cmd_fill(args.jid, args.answers, args.candidate, not args.go, shadow)
+        cmd_fill(args.jid, args.answers, args.candidate, not args.apply, shadow)
     elif args.next:
         cmd_next(args.jid, args.candidate)
     elif args.back:

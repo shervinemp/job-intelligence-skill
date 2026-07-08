@@ -48,8 +48,8 @@ def main():
     act_p.add_argument("--back", action="store_true")
     act_p.add_argument("--submit", action="store_true")
     act_p.add_argument("--inspect", action="store_true")
-    act_p.add_argument("--go", action="store_true",
-                       help="Actually fill and submit (default is dry-run preview — safe, no DOM changes)")
+    act_p.add_argument("--apply", action="store_true",
+                       help="Actually fill and submit (default is dry-run — preview only, no DOM changes)")
     act_p.add_argument("--answers", help="JSON field->value mapping for --fill")
     act_p.add_argument("--candidate", type=int, default=None)
     act_p.add_argument("--confirm", action="store_true")
