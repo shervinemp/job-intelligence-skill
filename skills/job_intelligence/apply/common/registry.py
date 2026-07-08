@@ -1,5 +1,11 @@
-"""registry.py — Platform registry resolver. Loads YAML configs by domain match."""
+"""registry.py — Platform registry resolver. Loads YAML configs by domain match.
 
+Supports two dispatch modes:
+  - Legacy: flow_hook name → call function from registry/<name>.py
+  - Handler: handler_class path → import and instantiate PlatformHandler subclass
+"""
+
+import importlib
 import importlib.util
 import os
 from pathlib import Path
@@ -7,11 +13,11 @@ from urllib.parse import urlparse
 
 REGISTRY_DIR = Path(os.path.dirname(__file__)).parent / "registry"
 
-_noted_platforms = set()  # tracks which platforms had QUIRKS printed this session
+_noted_platforms = set()
 
 
 class RegistryConfig:
-    """Loaded platform configuration from a registry YAML + optional Python hooks."""
+    """Loaded platform configuration from a registry YAML."""
 
     def __init__(self, data, hook_module=None):
         self.name = data.get("name", "unknown")
@@ -27,30 +33,47 @@ class RegistryConfig:
         self.has_progress_bar = data.get("properties", {}).get("has_progress_bar", False)
         self.page_range = tuple(data.get("properties", {}).get("page_range", [1, 10]))
         self.flow_hook = data.get("flow_hook", "")
+        self.handler_class = data.get("handler_class", "")
         self.notes = data.get("notes", "")
         self._hook_module = hook_module
+        self._handler_instance = None
 
     def emit_notes(self):
-        """Print platform QUIRKS: once per session on first detect."""
         if self.notes and self.name not in _noted_platforms:
             _noted_platforms.add(self.name)
             for line in self.notes.strip().splitlines():
                 print(f"QUIRKS: {line.strip()}")
 
     def has_hook(self, name):
-        """Check if a hook function exists in the Python module."""
         if not self._hook_module:
             return False
         return hasattr(self._hook_module, name)
 
     def call_hook(self, name, *args, **kwargs):
-        """Call a hook function if it exists. Returns None if not found."""
         if not self._hook_module:
             return None
         fn = getattr(self._hook_module, name, None)
         if fn:
             return fn(*args, **kwargs)
         return None
+
+    def get_handler(self):
+        """Lazy-import and return the PlatformHandler instance, or None."""
+        if self._handler_instance is not None:
+            return self._handler_instance
+        if not self.handler_class:
+            return None
+        try:
+            parts = self.handler_class.split(".")
+            mod_path = ".".join(parts[:-1])
+            cls_name = parts[-1]
+            mod = importlib.import_module(mod_path)
+            cls = getattr(mod, cls_name)
+            self._handler_instance = cls()
+            return self._handler_instance
+        except Exception as e:
+            print(f"ERROR: could not load handler {self.handler_class}: {e}", file=__import__('sys').stderr)
+            return None
 
 
 def _load_yaml(path):

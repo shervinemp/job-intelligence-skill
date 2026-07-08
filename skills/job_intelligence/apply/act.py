@@ -768,10 +768,35 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
         time.sleep(1)
         ps = read_page(page)
 
-    # Platform flow hook: replaces the entire fill/navigate/submit chain for
-    # platforms with ephemeral state (LinkedIn Easy Apply modals, etc.)
-    # The hook receives allow_submit from the same gate as cmd_submit — flow hooks
-    # must never click a submit-intent button when it is False.
+    # Platform handler (PlatformHandler interface): replaces the entire
+    # fill/navigate/submit chain for platforms with ephemeral state.
+    handler = registry.get_handler() if registry else None
+    if handler:
+        from apply.common import gate
+        from apply.common.policy import load_policy
+        from apply.common.handler_base import run_modal_flow
+        mode = resolve_mode("shadow" if shadow else None)
+        action, reason = gate.submit_decision(mode, load_policy(), audit.summarize(jid))
+        allow_submit = (action == "submit")
+        if not allow_submit:
+            emit_status(f"submit_{action}", f"handler submit suppressed — {reason}")
+        result = run_modal_flow(
+            handler, page, jid, profile,
+            allow_submit=allow_submit, max_steps=10,
+        )
+        if result == "done":
+            emit_status("submitted")
+            emit_next("verify")
+            state["result"] = "submitted"
+            save_state(state)
+        elif result == "paused":
+            save_state(state)
+        elif result == "failed":
+            emit_status("flow_failed", "handler could not proceed")
+            emit_next("act --inspect")
+        return
+
+    # Legacy flow hook fallback
     if registry and registry.flow_hook and registry.has_hook(registry.flow_hook):
         from apply.common import gate
         from apply.common.policy import load_policy
