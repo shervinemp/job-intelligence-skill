@@ -147,13 +147,24 @@ class PageManager:
                 except Exception: pass
 
     def close_stale(self, target_url=""):
+        target_domain = urlparse(target_url).netloc.lower() if target_url else ""
         for p in self.ctx.pages:
             jid = read_page_tag(p)
             if jid and jid == self.jid:
-                continue
+                continue  # keep our page
             url = p.url.lower()
             if "about:blank" in url:
-                continue  # will be navigated or closed naturally
-            if "chrome-error" in url or "newtab" in url or (jid and jid != self.jid):
-                try: p.close()
-                except Exception: pass
+                continue
+            # Keep new-tab and chrome pages (Chrome needs them)
+            if "chrome://" in url or "chrome-error" in url:
+                continue
+            # Keep pages on our target domain (likely the same job)
+            if target_domain:
+                try:
+                    if urlparse(url).netloc.lower() == target_domain:
+                        continue
+                except Exception:
+                    pass
+            # Close everything else
+            try: p.close()
+            except Exception: pass
