@@ -1513,11 +1513,9 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
         url = state.get("external_url", "") or state.get("url", "")
         url_short = url.split("?")[0][:80] if url else "?"
         plat = state.get("platform", "") or _domain(url) or "unknown"
-        filled = state.get("filled", 0)
         ps = state.get("page", {})
-        unfilled_fields = [
-            f for f in ps.get("fields", []) if f.get("required") and not f.get("value")
-        ]
+        fields = ps.get("fields", [])
+        unfilled_fields = [f for f in fields if f.get("required") and not f.get("value")]
         last = state.get("_last_submit", "")
         warn = ""
         if last == "validation_error":
@@ -1527,15 +1525,20 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
         elif last == "unknown":
             warn = " (last submit was not confirmed)"
         print(
-            f"SUBMIT: {plat} — {filled} filled, {len(unfilled_fields)} unfilled{warn}",
+            f"SUBMIT: {plat} — {len(fields)} fields, {len(unfilled_fields)} unfilled{warn}",
             file=sys.stderr,
         )
-        for f in unfilled_fields[:3]:
-            print(f"  Unfilled: {f.get('label', '?')}", file=sys.stderr)
-        if len(unfilled_fields) > 3:
-            print(f"  ... and {len(unfilled_fields)-3} more", file=sys.stderr)
+        for f in fields:
+            label = f.get("label", f.get("key", "?"))[:45]
+            val = f.get("value", "")
+            if val:
+                print(f"  FILLED  [{f.get('type','?')}] {label:45s} = {val[:40]}", file=sys.stderr)
+        for f in unfilled_fields[:5]:
+            print(f"  UNFILLED [{f.get('type','?')}] {f.get('label', f.get('key', '?'))[:45]}", file=sys.stderr)
+        if len(unfilled_fields) > 5:
+            print(f"  ... and {len(unfilled_fields)-5} more unfilled", file=sys.stderr)
         print(f"  URL: {url_short}", file=sys.stderr)
-        print("  Pass --confirm to submit, or investigate first.", file=sys.stderr)
+        print("  Review the values above. Pass --confirm to submit.", file=sys.stderr)
         emit_next("act --submit --confirm")
         return
     print(
