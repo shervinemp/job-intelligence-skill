@@ -1,4 +1,22 @@
-"""LinkedIn Easy Apply → PlatformHandler implementation."""
+"""LinkedIn Easy Apply → PlatformHandler implementation.
+
+Reference implementation for the PlatformHandler interface.
+Methods below document the actual LinkedIn DOM structure so this
+file serves as a template for other platforms.
+
+LinkedIn Easy Apply modal steps:
+  1. Resume selection — [role="dialog"] contains radio inputs + filename <span>s
+  2. Contact info     — text inputs with placeholders (Email, Phone, etc.)
+  3. Review           — summary page with "Review" button
+  4. Submit           — "Submit application" button at 100% progress
+
+DOM characteristics:
+  - Labels are <span>s, not <label> elements (labels have empty for="")
+  - Ember.js framework: nativeValueSetter doesn't trigger, need click+events
+  - Radio buttons use <label for=...> that have empty textContent
+  - File upload via "Upload resume" button triggers file chooser
+  - Progress bar as "N%" text in a <span>
+"""
 
 from __future__ import annotations
 import json, os, time

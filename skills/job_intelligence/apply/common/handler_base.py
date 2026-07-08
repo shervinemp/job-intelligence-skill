@@ -1,7 +1,59 @@
 """Platform handler interface for job application forms.
 
-Every job board / ATS platform implements PlatformHandler.
-The flow runner calls detect → fill → advance/submit in a loop.
+── How to add a new platform ──────────────────────────────────────────
+
+1. Create apply/handlers/<name>.py  with a class that inherits PlatformHandler.
+
+2. Implement all 11 abstract methods (your IDE can auto-generate stubs).
+   See LinkedinHandler in apply/handlers/linkedin.py as a reference.
+
+3. Create apply/registry/<name>.yaml with at minimum:
+     name: <name>
+     detect:
+       domains: [<domain>]
+     handler_class: apply.handlers.<name>.<ClassName>
+
+4. That's it. The run_modal_flow() runner loops detect → fill → advance.
+   No changes needed to act.py, registry.py, or any other file.
+
+── What each method should do ─────────────────────────────────────────
+
+  detect(page)         → Full page snapshot: fields, buttons, errors, progress.
+  classify(page)       → Quick string: 'form' | 'review' | 'success' | 'login'.
+
+  extract_fields(page) → Visible fillable fields with labels.
+  fill(page, field, v) → Set field using the right framework setter.
+  upload(page, f, p)   → File upload (widget-specific).
+
+  can_proceed(page)    → True if a next/submit button exists & is enabled.
+  click_next(page)     → Click next/continue. Return navigated=True if URL changed.
+  click_submit(page)   → Click submit. Return navigated=True if dialog closed.
+  ensure_modal_open(p) → Open the form overlay if closed (for MODAL flow_type).
+
+  ensure_resume(p, jid)→ Select or upload the tailored resume. Return False to block.
+  is_applied(page)     → True if success signal detected.
+  get_errors(page)     → Validation error messages on the current page.
+
+── Shared utilities you can use ──────────────────────────────────────
+
+  set_react_input(page, selector, value)    React nativeValueSetter
+  set_ember_input(page, selector, value)    Ember click+events / nativeValueSetter
+  set_vanilla_input(page, selector, value)  element.value + change
+
+  find_text_in_dialog(page, text)           Search dialog for text
+  click_text_element(page, container, text) Click first <a>/<button> containing text
+  upload_file_by_text(page, container, t, p) Click + file chooser
+
+  Field, PageState, FillResult, ActionResult  Return these from your methods.
+
+── FlowType ──────────────────────────────────────────────────────────
+
+  MODAL   — Ephemeral overlay (LinkedIn). Runner re-opens if closed.
+  PAGE    — Multi-step form on sequential pages (Workday).
+  SINGLE  — One-page form, single submit (most ATS).
+  REDIRECT — Redirects to external URL (Greenhouse).
+  MAILTO  — Opens mail client (cannot automate).
+  LOGIN_WALL — Auth required before form.
 """
 
 from __future__ import annotations
