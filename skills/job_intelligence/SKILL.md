@@ -94,7 +94,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
-| `act --submit <jid> --confirm` | Submit. For LinkedIn: handled by the flow hook (handler) automatically during `--fill`. Direct submit for other ATS. |
+| `act --submit <jid> --confirm` | Submit. **`--confirm` req'd**. LinkedIn: handler on `--fill`. Other ATS: direct. |
 | `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 | `apply.py reject <jid>` | Skip permanently |
@@ -114,7 +114,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 - Pipeline cannot create accounts, remember passwords, or handle 2FA.
 - 3x guard: same page 3 fills in a row → warns.
 - EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `common_answers.eeo` for reuse.
-- Platform registry (`apply/registry/*.yaml`): per-ATS config. Each YAML can set `handler_class` (e.g. `apply.handlers.linkedin.LinkedinHandler`) to use the PlatformHandler interface instead of the legacy flow hook. New platforms: implement `PlatformHandler` in `apply/handlers/`, add YAML with `handler_class`, done. See `apply/common/handler_base.py` for the full guide.
+- Platform registry (`apply/registry/*.yaml`): per-ATS config. `handler_class` field loads `PlatformHandler` from `apply/handlers/`. See `handler_base.py` header for add-platform guide.
 
 ## Platform quirks
 
@@ -124,7 +124,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | Greenhouse | No `<select>` — all custom autocomplete. Country = `<input>`. "Submit application" = real button ("Apply" = scroll trigger). |
 | Lever | 0 fields → follow apply-link → `/apply`. Labels: `<label><div>Text</div><div><input></div></label>`. No Select/Radio. |
 | Workday | 7-step SPA (Info → Experience → Questions → Disclosures → Review). DROPDOWN=`button[aria-haspopup]`. Phone: strip +1 prefix. Skills: type + Enter. Per-company login. |
-| LinkedIn | Easy Apply (modal) handled by `LinkedinHandler` (`apply/handlers/linkedin.py`) — implements `PlatformHandler` with `run_modal_flow()`. Ember.js framework: uses click+events instead of nativeValueSetter. Resume filenames in `<span>` elements (labels are empty). Upload via file chooser. External (`<a>` tag) handled by legacy flow. |
+| LinkedIn | Easy Apply modal via `LinkedinHandler`. Ember.js: click+events, not nativeValueSetter. Resume names in `<span>` (labels empty). Upload via file chooser. External via legacy flow. |
 
 ## Account & login notes
 
