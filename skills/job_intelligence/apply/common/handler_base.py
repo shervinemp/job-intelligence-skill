@@ -370,11 +370,6 @@ def run_modal_flow(
             return "done"
         return "failed"
 
-    if not handler.ensure_resume(page, jid):
-        emit_status("blocked", "tailored resume not available")
-        emit_next("detect to retry")
-        return "failed"
-
     for _ in range(max_steps):
         state = handler.detect(page)
 
@@ -408,6 +403,14 @@ def run_modal_flow(
         if state.session_timed_out:
             handler.ensure_modal_open(page)
             continue
+
+        # Ensure resume is selected when on the resume step
+        if state.resume_step:
+            if not handler.ensure_resume(page, jid):
+                emit_status("blocked", "tailored resume not available")
+                emit_next("detect to retry")
+                return "failed"
+            state = handler.detect(page)  # re-detect after resume selection
 
         # Fill unfilled required fields
         filled_any = False

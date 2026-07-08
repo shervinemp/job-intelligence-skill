@@ -19,7 +19,7 @@ DOM characteristics:
 """
 
 from __future__ import annotations
-import json, os, time
+import json, os, sys, time
 from typing import Any
 
 from apply.common.handler_base import (
