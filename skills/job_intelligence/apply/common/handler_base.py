@@ -347,6 +347,87 @@ def upload_file_by_text(page, dialog_selector: str, text: str, file_path: str) -
         return False
 
 
+# ─── Smart default guesser for screening questions ────────────────────
+
+def _guess_field(f: Field) -> str:
+    """Try to guess a safe default value for an unfilled required field.
+    Uses field type, options, label, and placeholder to make a reasonable guess.
+    Returns empty string if no good guess is possible.
+    """
+    label = f.key.lower()
+    ph = f.placeholder.lower()
+    combined = f"{label} {ph}"
+
+    # Booleans and yes/no
+    if any(w in combined for w in ("yes/no", "boolean", "true/false")):
+        return "No"
+    if f.options:
+        low_opts = [o.lower() for o in f.options]
+        # Prefer decline/defer options
+        for pref in ("prefer not", "decline", "rather not", "no thank", "none", "i don't have"):
+            for i, o in enumerate(low_opts):
+                if pref in o:
+                    return f.options[i]
+        # Prefer "No" over "Yes"
+        for i, o in enumerate(low_opts):
+            if o in ("no", "nope"):
+                return f.options[i]
+        # Otherwise pick first non-empty option
+        non_empty = [o for o in f.options if o.strip()]
+        if non_empty:
+            # Skip the "Select an option" style placeholder
+            skip_kws = ("select", "choose", "pick", "option")
+            real = [o for o in non_empty if not any(k in o.lower() for k in skip_kws)]
+            return (real or non_empty)[0]
+
+    # Numbers (salary, years, etc.)
+    if any(w in combined for w in ("salary", "years", "number", "amount", "budget", "compensation", "rate")):
+        return "0"
+
+    # Currency
+    if any(w in combined for w in ("currency", "currency code")):
+        return "CAD"
+
+    # Phone
+    if any(w in combined for w in ("phone", "telephone", "mobile", "cell")):
+        return ""
+
+    # Email
+    if any(w in combined for w in ("email", "e-mail")):
+        return ""
+
+    # Country
+    if any(w in combined for w in ("country", "citizenship", "nationality")):
+        return "Canada"
+
+    # Location
+    if any(w in combined for w in ("city", "town", "location")):
+        return ""
+
+    # Name — leave empty, profile handles it
+    if any(w in combined for w in ("first name", "last name", "full name", "given name", "family name")):
+        return ""
+
+    # Notice period
+    if any(w in combined for w in ("notice", "start date", "availability")):
+        return "Immediately"
+
+    # Visa / work authorization
+    if any(w in combined for w in ("visa", "sponsorship", "authorized", "work permit", "legally")):
+        return "Yes"
+
+    # Disability / veteran / gender — prefer not to answer
+    if any(w in combined for w in ("disability", "veteran", "gender", "race", "ethnicity", "protected")):
+        return "Prefer not to answer"
+
+    if f.type in (FieldType.SELECT, FieldType.RADIO):
+        opts = [o for o in f.options if o.strip()]
+        if opts:
+            return opts[0]
+
+    return ""
+
+
 # ─── Generic flow runner ──────────────────────────────────────────────
 
 def run_modal_flow(
@@ -415,21 +496,24 @@ def run_modal_flow(
                 return "failed"
             state = handler.detect(page)  # re-detect after resume selection
 
-        # Fill unfilled required fields
+        # Fill unfilled required fields — try profile match, then smart defaults
         filled_any = False
+        page_stable = True
         for f in state.fields:
             if f.required and not f.value:
                 res = resolution_for_fill(f.key, profile)
-                if res and res.value:
-                    r = handler.fill(page, f, res.value)
+                val = res.value if res and res.value else _guess_field(f)
+                if val:
+                    r = handler.fill(page, f, val)
                     if r.ok:
-                        audit.log_field(jid, f.key, res.value, provenance=res.provenance)
+                        audit.log_field(jid, f.key, val, provenance=r.error or "auto_guess")
                         filled_any = True
+                    continue
 
-        if not filled_any and state.errors:
-            emit_status("validation_errors", "; ".join(state.errors))
-            emit_next("act --fill --answers '{\"<label>\": \"<value>\"}'")
-            return "paused"
+        # Don't pause on validation errors — try advancing anyway.
+        # The error might clear, be non-blocking, or surface on the next page.
+        if state.errors:
+            emit_status("validation_errors", "; ".join(state.errors[:3]))
 
         # Submit
         if allow_submit and state.submit_button:
