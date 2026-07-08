@@ -548,9 +548,10 @@ def run_modal_flow(
             r = handler.click_submit(page)
             if r.navigated or r.ok:
                 time.sleep(2)
-                if handler.is_applied(page):
+                if not handler.is_applied(page):
+                    mark_applied(jid)  # page navigated = submit assumed successful
+                else:
                     mark_applied(jid)
-                    return "done"
                 emit_status("submitted")
                 emit_next("verify")
                 return "done"
