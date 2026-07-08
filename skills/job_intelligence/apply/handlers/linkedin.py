@@ -276,6 +276,15 @@ class LinkedinHandler(PlatformHandler):
     # ── Resume ────────────────────────────────────────────────────────
 
     def ensure_resume(self, page, jid: str) -> bool:
+        # Only act if the dialog is showing the resume step (has .pdf spans)
+        has_resume = page.evaluate(f"""() => {{
+            const d = document.querySelector('{_DIALOG}');
+            if (!d) return false;
+            return Array.from(d.querySelectorAll('span')).some(s => s.textContent.includes('.pdf'));
+        }}""")
+        if not has_resume:
+            return True  # Already past the resume step
+
         from lib.config import RESULTS_DIR
         rd = os.path.join(RESULTS_DIR, jid)
         target_name = None

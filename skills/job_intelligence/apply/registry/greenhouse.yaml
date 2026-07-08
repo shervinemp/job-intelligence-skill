@@ -1,10 +1,13 @@
 name: greenhouse
-version: 1
+version: 2
 
 detect:
   domains:
     - greenhouse.io
     - boards.greenhouse.io
+    - grnh.se
+
+handler_class: apply.handlers.greenhouse.GreenhouseHandler
 
 probe:
   best_strategy: standard
