@@ -463,21 +463,26 @@ def run_modal_flow(
             handler.ensure_modal_open(page)
             continue
 
-        # Preview mode: show all field→value mappings without modifying DOM
-        if dry_run:
-            print(f"\n  ── PREVIEW ({len(state.fields)} fields) ──", file=sys.stderr)
-            for f in state.fields:
-                if f.value:
-                    print(f"  ✓ [{f.type.name:6s}] {f.label[:45]:45s} = {f.value[:50]}", file=sys.stderr)
+        # Preview: show all field→value mappings before any DOM changes.
+        # Always prints — both in dry-run and apply mode. In apply mode, proceeds
+        # immediately after printing so the user can see what's about to happen.
+        print(f"\n  ── FIELDS ({len(state.fields)} total) ──", file=sys.stderr)
+        unfilled_count = 0
+        for f in state.fields:
+            if f.value:
+                print(f"  ✓ [{f.type.name:6s}] {f.label[:45]:45s} = {f.value[:50]}", file=sys.stderr)
+            else:
+                res = resolution_for_fill(f.key, profile)
+                val = res.value if res and res.value else ""
+                if val:
+                    print(f"  ∼ [{f.type.name:6s}] {f.label[:45]:45s} → {val[:50]} (from profile)", file=sys.stderr)
                 else:
-                    res = resolution_for_fill(f.key, profile)
-                    val = res.value if res and res.value else ""
-                    if val:
-                        print(f"  ∼ [{f.type.name:6s}] {f.label[:45]:45s} → {val[:50]} (from profile)", file=sys.stderr)
-                    else:
-                        print(f"  ? [{f.type.name:6s}] {f.label[:45]:45s}  <-- needs your input", file=sys.stderr)
-            emit_status("paused", "review answers above, then re-run without --dry-run")
-            emit_next("act --fill --answers '{\"<label>\": \"<value>\"}'")
+                    print(f"  ? [{f.type.name:6s}] {f.label[:45]:45s}  <-- needs your input", file=sys.stderr)
+                    unfilled_count += 1
+
+        if dry_run:
+            emit_status("paused", "preview complete — re-run with --apply to fill and submit")
+            emit_next("act --fill --answers '{\"<label>\": \"<value>\"}' --apply")
             return "paused"
 
         # Fill unfilled required fields — try profile match only (no guesses)
@@ -486,11 +491,12 @@ def run_modal_flow(
             if f.required and not f.value:
                 res = resolution_for_fill(f.key, profile)
                 val = res.value if res and res.value else ""
+                if val:
                     r = handler.fill(page, f, val)
                     if r.ok:
-                        audit.log_field(jid, f.key, val, provenance=r.error or "auto_guess")
+                        audit.log_field(jid, f.key, val, provenance=r.error or "profile")
                         filled_any = True
-                    continue
+                continue
 
         # Don't pause on validation errors — try advancing anyway.
         # The error might clear, be non-blocking, or surface on the next page.
