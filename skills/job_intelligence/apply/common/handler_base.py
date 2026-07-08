@@ -254,24 +254,46 @@ def set_react_input(page, selector: str, value: str) -> bool:
 
 
 def set_ember_input(page, selector: str, value: str) -> bool:
-    """Ember.js value setter: click + events for radios, nativeValueSetter for text."""
+    """Ember.js value setter: handles select, radio, and text inputs."""
     return page.evaluate(f"""() => {{
         const el = document.querySelector({_js(selector)});
         if (!el) return false;
+        if (el.tagName === 'SELECT') {{
+            // LinkedIn uses native <select> hidden under a custom widget.
+            // Set value + dispatch change to trigger LinkedIn's handlers.
+            el.value = {_js(value)};
+            el.dispatchEvent(new Event('change', {{bubbles: true}}));
+            el.dispatchEvent(new Event('input', {{bubbles: true}}));
+            return true;
+        }}
         if (el.tagName === 'INPUT' && el.type === 'radio') {{
             const lbl = document.querySelector('label[for="' + el.id + '"]');
-            if (lbl) lbl.click();
+            if (lbl && lbl.offsetParent !== null) {{ lbl.click(); return true; }}
+            let parent = el.parentElement;
+            for (let i = 0; i < 8 && parent; i++) {{
+                if (parent.offsetParent === null) {{ parent = parent.parentElement; continue; }}
+                if (parent.tagName === 'LABEL' || parent.classList.contains('fb-form-element')) {{
+                    parent.click(); return true;
+                }}
+                parent = parent.parentElement;
+            }}
+            el.click();
             el.dispatchEvent(new Event('change', {{bubbles: true}}));
             el.dispatchEvent(new Event('input', {{bubbles: true}}));
             el.dispatchEvent(new Event('click', {{bubbles: true}}));
-        }} else {{
-            const setter = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype, 'value'
-            ).set;
-            setter.call(el, {_js(value)});
-            el.dispatchEvent(new Event('input', {{bubbles: true}}));
-            el.dispatchEvent(new Event('change', {{bubbles: true}}));
+            return true;
         }}
+        // Text / textarea / other inputs
+        const setter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value'
+        ).set;
+        if (setter) {{
+            setter.call(el, {_js(value)});
+        }} else {{
+            el.value = {_js(value)};
+        }}
+        el.dispatchEvent(new Event('input', {{bubbles: true}}));
+        el.dispatchEvent(new Event('change', {{bubbles: true}}));
         return true;
     }}""")
 
