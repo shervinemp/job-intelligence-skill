@@ -11,7 +11,7 @@ from typing import Any
 
 from apply.common.handler_base import (
     PlatformHandler, Field, PageState, FillResult, ActionResult,
-    FieldType, Framework, FlowType, set_react_input,
+    FieldType, Framework, FlowType, set_react_input, wait_for_fields, safe_eval,
 )
 from apply.common.page_helpers import check_applied_signal
 
@@ -207,21 +207,14 @@ class AshbyHandler(PlatformHandler):
                 pass
         return ActionResult(ok=False)
 
+
     def ensure_modal_open(self, page) -> bool:
-        # Wait for React form to render (spa-wait up to 12s)
-        import time as _time
-        for _ in range(24):
-            if len(self.extract_fields(page)) > 3:
-                return True
-            _time.sleep(0.5)
-        # Try clicking apply button
+        if wait_for_fields(self, page, timeout=12):
+            return True
         if self._find_apply(page):
-            _time.sleep(3)
-            for _ in range(12):
-                if len(self.extract_fields(page)) > 3:
-                    return True
-                _time.sleep(0.5)
-        return len(self.extract_fields(page)) > 3
+            time.sleep(3)
+            return wait_for_fields(self, page, timeout=6)
+        return False
 
     def ensure_resume(self, page, jid: str) -> bool:
         from lib.config import RESULTS_DIR

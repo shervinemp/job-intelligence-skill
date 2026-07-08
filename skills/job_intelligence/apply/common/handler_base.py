@@ -232,6 +232,23 @@ def _js(val: str) -> str:
     return json.dumps(val)
 
 
+def safe_eval(page, js: str, default=None):
+    """Evaluate JS on page, returning `default` if the page navigated or crashed.
+    
+    Handles the common case where page.evaluate() is called right after a
+    navigation action (click next/submit) and the execution context is gone.
+    """
+    import time as _time
+    _time.sleep(0.5)  # brief settle before evaluating
+    try:
+        return page.evaluate(js)
+    except Exception as e:
+        err = str(e)
+        if "Execution context was destroyed" in err or "Connection closed" in err:
+            return default
+        raise
+
+
 # ─── Framework setters (shared) ────────────────────────────────────────
 
 def _dialog_sel() -> str:
@@ -355,11 +372,15 @@ def click_text_element(page, dialog_selector: str, text: str) -> bool:
 
 
 def upload_file_by_text(page, dialog_selector: str, text: str, file_path: str) -> bool:
-    """Click an element with `text` and set the file via file chooser."""
+    """Click an element with `text` and set the file via file chooser.
+    Returns True only if the file was accepted (chooser opened and file set).
+    """
+    import os as _os
+    if not _os.path.exists(file_path):
+        return False
     try:
-        with page.expect_file_chooser() as fc_info:
-            clicked = click_text_element(page, dialog_selector, text)
-            if not clicked:
+        with page.expect_file_chooser(timeout=10000) as fc_info:
+            if not click_text_element(page, dialog_selector, text):
                 return False
         fc = fc_info.value
         fc.set_files(file_path)
@@ -367,6 +388,21 @@ def upload_file_by_text(page, dialog_selector: str, text: str, file_path: str) -
         return True
     except Exception:
         return False
+
+
+def wait_for_fields(handler, page, timeout: float = 12.0, min_fields: int = 3) -> bool:
+    """Poll handler.extract_fields() until enough fields appear or timeout.
+    
+    Returns True if enough fields were found within the timeout.
+    Use in ensure_modal_open() for SPA platforms that load forms asynchronously.
+    """
+    import time as _time
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        if len(handler.extract_fields(page)) >= min_fields:
+            return True
+        _time.sleep(0.5)
+    return len(handler.extract_fields(page)) >= min_fields
 
 
 # ─── Generic flow runner ──────────────────────────────────────────────

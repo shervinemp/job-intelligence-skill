@@ -9,17 +9,9 @@ import json, os, sys, time, re
 from typing import Any, Optional
 
 from apply.common.handler_base import (
-    PlatformHandler,
-    Field,
-    PageState,
-    FillResult,
-    ActionResult,
-    FieldType,
-    Framework,
-    FlowType,
-    set_react_input,
-    set_vanilla_input,
-    upload_file_by_text,
+    PlatformHandler, Field, PageState, FillResult, ActionResult,
+    FieldType, Framework, FlowType, set_react_input, set_vanilla_input,
+    upload_file_by_text, wait_for_fields, safe_eval,
 )
 
 from apply.common.page_helpers import check_applied_signal, mark_applied
@@ -266,40 +258,30 @@ class StandardFormHandler(PlatformHandler):
         texts = cfg.get("submit_btn", _SUBMIT_TEXTS)
         if self._click_by_text(page, texts):
             time.sleep(3)
+            navigated = safe_eval(page, "() => window.location.href", "")
             return ActionResult(ok=True, navigated=True)
         return ActionResult(ok=False)
 
     def ensure_modal_open(self, page) -> bool:
-        """Open the apply form. Waits for React SPA fields to render."""
-        # Wait up to 12s for React SPA to render form fields
-        for _ in range(24):
-            if len(self.extract_fields(page)) > 2:
-                return True
-            time.sleep(0.5)
+        if wait_for_fields(self, page, timeout=12):
+            return True
 
-        text = (page.evaluate("() => document.body.innerText") or "").lower()
+        text = safe_eval(page, "() => document.body.innerText", "") or ""
+        text = text.lower()
         cfg = self._cfg(page.url)
 
-        # Guest apply
         for bt in cfg.get("guest_btn", ["apply as guest", "continue without signing in"]):
             if bt in text:
                 if self._click_by_text(page, [bt]):
                     time.sleep(3)
-                    for _ in range(12):
-                        if len(self.extract_fields(page)) > 1:
-                            return True
-                        time.sleep(0.5)
+                    return wait_for_fields(self, page, timeout=6)
 
-        # Apply Now
         apply_texts = cfg.get("apply_btn", ["apply now", "apply for this job", "apply", "quick apply"])
         if self._click_by_text(page, apply_texts):
             time.sleep(3)
-            for _ in range(12):
-                if len(self.extract_fields(page)) > 1:
-                    return True
-                time.sleep(0.5)
+            return wait_for_fields(self, page, timeout=6)
 
-        return len(self.extract_fields(page)) > 1
+        return False
 
     def ensure_resume(self, page, jid: str) -> bool:
         """Upload tailored resume if file input is present."""

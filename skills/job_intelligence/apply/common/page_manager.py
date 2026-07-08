@@ -148,27 +148,36 @@ class PageManager:
 
     def close_stale(self, target_url=""):
         target_domain = urlparse(target_url).netloc.lower() if target_url else ""
+        target_path = urlparse(target_url).path.rstrip("/") if target_url else ""
+        kept_one_untagged = False
+
         for p in self.ctx.pages:
             jid = read_page_tag(p)
-            # Keep our own tagged page
+            # Always keep our own tagged page
             if jid and jid == self.jid:
                 continue
-            # Close pages from OTHER jobs (different JID)
+            # Close pages from OTHER jobs
             if jid and jid != self.jid:
-                try:
-                    p.close()
-                except Exception:
-                    pass
+                try: p.close()
+                except Exception: pass
                 continue
+
             url = p.url.lower()
             if "about:blank" in url:
                 continue
             if "chrome://" in url or "chrome-error" in url:
                 continue
-            # Keep untagged pages on our domain (tag lost from SPA nav)
+
+            # Untagged page on our domain — keep only the best match
             if target_domain:
                 try:
                     if urlparse(url).netloc.lower() == target_domain:
+                        if not kept_one_untagged:
+                            kept_one_untagged = True
+                            continue  # keep this one
+                        # Already kept one — close this duplicate
+                        try: p.close()
+                        except Exception: pass
                         continue
                 except Exception:
                     pass
