@@ -592,7 +592,8 @@ def _audit_fill(jid, fields, answers, profile, page_num, platform="", corrected_
                            platform=platform, corrected=(lbl in corrected))
 
 
-def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False):
+def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False):
+    dry_run = True if dry_run is None else dry_run  # default: preview only
     answers = {}
     if answers_json:
         if answers_json.startswith("@"):
@@ -1726,7 +1727,7 @@ def run(args):
     if args.inspect:
         cmd_inspect(args.jid, args.candidate)
     elif args.fill:
-        cmd_fill(args.jid, args.answers, args.candidate, args.dry_run, shadow)
+        cmd_fill(args.jid, args.answers, args.candidate, not args.go, shadow)
     elif args.next:
         cmd_next(args.jid, args.candidate)
     elif args.back:
