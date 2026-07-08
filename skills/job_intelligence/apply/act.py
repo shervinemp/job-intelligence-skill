@@ -783,6 +783,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=False, shadow=False
         result = run_modal_flow(
             handler, page, jid, profile,
             allow_submit=allow_submit, max_steps=10,
+            dry_run=dry_run,
         )
         if result == "done":
             emit_status("submitted")

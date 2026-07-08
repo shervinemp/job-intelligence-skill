@@ -372,61 +372,14 @@ def upload_file_by_text(page, dialog_selector: str, text: str, file_path: str) -
 # ─── Smart default guesser for screening questions ────────────────────
 
 def _guess_field(f: Field, profile: dict = {}) -> str:
-    """Try to guess a safe default value for an unfilled required field.
-    Uses field type, options, label, and placeholder to make a reasonable guess.
-    Returns empty string if no good guess is possible.
+    """Only fills fields where the answer is directly derivable from profile.
+    Returns empty string for anything uncertain — user must provide via --answers.
     """
     label = f.key.lower()
     ph = f.placeholder.lower()
     combined = f"{label} {ph}"
 
-    # Booleans and yes/no
-    if any(w in combined for w in ("yes/no", "boolean", "true/false")):
-        return "No"
-    if f.options:
-        low_opts = [o.lower() for o in f.options]
-        # Prefer decline/defer options
-        for pref in ("prefer not", "decline", "rather not", "no thank", "none", "i don't have"):
-            for i, o in enumerate(low_opts):
-                if pref in o:
-                    return f.options[i]
-        # Prefer "No" over "Yes"
-        for i, o in enumerate(low_opts):
-            if o in ("no", "nope"):
-                return f.options[i]
-        # Otherwise pick first non-empty option
-        non_empty = [o for o in f.options if o.strip()]
-        if non_empty:
-            # Skip the "Select an option" style placeholder
-            skip_kws = ("select", "choose", "pick", "option")
-            real = [o for o in non_empty if not any(k in o.lower() for k in skip_kws)]
-            return (real or non_empty)[0]
-
-    # Numbers (salary, years, etc.)
-    if any(w in combined for w in ("salary", "years", "number", "amount", "budget", "compensation", "rate")):
-        return "0"
-
-    # Currency
-    if any(w in combined for w in ("currency", "currency code")):
-        return "CAD"
-
-    # Phone
-    if any(w in combined for w in ("phone", "telephone", "mobile", "cell")):
-        return ""
-
-    # Email
-    if any(w in combined for w in ("email", "e-mail")):
-        return ""
-
-    # Country
-    if any(w in combined for w in ("country", "citizenship", "nationality")):
-        return "Canada"
-
-    # Location
-    if any(w in combined for w in ("city", "town", "location")):
-        return ""
-
-    # LinkedIn / GitHub / Portfolio / Website URLs
+    # LinkedIn / GitHub / Portfolio / Website URLs (directly from profile)
     if any(w in combined for w in ("linkedin", "linked in")):
         return profile.get("linkedin_url", "")
     if any(w in combined for w in ("github", "git hub")):
@@ -434,27 +387,9 @@ def _guess_field(f: Field, profile: dict = {}) -> str:
     if any(w in combined for w in ("portfolio", "website", "personal site", "web site")):
         return profile.get("portfolio_url") or profile.get("website", "")
 
-    # Name — leave empty, profile handles it
-    if any(w in combined for w in ("first name", "last name", "full name", "given name", "family name")):
-        return ""
-
-    # Notice period
-    if any(w in combined for w in ("notice", "start date", "availability")):
-        return "Immediately"
-
-    # Visa / work authorization
-    if any(w in combined for w in ("visa", "sponsorship", "authorized", "work permit", "legally")):
-        return "Yes"
-
-    # Disability / veteran / gender — prefer not to answer
-    if any(w in combined for w in ("disability", "veteran", "gender", "race", "ethnicity", "protected")):
-        return "Prefer not to answer"
-
-    if f.type in (FieldType.SELECT, FieldType.RADIO):
-        opts = [o for o in f.options if o.strip()]
-        if opts:
-            return opts[0]
-
+    # Phone, email — leave empty, profile handles via resolution_for_fill
+    # Name — same
+    # Everything else requires user judgment
     return ""
 
 
@@ -468,10 +403,14 @@ def run_modal_flow(
     *,
     allow_submit: bool = False,
     max_steps: int = 10,
+    dry_run: bool = False,
 ) -> str:
     """Generic multi-step modal flow.
 
     Loops: detect → fill required fields → try submit → try next → repeat.
+
+    When dry_run=True: resolves all field→answer mappings and prints them
+    without modifying the DOM. Returns "paused" after preview.
 
     Returns:
         "done"    — application submitted successfully
@@ -524,14 +463,32 @@ def run_modal_flow(
             handler.ensure_modal_open(page)
             continue
 
-        # Fill unfilled required fields — try profile match, then smart defaults
+        # Preview mode: show all resolved answers without filling
+        if dry_run:
+            preview = []
+            for f in state.fields:
+                if f.required and not f.value:
+                    res = resolution_for_fill(f.key, profile)
+                    val = res.value if res and res.value else ""
+                    preview.append((f.key, f.label, f.type.name, val))
+            if preview:
+                print("\n  PREVIEW — fields that need answers:", file=sys.stderr)
+                for key, label, typ, val in preview:
+                    fill = val or "(unsure — needs your input)"
+                    print(f"    [{typ:8s}] {label[:50]:50s} → {fill}", file=sys.stderr)
+                print(f"  Use --answers '{{\"<label>\": \"<value>\"}}' to provide values\n", file=sys.stderr)
+            else:
+                print("  PREVIEW: all fields already filled or no required fields", file=sys.stderr)
+            emit_status("paused", "dry-run — review answers above, then run without --dry-run")
+            emit_next("act --fill --answers '{\"<label>\": \"<value>\"}'")
+            return "paused"
+
+        # Fill unfilled required fields — try profile match only (no guesses)
         filled_any = False
-        page_stable = True
         for f in state.fields:
             if f.required and not f.value:
                 res = resolution_for_fill(f.key, profile)
-                val = res.value if res and res.value else _guess_field(f, profile)
-                if val:
+                val = res.value if res and res.value else ""
                     r = handler.fill(page, f, val)
                     if r.ok:
                         audit.log_field(jid, f.key, val, provenance=r.error or "auto_guess")
