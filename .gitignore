@@ -1,3 +1,5 @@
 tmp/
+.env
+batch_apply.py
 *.pyc
 __pycache__/
