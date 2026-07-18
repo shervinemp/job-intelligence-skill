@@ -24,10 +24,11 @@ import sys
 from datetime import datetime, timedelta
 
 from .db import (
-    DB_PATH, get_conn,
+    DB_PATH, STAGES, get_conn,
     load_state, get_job, search_jobs, job_count_by_stage,
     company_search, event_list, contact_list,
     desc_get, app_list, app_get,
+    setting_get,
 )
 from .config import STATE_PATH, REGISTRY_PATH
 

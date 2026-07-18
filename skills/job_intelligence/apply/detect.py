@@ -155,6 +155,15 @@ def run(jid):
             pass
         time.sleep(2)
 
+        # Check if job is no longer accepting applications
+        page_text = (p.evaluate("() => document.body.innerText") or "").lower()
+        if "no longer accepting applications" in page_text:
+            emit_type("expired", "no longer accepting applications")
+            emit_next("reject")
+            _merge_state({"jid": jid})
+            _close_p()
+            sys.exit(0)
+
         # Read buttons BEFORE clicking Easy Apply (the click may remove the button)
         buttons = p.evaluate(
             """() => {

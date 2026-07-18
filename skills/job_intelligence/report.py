@@ -13,6 +13,7 @@ Usage:
   python3 report.py events [--upcoming]       List events
   python3 report.py contacts <jid>            Contacts for a job
 """
+import sys
 from lib.report import main
 
 if __name__ == "__main__":
