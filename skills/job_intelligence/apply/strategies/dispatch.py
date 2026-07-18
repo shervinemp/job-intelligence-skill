@@ -26,7 +26,19 @@ def _element_value(page, sel):
             if (el.tagName === 'SELECT') return el.options[el.selectedIndex]?.text || el.value || '';
             if (el.type === 'checkbox') return el.checked ? '__checked__' : '';
             const role = el.getAttribute('role') || '';
-            if (role === 'combobox' || el.tagName === 'DROPDOWN') return el.textContent?.trim() || el.value || '';
+            if (role === 'combobox' || el.tagName === 'DROPDOWN') {{
+                const v = el.value || '';
+                if (v) return v;
+                const owns = el.getAttribute('aria-owns');
+                if (owns) {{
+                    const lb = document.getElementById(owns);
+                    if (lb) {{
+                        const sel = lb.querySelector('[aria-selected="true"], [class*="selected"], [class*="highlight"]');
+                        if (sel) return sel.textContent?.trim() || '';
+                    }}
+                }}
+                return el.textContent?.trim() || '';
+            }}
             if (el.tagName === 'DIV' || el.isContentEditable) return el.textContent?.trim() || '';
             return el.value || el.textContent?.trim() || '';
         }}""") or "").strip()
