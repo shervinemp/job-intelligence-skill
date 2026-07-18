@@ -927,6 +927,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     unfilled = radio_unfilled + text_unfilled
 
     # Platform handler: run_modal_flow handles multi-page forms + submission
+    from apply.common.handler_base import run_modal_flow
     handler = registry.get_handler() if registry else None
     if handler:
         from apply.common.policy import load_policy, resolve_mode
