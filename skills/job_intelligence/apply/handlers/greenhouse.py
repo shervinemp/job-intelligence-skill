@@ -101,12 +101,17 @@ class GreenhouseHandler(PlatformHandler):
                 if (!label) label = el.name || '';
                 let val = (el.value || '').trim();
                 if (!val && el.getAttribute('role') === 'combobox') {
-                    const owns = el.getAttribute('aria-owns');
-                    if (owns) {
-                        const lb = document.getElementById(owns);
-                        if (lb) {
-                            const sel = lb.querySelector('[aria-selected="true"]');
-                            if (sel) val = (sel.textContent || '').trim();
+                    // React-Select: selected value rendered in sibling div
+                    const sv = el.parentElement?.querySelector('.select__single-value');
+                    if (sv) val = (sv.textContent || '').trim();
+                    if (!val) {
+                        const owns = el.getAttribute('aria-owns');
+                        if (owns) {
+                            const lb = document.getElementById(owns);
+                            if (lb) {
+                                const sel = lb.querySelector('[aria-selected="true"]');
+                                if (sel) val = (sel.textContent || '').trim();
+                            }
                         }
                     }
                 }
@@ -197,13 +202,15 @@ class GreenhouseHandler(PlatformHandler):
             return False
 
     def can_proceed(self, page) -> bool:
-        btns = page.evaluate("""() => {
-            return Array.from(document.querySelectorAll('button, a[role="button"], input[type="submit"]'))
-                .filter(el => el.offsetParent !== null && !el.disabled)
-                .map(el => (el.textContent || el.value || '').trim().toLowerCase());
-        }""") or []
-        kw = _SUBMIT_TEXTS + _NEXT_TEXTS + ("review", "done")
-        return any(any(k in b for k in kw) for b in btns)
+        # Use locator (cross-frame) not evaluate (main-frame only)
+        for t in _SUBMIT_TEXTS + _NEXT_TEXTS + ("review", "done"):
+            try:
+                btn = page.locator(f'button:has-text("{t}")')
+                if btn.count() > 0:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def click_next(self, page) -> ActionResult:
         for t in _NEXT_TEXTS:

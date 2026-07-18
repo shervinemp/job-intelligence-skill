@@ -71,6 +71,25 @@ class AriaComboboxReader(FieldValueReader):
             return None
 
 
+class ReactSelectReader(FieldValueReader):
+    """React-Select: selected value rendered in sibling div.select__single-value.
+    React-Select is used by thousands of sites (Greenhouse, many others).
+    The selected option text is rendered as a styled div, not in el.value."""
+    name = "react_select"
+
+    def read(self, page, sel, ans=None):
+        try:
+            v = (page.evaluate(f"""() => {{
+                const el = document.querySelector({json.dumps(sel)});
+                if (!el) return null;
+                const sv = el.parentElement?.querySelector('.select__single-value');
+                return sv ? sv.textContent?.trim() || null : null;
+            }}""") or "").strip() or None
+            return v
+        except Exception:
+            return None
+
+
 class FuzzyComboboxReader(FieldValueReader):
     """Fallback: fuzzy-match listbox options against expected answer.
     Used by platforms (e.g. Greenhouse) that don't set aria-selected on selection.
@@ -106,6 +125,7 @@ class FuzzyComboboxReader(FieldValueReader):
 _DEFAULT_CASCADE = [
     StandardReader(),
     AriaComboboxReader(),
+    ReactSelectReader(),
     FuzzyComboboxReader(),
 ]
 
