@@ -175,7 +175,7 @@ verify → Confirm the application was received.
 8. **One-shot fill for SPA forms.** Validation fail → page reloads → all values lost. Fill everything then submit once.
 9. **Autocomplete fields need clicks, not text.** Flag for user help.
 10. **Don't contradict profile answers.** Before filling any field, check the `Profile answers:` block. If what you're about to fill contradicts a profile answer, stop and fix it.
-11. **No script-injected submits.** Never use `page.evaluate` to click Submit. Only use `act --submit --confirm` through the pipeline. Circumventing the gate means no preview, no contradiction check, no safety.
+11. **Use the pipeline, not raw scripts.** Don't bypass gates. Review before confirming.
 
 ## Platform quirks
 
