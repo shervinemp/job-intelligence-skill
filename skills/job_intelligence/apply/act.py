@@ -679,6 +679,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
                     break
             except Exception:
                 continue
+
     # Poll for React SPA fields that render 3-8s after DOMContentLoaded
     if ps.get("fieldCount", 0) == 0:
         for _ in range(16):
