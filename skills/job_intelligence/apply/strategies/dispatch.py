@@ -33,8 +33,8 @@ def _element_value(page, sel):
                 if (owns) {{
                     const lb = document.getElementById(owns);
                     if (lb) {{
-                        const sel = lb.querySelector('[aria-selected="true"], [class*="selected"], [class*="highlight"]');
-                        if (sel) return sel.textContent?.trim() || '';
+                        const s = lb.querySelector('[aria-selected="true"], [class*="selected"], [class*="highlight"]');
+                        if (s) return s.textContent?.trim() || '';
                     }}
                 }}
                 return el.textContent?.trim() || '';
