@@ -175,10 +175,14 @@ class GreenhouseHandler(PlatformHandler):
 
     def upload(self, page, field: Field, file_path: str) -> bool:
         try:
-            inp = page.locator(_FILE_SEL).first
-            inp.set_input_files(file_path)
-            time.sleep(2)
-            return True
+            lbl = (field.label or "").lower()
+            inputs = page.locator(_FILE_SEL)
+            idx = 1 if "cover" in lbl else 0
+            if idx < inputs.count():
+                inputs.nth(idx).set_input_files(file_path)
+                time.sleep(2)
+                return True
+            return False
         except Exception:
             return False
 
@@ -260,21 +264,28 @@ class GreenhouseHandler(PlatformHandler):
     def ensure_resume(self, page, jid: str) -> bool:
         from lib.config import RESULTS_DIR
         rd = os.path.join(RESULTS_DIR, jid)
-        pdf_path = None
+        resume_path = None
+        cover_path = None
         if os.path.isdir(rd):
             for f in sorted(os.listdir(rd)):
-                if "Resume" in f and f.endswith(".pdf"):
-                    pdf_path = os.path.join(rd, f)
-                    break
-        if not pdf_path or not os.path.exists(pdf_path):
-            print(f"RESUME:{jid} no tailored resume found", file=sys.stderr)
-            return True  # Greenhouse may auto-use profile, don't block
+                fp = os.path.join(rd, f)
+                if "Cover" in f and f.endswith(".pdf"):
+                    cover_path = fp
+                elif "Resume" in f and f.endswith(".pdf"):
+                    resume_path = fp
         try:
-            inp = page.locator(_FILE_SEL).first
-            if inp.count() > 0:
-                inp.set_input_files(pdf_path)
-                print(f"RESUME:{jid} uploaded {os.path.basename(pdf_path)}", file=sys.stderr)
-                time.sleep(2)
+            file_inputs = page.locator(_FILE_SEL)
+            count = file_inputs.count()
+            if resume_path and count > 0:
+                file_inputs.nth(0).set_input_files(resume_path)
+                print(f"RESUME:{jid} uploaded {os.path.basename(resume_path)}", file=sys.stderr)
+                time.sleep(1)
+            if cover_path and count > 1:
+                file_inputs.nth(1).set_input_files(cover_path)
+                print(f"COVER:{jid} uploaded {os.path.basename(cover_path)}", file=sys.stderr)
+                time.sleep(1)
+            elif cover_path:
+                print(f"COVER:{jid} found but only 1 file input", file=sys.stderr)
             return True
         except Exception as e:
             print(f"RESUME:{jid} upload error: {e}", file=sys.stderr)
