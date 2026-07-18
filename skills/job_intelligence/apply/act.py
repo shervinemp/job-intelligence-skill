@@ -910,6 +910,30 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     filled = radio_filled + text_filled
     unfilled = radio_unfilled + text_unfilled
 
+    # Platform handler: run_modal_flow handles multi-page forms + submission
+    handler = registry.get_handler() if registry else None
+    if handler:
+        from apply.common.policy import load_policy, resolve_mode
+        from apply.common.gate import submit_decision
+        mode = resolve_mode(None)
+        policy = load_policy()
+        action, reason = submit_decision(mode, policy, None)
+        allow_submit = (action == "submit")
+        modal_result = run_modal_flow(
+            handler, page, jid, profile,
+            answers=answers,
+            allow_submit=allow_submit,
+            initial_fields=ps.get("fields", []),
+        )
+        if modal_result == "done":
+            filled = len(ps.get("fields", []))
+            unfilled = []
+            emit_status("submitted")
+            emit_next("verify")
+            state["result"] = "submitted"
+            read_and_save(page, state)
+            return
+
     # EEO/demographic fields — detect by decline options (language-agnostic),
     # report to LLM but DO NOT auto-fill (let LLM decide via --answers).
     # Saved answers auto-apply on future jobs.
