@@ -122,10 +122,19 @@ act --fill (dry-run) → Catalogs every field on the page.
 act --fill --answers '{"label": "value"}' → Fill fields marked ❓.
     • Fill ALL required fields in one shot. SPA forms wipe everything on validation error.
     • Only fill fields you're confident about.
+    • Check every value against profile answers. Don't contradict.
     • Leave salary, dates, referral source unfilled unless profile has them.
     • The preview shows provenance (profile/answers/derived/auto_decline)
       for every value. Check it before confirming.
     • If unfilled remain, repeat with more --answers.
+
+─── PHASE 4.5: PREVIEW (MANDATORY) ───
+act --submit → Read every value in the preview.
+    Compare against Profile answers block. Flag contradictions.
+    Do NOT skip to --confirm.
+
+─── PHASE 5: CONFIRM ───
+act --submit --confirm → Only after preview confirms no contradictions.
 
 ─── PHASE 4: NAVIGATE & REPEAT ───
 act --next → Advance to next page.
@@ -156,16 +165,17 @@ verify → Confirm the application was received.
 
 ## Orchestrator rules
 
-1. **Don't guess personal data.** Check profile.json + resume first. Still missing → ask (critical) or skip (optional).
-2. **Don't fill optional fields.** If not marked required, leave it. They pass silently.
-3. **Don't echo PII.** Refer to fields by label only — never include the actual value in output.
-4. **Always run verify after `NEXT: verify`.** Even if DB says submitted. DB can be stale.
-5. **Inspect first when stuck.** `NEXT: act --inspect` → run inspect. Don't retry `--fill` or `--next` blind.
-6. **Don't collapse gates.** Each gate (dry-run, preview) needs its own round-trip. State-enforced.
-7. **One-shot fill for SPA forms.** Validation error = page re-render = all values lost. Fill everything then submit once. Never submit partially.
-8. **Autocomplete fields need clicks, not text.** Province, Country dropdowns: `el.value =` doesn't work. Flag for user intervention.
-9. **Trigger resume upload.** File input on page → upload. Don't assume auto.
-10. **Don't fabricate resume content.** Frame existing experience only. If the profile doesn't support a claim, rewrite without it.
+1. **Don't guess personal data.** Check profile + resume first. Missing → ask (critical) or skip (optional).
+2. **Don't fill optional fields.** Not marked required → leave it.
+3. **Don't echo PII.** Labels only, never values in output.
+4. **Always verify after `NEXT: verify`.** DB can be stale.
+5. **Inspect when stuck.** Don't retry blind.
+6. **Don't collapse gates.** Dry-run → fill → preview → confirm. Each its own round-trip. See [#apply-pipeline](apply-pipeline).
+7. **Preview before confirm.** Always run `act --submit` (no --confirm) first. Read every value. Check it against profile answers. If anything contradicts the profile, fix it before confirming.
+8. **One-shot fill for SPA forms.** Validation fail → page reloads → all values lost. Fill everything then submit once.
+9. **Autocomplete fields need clicks, not text.** Flag for user help.
+10. **Don't contradict profile answers.** Before filling any field, check the `Profile answers:` block. If what you're about to fill contradicts a profile answer, stop and fix it.
+11. **No script-injected submits.** Never use `page.evaluate` to click Submit. Only use `act --submit --confirm` through the pipeline. Circumventing the gate means no preview, no contradiction check, no safety.
 
 ## Platform quirks
 
