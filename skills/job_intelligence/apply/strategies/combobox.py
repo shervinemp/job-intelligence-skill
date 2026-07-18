@@ -58,18 +58,8 @@ def _select_option(page, sel, ans):
         if oid:
             try:
                 page.locator(oid).click(force=True, timeout=3000)
-                time.sleep(0.5)
-                # Verify the dropdown closed — if still open, selection may not have taken
-                still_open = page.evaluate(f"""() => {{
-                    const input = document.querySelector('{sel}');
-                    if (!input) return false;
-                    const owns = input.getAttribute('aria-owns');
-                    if (!owns) return false;
-                    const lb = document.getElementById(owns);
-                    return lb && lb.offsetParent !== null;
-                }}""")
-                if not still_open:
-                    return True
+                time.sleep(0.3)
+                return True
             except Exception:
                 pass
     return False
