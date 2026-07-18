@@ -84,7 +84,7 @@ The builder also validates the JSON before generating PDFs — run `--validate` 
 ## Apply pipeline
 
 ```
-detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --submit --confirm <jid> → verify <jid>
+detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --submit <jid> → verify <jid>
 ```
 
 | Step | What it does |
@@ -94,7 +94,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
-| `act --submit <jid> --confirm` | Submit. **`--confirm` req'd**. LinkedIn: handler on `--fill`. Other ATS: direct. |
+| `act --submit <jid>` | Submit. LinkedIn: handler on `--fill`. Other ATS: direct. |
 | `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 | `apply.py reject <jid>` | Skip permanently |
@@ -131,10 +131,6 @@ act --fill --answers '{"label": "value"}' → Fill fields marked ❓.
 ─── PHASE 4.5: PREVIEW (MANDATORY) ───
 act --submit → Read every value in the preview.
     Compare against Profile answers block. Flag contradictions.
-    Do NOT skip to --confirm.
-
-─── PHASE 5: CONFIRM ───
-act --submit --confirm → Only after preview confirms no contradictions.
 
 ─── PHASE 4: NAVIGATE & REPEAT ───
 act --next → Advance to next page.
@@ -142,9 +138,8 @@ act --next → Advance to next page.
              If validation errors → routed back to --fill.
 
 ─── PHASE 5: VERIFY ───
-act --submit (preview) → Review provenance-grouped field listing.
-                         Check for inconsistencies across pages.
-                         Only pass --confirm after review.
+act --submit → Review provenance-grouped field listing.
+               Check for inconsistencies across pages.
 verify → Confirm the application was received.
           Never skip this step.
 ```
@@ -171,11 +166,11 @@ verify → Confirm the application was received.
 4. **Always verify after `NEXT: verify`.** DB can be stale.
 5. **Inspect when stuck.** Don't retry blind.
 6. **Don't collapse gates.** Dry-run → fill → preview → confirm. Each its own round-trip. See [#apply-pipeline](apply-pipeline).
-7. **Preview before confirm.** Always run `act --submit` (no --confirm) first. Read every value. Check it against profile answers. If anything contradicts the profile, fix it before confirming.
+7. **Preview before submit.** Always run `act --submit` first. Read every value. Check against profile answers. Fix contradictions before proceeding.
 8. **One-shot fill for SPA forms.** Validation fail → page reloads → all values lost. Fill everything then submit once.
 9. **Autocomplete fields need clicks, not text.** Flag for user help.
 10. **Don't contradict profile answers.** Before filling any field, check the `Profile answers:` block. If what you're about to fill contradicts a profile answer, stop and fix it.
-11. **Use the pipeline, not raw scripts.** Don't bypass gates. Review before confirming.
+11. **No custom submit scripts.** Use the pipeline. No `page.evaluate` clicks, no standalone scripts.
 
 ## Platform quirks
 
