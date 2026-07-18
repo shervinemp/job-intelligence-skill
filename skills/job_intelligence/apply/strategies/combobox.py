@@ -4,17 +4,17 @@ import json, time
 
 def _find_any_trigger(page, sel):
     """Find the best clickable trigger. Does NOT click. Returns selector."""
-    is_hidden = page.evaluate(f"() => {{ const el = document.querySelector({json.dumps(sel)}); if (!el) return true; const s = window.getComputedStyle(el); return s.display === 'none' || s.visibility === 'hidden'; }}")
+    is_hidden = page.evaluate(f"() => {{ const el = document.querySelector('{sel}'); if (!el) return true; const s = window.getComputedStyle(el); return s.display === 'none' || s.visibility === 'hidden'; }}")
     if not is_hidden:
         return sel
     siblings = page.evaluate(f"""() => {{
-        const el = document.querySelector({json.dumps(sel)});
+        const el = document.querySelector('{sel}');
         if (!el || !el.parentElement) return [];
         return Array.from(el.parentElement.children).filter(c => c !== el && c.id).map(c => '[id="' + c.id + '"]');
     }}""")
     if siblings:
         return siblings[0]
-    parent_id = page.evaluate(f"document.querySelector({json.dumps(sel)})?.parentElement?.id || ''")
+    parent_id = page.evaluate(f"document.querySelector('{sel}')?.parentElement?.id || ''")
     if parent_id:
         return f'[id="{parent_id}"]'
     return sel
@@ -27,7 +27,7 @@ def _select_option(page, sel, ans):
         time.sleep(0.5)
         oid = page.evaluate(f"""() => {{
             const a = {json.dumps(ans)};
-            const input = document.querySelector({json.dumps(sel)});
+            const input = document.querySelector('{sel}');
             if (!input) return '';
             const owns = input.getAttribute('aria-owns');
             const root = owns ? document.getElementById(owns) : document;
@@ -72,7 +72,7 @@ def fill(page, f, ans):
     from apply.strategies import text as _text
     click_sel = _find_any_trigger(page, sel)
     try:
-        page.evaluate(f"document.querySelector({json.dumps(click_sel)})?.click()")
+        page.evaluate(f"document.querySelector('{click_sel}')?.click()")
     except Exception:
         return bool(_text.native_setter(page, sel, ans))
     url_before = page.url
@@ -80,7 +80,7 @@ def fill(page, f, ans):
     # for options — required for Greenhouse, Workday, and other search-based dropdowns
     try:
         page.evaluate(f"""() => {{
-            const el = document.querySelector({json.dumps(sel)});
+            const el = document.querySelector('{sel}');
             if (!el) return;
             el.value = {json.dumps(ans)};
             el.dispatchEvent(new Event('input', {{ bubbles: true }}));

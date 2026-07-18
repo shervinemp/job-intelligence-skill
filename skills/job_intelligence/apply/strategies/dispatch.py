@@ -6,9 +6,21 @@ from apply.strategies import combobox, text, select
 from apply.steps.probe import resolve_selector
 
 
+def _frame_for_sel(page, sel):
+    """Find Playwright frame containing element matching sel. Returns frame or None."""
+    for f in page.frames:
+        try:
+            if f.evaluate(f"() => !!document.querySelector({json.dumps(sel)})"):
+                return f
+        except Exception:
+            continue
+    return None
+
+
 def _element_value(page, sel):
     try:
-        return (page.evaluate(f"""() => {{
+        fr = _frame_for_sel(page, sel) or page
+        return (fr.evaluate(f"""() => {{
             const el = document.querySelector({json.dumps(sel)});
             if (!el) return '';
             if (el.tagName === 'SELECT') return el.options[el.selectedIndex]?.text || el.value || '';
@@ -67,27 +79,30 @@ def field_deterministic(page, f, ans):
             return False
         f["_sel"] = sel
 
+    # Route fills to the correct frame (iframe fields need frame-level access)
+    fr = _frame_for_sel(page, sel) or page
+
     before = _element_value(page, sel)
     label = f.get("label", "")
-    aft = before  # will be updated after each attempt
+    aft = before
 
     if f["tag"] == "INPUT" and f.get("type") == "checkbox":
         lbl = (label or "").lower()
         if any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm", "understand"]):
             try:
-                cb = page.locator(sel)
+                cb = fr.locator(sel)
                 if cb.count() and not cb.is_checked():
                     cb.check(force=True)
                     aft = _element_value(page, sel)
                     if aft != before:
                         return True
-                return True  # already checked = success
+                return True
             except Exception:
                 pass
         return False
 
     if f["tag"] == "SELECT":
-        el = page.query_selector(sel)
+        el = fr.query_selector(sel)
         if not el:
             return False
         methods = getattr(select, "METHOD_CHAIN", ["select_option"])
@@ -96,41 +111,41 @@ def field_deterministic(page, f, ans):
                 aft = _element_value(page, sel)
                 if _check_delta(page, sel, before, aft, ans, label):
                     return True
-        return _try_text_fallback(page, f, ans, sel)
+        return _try_text_fallback(fr, f, ans, sel)
 
     if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
-        ok = bool(combobox.fill(page, f, ans))
+        ok = bool(combobox.fill(fr, f, ans))
         if ok:
             aft = _element_value(page, sel)
             if _check_delta(page, sel, before, aft, ans, label):
                 return True
-        return _try_text_fallback(page, f, ans, sel)
+        return _try_text_fallback(fr, f, ans, sel)
 
     if f.get("datepicker") == "flatpickr":
         from apply.strategies import datepicker
-        ok = bool(datepicker.fill(page, sel, ans))
+        ok = bool(datepicker.fill(fr, sel, ans))
         if ok:
             aft = _element_value(page, sel)
             if _check_delta(page, sel, before, aft, ans, label):
                 return True
-        return _try_text_fallback(page, f, ans, sel)
+        return _try_text_fallback(fr, f, ans, sel)
 
     if f["tag"] == "DIV" or f.get("contenteditable"):
         from apply.strategies import contenteditable as _ce
-        ok = bool(_ce.fill(page, sel, ans))
+        ok = bool(_ce.fill(fr, sel, ans))
         if ok:
             aft = _element_value(page, sel)
             if _check_delta(page, sel, before, aft, ans, label):
                 return True
-        return _try_text_fallback(page, f, ans, sel)
+        return _try_text_fallback(fr, f, ans, sel)
 
     if f["tag"] in ("INPUT", "TEXTAREA"):
-        el = page.query_selector(sel) if sel else None
+        el = fr.query_selector(sel) if sel else None
         if not el:
             return False
         methods = getattr(text, "METHOD_CHAIN", ["fill"])
         for method in methods:
-            if text.fill_text_field(page, f, ans, sel, el, method=method):
+            if text.fill_text_field(fr, f, ans, sel, el, method=method):
                 aft = _element_value(page, sel)
                 if _check_delta(page, sel, before, aft, ans, label):
                     return True

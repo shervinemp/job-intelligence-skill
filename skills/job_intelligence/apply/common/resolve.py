@@ -144,5 +144,6 @@ def resolution_for_fill(
     label: str,
     profile: dict,
     answers_override: Optional[dict] = None,
+    available_options: Optional[list] = None,
 ) -> Resolution:
     return resolve(label, profile, answers_override=answers_override)
