@@ -64,8 +64,22 @@ def _select_option(page, sel, ans):
     return False
 
 
+def _verify_filled(page, sel, ans):
+    """Check if the field has the expected value after an attempt."""
+    try:
+        v = (page.evaluate(f"() => document.querySelector('{sel}')?.value || ''") or "").strip()
+        return v.lower() == ans.lower() or v.lower().startswith(ans.lower())
+    except Exception:
+        return False
+
+
 def fill(page, f, ans):
-    """Fill a combobox/dropdown widget via cascading strategy."""
+    """Fill a combobox/dropdown widget via graduated escalation:
+
+    1. Click + poll existing options (standard dropdown)
+    2. Real keystrokes via page.keyboard.type() + poll dynamic options (search autocomplete)
+    3. Native setter as last resort (brittle, but catches everything else)
+    """
     sel = f.get("_sel", "")
     if not sel:
         return False
@@ -76,21 +90,24 @@ def fill(page, f, ans):
     except Exception:
         return bool(_text.native_setter(page, sel, ans))
     url_before = page.url
-    # Type the answer into the input to trigger autocomplete suggestions before polling
-    # for options — required for Greenhouse, Workday, and other search-based dropdowns
-    try:
-        page.evaluate(f"""() => {{
-            const el = document.querySelector('{sel}');
-            if (!el) return;
-            el.value = {json.dumps(ans)};
-            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-        }}""")
-        time.sleep(1)
-    except Exception:
-        pass
+
+    # Level 1: click + poll for pre-existing options (standard dropdowns)
     if _select_option(page, sel, ans):
         return True
+
+    # Level 2: real keystrokes to trigger search-based autocomplete (Greenhouse etc.)
+    try:
+        el = page.locator(sel)
+        if el.count():
+            el.first.focus()
+            page.keyboard.type(ans, delay=50)
+            time.sleep(1.5)
+            if _select_option(page, sel, ans):
+                return True
+    except Exception:
+        pass
+
+    # Level 3: native setter as last resort
     if page.url != url_before:
         page.goto(url_before, wait_until="domcontentloaded", timeout=15000)
     return bool(_text.native_setter(page, sel, ans))
