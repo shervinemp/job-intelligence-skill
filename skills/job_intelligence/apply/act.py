@@ -797,6 +797,14 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
     except Exception:
         pass
 
+    # Dismiss cookie consent overlays — remove OneTrust and similar banners from DOM
+    page.evaluate("""() => {
+        for (const el of document.querySelectorAll('#onetrust-banner-sdk, #onetrust-consent-sdk, .otFlat, [class*="onetrust"], [id*="onetrust"]')) {
+            el.remove();
+        }
+    }""")
+    time.sleep(0.5)
+
     # Probe: try standard first, cascade on failure
     ps = read_page(page)
     # Use agent's MutationObserver-based field detection (no polling).
