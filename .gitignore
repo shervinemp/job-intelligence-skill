@@ -3,3 +3,6 @@ tmp/
 batch_apply.py
 *.pyc
 __pycache__/
+
+# Personal data
+profile.json
