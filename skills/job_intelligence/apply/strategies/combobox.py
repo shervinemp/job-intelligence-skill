@@ -100,12 +100,38 @@ def fill(page, f, ans):
         el = page.locator(sel)
         if el.count():
             el.first.focus()
-            page.keyboard.type(ans, delay=50)
+            time.sleep(0.3)
+            if hasattr(page, 'keyboard'):
+                # Page object — real keystrokes via Playwright
+                page.keyboard.type(ans, delay=50)
+            else:
+                # Frame object — dispatch keyboard events via evaluate
+                page.evaluate(f"""() => {{
+                    const el = document.querySelector('{sel}');
+                    if (!el) return;
+                    el.value = '';
+                    el.focus();
+                    const s = {json.dumps(ans)};
+                    for (let i = 0; i < s.length; i++) {{
+                        const ch = s[i];
+                        el.dispatchEvent(new KeyboardEvent('keydown', {{key: ch, bubbles: true}}));
+                        el.dispatchEvent(new KeyboardEvent('keypress', {{key: ch, bubbles: true}}));
+                        el.value += ch;
+                        el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                        el.dispatchEvent(new KeyboardEvent('keyup', {{key: ch, bubbles: true}}));
+                    }}
+                }}""")
             time.sleep(1.5)
             if _select_option(page, sel, ans):
                 return True
     except Exception:
         pass
+    finally:
+        # Clean up any partial input left by keyboard typing before falling through
+        try:
+            page.evaluate(f"document.querySelector('{sel}')?.value = ''")
+        except Exception:
+            pass
 
     # Level 3: native setter as last resort
     if page.url != url_before:
