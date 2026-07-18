@@ -114,39 +114,45 @@ def fill(page, f, ans):
     except Exception:
         pass
 
-    # Level 2: real keystrokes to trigger search-based autocomplete (Greenhouse etc.)
+    # Level 2: click control to focus visible input, then keystrokes for autocomplete
     try:
-        el = page.locator(sel)
-        if el.count():
-            el.first.focus()
-            time.sleep(0.3)
-            if hasattr(page, 'keyboard'):
-                # Page object — real keystrokes via Playwright
-                page.keyboard.type(ans, delay=50)
-            else:
-                # Frame object — dispatch keyboard events via evaluate
-                page.evaluate(f"""() => {{
-                    const el = document.querySelector('{sel}');
-                    if (!el) return;
-                    el.value = '';
-                    el.focus();
-                    const s = {json.dumps(ans)};
-                    for (let i = 0; i < s.length; i++) {{
-                        const ch = s[i];
-                        el.dispatchEvent(new KeyboardEvent('keydown', {{key: ch, bubbles: true}}));
-                        el.dispatchEvent(new KeyboardEvent('keypress', {{key: ch, bubbles: true}}));
-                        el.value += ch;
-                        el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                        el.dispatchEvent(new KeyboardEvent('keyup', {{key: ch, bubbles: true}}));
-                    }}
-                }}""")
-            time.sleep(1.5)
-            if _select_option(page, sel, ans):
-                return True
+        # First ensure the control is focused (opens the input for typing)
+        page.evaluate(f"""() => {{
+            const el = document.querySelector('{sel}');
+            if (!el) return;
+            const ctrl = el.closest('.select__control');
+            if (ctrl) {{
+                const inp = ctrl.querySelector('.select__input input');
+                if (inp) inp.focus();
+                else ctrl.click();
+            }} else {{
+                el.parentElement?.click();
+            }}
+        }}""")
+        time.sleep(0.5)
+        if hasattr(page, 'keyboard'):
+            page.keyboard.type(ans, delay=50)
+        else:
+            page.evaluate(f"""() => {{
+                const inp = document.querySelector('.select__input input');
+                if (!inp) return;
+                inp.focus();
+                const s = {json.dumps(ans)};
+                for (let i = 0; i < s.length; i++) {{
+                    const ch = s[i];
+                    inp.dispatchEvent(new KeyboardEvent('keydown', {{key: ch, bubbles: true, cancelable: true}}));
+                    inp.dispatchEvent(new KeyboardEvent('keypress', {{key: ch, bubbles: true, cancelable: true}}));
+                    inp.value += ch;
+                    inp.dispatchEvent(new Event('input', {{bubbles: true, cancelable: true}}));
+                    inp.dispatchEvent(new KeyboardEvent('keyup', {{key: ch, bubbles: true, cancelable: true}}));
+                }}
+            }}""")
+        time.sleep(1.5)
+        if _select_option(page, sel, ans):
+            return True
     except Exception:
         pass
     finally:
-        # Clean up any partial input left by keyboard typing before falling through
         try:
             page.evaluate(f"document.querySelector('{sel}')?.value = ''")
         except Exception:
