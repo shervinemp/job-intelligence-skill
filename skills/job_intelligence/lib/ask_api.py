@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import sys; sys.stdout.reconfigure(encoding="utf-8", errors="replace"); del sys
+
 """lib/ask_api.py — Send image + prompt to an OpenAI-compatible LLM endpoint.
 
 Usage:
