@@ -18,9 +18,10 @@ def _frame_for_sel(page, sel):
 
 
 def _element_value(page, sel):
-    """Read field value from DOM. Covers 99% of sites — el.value for inputs,
-    textContent for DIVs, selected option text for SELECTs.
-    Comboboxes with custom rendering (e.g. Greenhouse) may return empty."""
+    """Read field value from DOM. Waterfall:
+    1. el.value (standard inputs, 85% of sites)
+    2. aria-owns listbox option text (WAI-ARIA combobox pattern, 10-15%)
+    3. textContent (DIV-based fields)"""
     try:
         fr = _frame_for_sel(page, sel) or page
         return (fr.evaluate(f"""() => {{
@@ -29,7 +30,19 @@ def _element_value(page, sel):
             if (el.tagName === 'SELECT') return el.options[el.selectedIndex]?.text || el.value || '';
             if (el.type === 'checkbox') return el.checked ? '__checked__' : '';
             if (el.tagName === 'DIV' || el.isContentEditable) return el.textContent?.trim() || '';
-            return el.value || '';
+            const v = el.value || '';
+            if (v) return v;
+            // Standard WAI-ARIA combobox: read selected option from listbox
+            const owns = el.getAttribute('aria-owns');
+            if (owns) {{
+                const lb = document.getElementById(owns);
+                if (lb) {{
+                    for (const o of lb.querySelectorAll('[role="option"]')) {{
+                        if (o.getAttribute('aria-selected') === 'true') return o.textContent?.trim() || '';
+                    }}
+                }}
+            }}
+            return '';
         }}""") or "").strip()
     except Exception:
         return ""
