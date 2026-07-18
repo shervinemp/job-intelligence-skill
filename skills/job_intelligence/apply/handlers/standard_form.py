@@ -112,6 +112,7 @@ class StandardFormHandler(PlatformHandler):
     # ── Field ops ─────────────────────────────────────────────────────
 
     def extract_fields(self, page) -> list[Field]:
+        # Try the quick DOM scan first
         raw: list[dict[str, Any]] = page.evaluate("""() => {
             const form = document.querySelector('form') || document.body;
             const sel = 'input:not([type=hidden]):not([type=submit]):not([type=radio]), select, textarea';
@@ -134,7 +135,6 @@ class StandardFormHandler(PlatformHandler):
                         if (h) label = h.textContent.trim();
                     }
                 }
-                // Try aria-label or title
                 if (!label) label = el.getAttribute('aria-label') || el.title || '';
                 if (!label) label = el.name || '';
 
@@ -160,7 +160,14 @@ class StandardFormHandler(PlatformHandler):
             }
             return results;
         }""") or []
-        return [self._make_field(r) for r in raw]
+        if raw:
+            return [self._make_field(r) for r in raw]
+
+        # Fallback: use the field_reader's more sophisticated scan (handles
+        # Backbone/Marionette SPAs, dynamic rendering, shadow DOM, etc.)
+        from apply.common.field_reader import read_fields as _rf
+        result = _rf(page)
+        return [self._make_field(r) for r in result.get("fields", [])]
 
     def _make_field(self, r: dict) -> Field:
         type_map = {"TEXT": FieldType.TEXT, "SELECT": FieldType.SELECT,
@@ -179,7 +186,29 @@ class StandardFormHandler(PlatformHandler):
             name=r.get("name", ""),
         )
 
+    @staticmethod
+    def _verify_fill(page, field: Field, expected: str) -> bool:
+        """Check if the field value was actually set after a fill attempt.
+        Waits a beat to let Backbone re-render settle."""
+        import time as _t
+        _t.sleep(0.3)
+        try:
+            actual = page.evaluate(f"() => document.querySelector({json.dumps(field.selector)})?.value || ''")
+            return bool(actual) and expected in actual
+        except Exception:
+            return False
+
     def fill(self, page, field: Field, value: str) -> FillResult:
+        # Strip phone number formatting for phone-like fields (maxlength=10
+        # fields reject formatted numbers like "+1 (343) 558-1744").
+        # North American numbers with country code (11 digits) are stripped to
+        # 10 digits by removing the leading 1 (maxlength=10 form expects local).
+        if re.search(r'phone|contact|mobile|cell', field.label, re.I):
+            digits = re.sub(r'\D', '', value)
+            if len(digits) == 11 and digits.startswith('1'):
+                digits = digits[1:]  # Strip leading country code → 10-digit local
+            if 7 <= len(digits) <= 15:
+                value = digits
         try:
             if field.type == FieldType.SELECT:
                 ok = page.evaluate(f"""() => {{
@@ -195,7 +224,38 @@ class StandardFormHandler(PlatformHandler):
             elif field.framework == Framework.VANILLA:
                 ok = set_vanilla_input(page, field.selector, value)
             else:
-                ok = set_react_input(page, field.selector, value)
+                # jQuery-first: if jQuery is loaded, use .val() which stores
+                # in jQuery's data cache AND survives Backbone re-renders.
+                # Fallback: Playwright fill → React nativeValueSetter.
+                el_js = json.dumps(field.selector)
+                val_js = json.dumps(str(value))
+                try:
+                    has_jq = page.evaluate("typeof jQuery !== 'undefined'")
+                except Exception:
+                    has_jq = False
+                if has_jq:
+                    page.evaluate(f"""() => {{
+                        const el = document.querySelector({el_js});
+                        if (!el) return;
+                        jQuery(el).val({val_js}).trigger('change').trigger('input');
+                    }}""")
+                    ok = True
+                else:
+                    try:
+                        loc = page.locator(field.selector)
+                        if loc.count() > 0:
+                            loc.first.fill(value)
+                            ok = _verify_fill(page, field, value)
+                            if not ok:
+                                ok = set_react_input(page, field.selector, value)
+                            if not ok:
+                                loc.first.click()
+                                loc.first.press_sequentially(value, delay=15)
+                                ok = _verify_fill(page, field, value)
+                        else:
+                            ok = set_react_input(page, field.selector, value)
+                    except Exception:
+                        ok = set_react_input(page, field.selector, value)
             return FillResult(ok=ok, field_key=field.key)
         except Exception as e:
             return FillResult(ok=False, field_key=field.key, error=str(e))
@@ -239,6 +299,7 @@ class StandardFormHandler(PlatformHandler):
                 ]:
                     btn = page.locator(sel)
                     if btn.count() > 0 and btn.first.is_visible():
+                        # Playwright's click() auto-waits for enabled + stable
                         btn.first.click()
                         return True
             except Exception:
@@ -314,7 +375,7 @@ class StandardFormHandler(PlatformHandler):
     def get_errors(self, page) -> list[str]:
         return page.evaluate("""() => {
             return Array.from(document.querySelectorAll('[role="alert"], .error, [class*="error"], .field-error, [class*="field-error"]'))
-                .filter(e => e.offsetParent !== null)
+                .filter(e => e.offsetParent !== null && (e.textContent || '').length < 200)
                 .map(e => e.textContent.trim())
                 .filter(Boolean);
         }""") or []

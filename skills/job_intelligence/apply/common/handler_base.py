@@ -57,11 +57,11 @@
 """
 
 from __future__ import annotations
-import json, os, time
+import json, os, sys, time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Any, Optional
 
 from apply.common.page_helpers import check_applied_signal, mark_applied
 from apply.common.output import emit_status, emit_next
@@ -390,7 +390,7 @@ def upload_file_by_text(page, dialog_selector: str, text: str, file_path: str) -
         return False
 
 
-def wait_for_fields(handler, page, timeout: float = 12.0, min_fields: int = 3) -> bool:
+def wait_for_fields(handler, page, timeout: float = 12.0, min_fields: int = 1) -> bool:
     """Poll handler.extract_fields() until enough fields appear or timeout.
     
     Returns True if enough fields were found within the timeout.
@@ -405,6 +405,34 @@ def wait_for_fields(handler, page, timeout: float = 12.0, min_fields: int = 3) -
     return len(handler.extract_fields(page)) >= min_fields
 
 
+def _probe_field_to_field(handler: PlatformHandler, raw: dict) -> Field:
+    """Convert a probe-cascade field dict to a handler Field object.
+    The probe fields may lack `key` and `selector` that _make_field expects
+    (they only have `label`, `id`, etc.), so we normalize before passing."""
+    enriched = dict(raw)
+    if "key" not in enriched or not enriched.get("key"):
+        enriched["key"] = enriched.get("label") or enriched.get("name", "")
+    if "selector" not in enriched or not enriched.get("selector"):
+        eid = enriched.get("id") or enriched.get("name", "")
+        enriched["selector"] = f"#{eid}" if eid else ""
+    if hasattr(handler, '_make_field'):
+        return handler._make_field(enriched)
+    type_map = {"TEXT": FieldType.TEXT, "SELECT": FieldType.SELECT,
+                 "FILE": FieldType.FILE, "TEXTAREA": FieldType.TEXTAREA}
+    return Field(
+        key=enriched.get("key", enriched.get("label", "")),
+        label=enriched.get("label", ""),
+        type=type_map.get(enriched.get("type", ""), FieldType.TEXT),
+        required=enriched.get("required", False),
+        framework=Framework.VANILLA,
+        selector=enriched.get("selector", ""),
+        value=enriched.get("value", ""),
+        options=enriched.get("options", []),
+        placeholder=enriched.get("placeholder", ""),
+        name=enriched.get("name", ""),
+    )
+
+
 # ─── Generic flow runner ──────────────────────────────────────────────
 
 def run_modal_flow(
@@ -413,9 +441,11 @@ def run_modal_flow(
     jid: str,
     profile: dict,
     *,
+    answers: Optional[dict] = None,
     allow_submit: bool = False,
     max_steps: int = 10,
     dry_run: bool = False,
+    initial_fields: Optional[list[dict]] = None,
 ) -> str:
     """Generic multi-step modal flow.
 
@@ -429,11 +459,14 @@ def run_modal_flow(
         "paused"  — needs LLM input or manual action
         "failed"  — cannot proceed
     """
-    if not handler.ensure_modal_open(page):
-        if handler.is_applied(page):
-            mark_applied(jid)
-            return "done"
-        return "failed"
+    if not initial_fields:
+        if not handler.ensure_modal_open(page):
+            if handler.is_applied(page):
+                mark_applied(jid)
+                return "done"
+            return "failed"
+    else:
+        print(f"INIT_FIELDS: using {len(initial_fields)} probe-detected fields", file=sys.stderr)
 
     # Upload tailored resume if applicable (handler checks current page state)
     if not handler.ensure_resume(page, jid):
@@ -441,8 +474,16 @@ def run_modal_flow(
         emit_next("detect to retry")
         return "failed"
 
-    for _ in range(max_steps):
+    for step_idx in range(max_steps):
         state = handler.detect(page)
+        # First iteration: prefer probe-detected fields which went through
+        # the full cascade (SPA waits, Apply button clicks, lazy loading).
+        # The handler's detect() still runs for state checks (login, captcha,
+        # rate limit, session timeout) but its field list is replaced.
+        if step_idx == 0 and initial_fields:
+            probe_fields = [_probe_field_to_field(handler, f) for f in initial_fields]
+            if probe_fields:
+                state.fields = probe_fields
 
         if state.is_applied:
             mark_applied(jid)
@@ -484,10 +525,10 @@ def run_modal_flow(
             if f.value:
                 print(f"  ✓ [{f.type.name:6s}] {f.label[:45]:45s} = {f.value[:50]}", file=sys.stderr)
             else:
-                res = resolution_for_fill(f.key, profile)
+                res = resolution_for_fill(f.key, profile, answers_override=answers)
                 val = res.value if res and res.value else ""
                 if val:
-                    print(f"  ∼ [{f.type.name:6s}] {f.label[:45]:45s} → {val[:50]} (from profile)", file=sys.stderr)
+                    print(f"  ∼ [{f.type.name:6s}] {f.label[:45]:45s} → {val[:50]} (from {'--answers' if res.provenance == 'user_typed' else res.provenance})", file=sys.stderr)
                 else:
                     print(f"  ? [{f.type.name:6s}] {f.label[:45]:45s}  <-- needs your input", file=sys.stderr)
                     unfilled_count += 1
@@ -501,7 +542,7 @@ def run_modal_flow(
         filled_any = False
         for f in state.fields:
             if f.required and not f.value:
-                res = resolution_for_fill(f.key, profile)
+                res = resolution_for_fill(f.key, profile, answers_override=answers)
                 val = res.value if res and res.value else ""
                 if val:
                     r = handler.fill(page, f, val)
@@ -509,8 +550,21 @@ def run_modal_flow(
                         audit.log_field(jid, f.key, val, provenance="profile")
                         filled_any = True
 
+        # Check agent value log for Backbone re-renders (values cleared after fill).
+        # Emit DIAG so the orchestrator can adjust strategy on next iteration.
+        if filled_any:
+            try:
+                _vlog = page.evaluate("window.__opencode?.drainValueLog()") or []
+                _clears = [v for v in _vlog if not v.get("newVal") and v.get("oldVal") and not v.get("trusted")]
+                if _clears:
+                    from apply.common.output import emit_diag
+                    for _c in _clears[:2]:
+                        emit_diag(_c.get("label", "?"), _c.get("oldVal", ""), "(cleared)", "re_render",
+                                  "Backbone re-rendered after fill — atomic mode needed")
+            except Exception:
+                pass
+
         # Don't pause on validation errors — try advancing anyway.
-        # The error might clear, be non-blocking, or surface on the next page.
         if state.errors:
             emit_status("validation_errors", "; ".join(state.errors[:3]))
 
@@ -520,14 +574,15 @@ def run_modal_flow(
             if r.navigated or r.ok:
                 time.sleep(2)
                 if not handler.is_applied(page):
-                    mark_applied(jid)  # page navigated = submit assumed successful
+                    mark_applied(jid)
                 else:
                     mark_applied(jid)
                 emit_status("submitted")
                 emit_next("verify")
                 return "done"
 
-        # Next
+        # Next — Playwright's click() auto-waits for enabled + stable,
+        # handling Backbone's brief disable-during-validation.
         if handler.can_proceed(page):
             handler.click_next(page)
             time.sleep(2)

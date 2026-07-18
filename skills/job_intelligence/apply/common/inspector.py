@@ -428,6 +428,131 @@ def _probe_html_scan(page):
 
 # ── Main probe function ───────────────────────────────────────────────────
 
+def _probe_vision(page):
+    """Depth 7: Vision LLM screenshot analysis — fallback for non-standard
+    form rendering (canvas, custom widgets, unusual frameworks).
+    Only fires when ask_api.available() is True and earlier depths found nothing."""
+    try:
+        from lib import ask_api
+        if not ask_api.available():
+            return ProbeResult(strategy="vision", field_count=0, page_type="unknown", url=page.url)
+    except Exception:
+        return ProbeResult(strategy="vision", field_count=0, page_type="unknown", url=page.url)
+
+    try:
+        ss_path = SNAPSHOTS_DIR / f"vision_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        try:
+            page.screenshot(path=str(ss_path), full_page=True)
+        except Exception:
+            try:
+                page.screenshot(path=str(ss_path), full_page=False)
+            except Exception:
+                page.screenshot(path=str(ss_path))
+        if not ss_path.exists():
+            return ProbeResult(strategy="vision", field_count=0, page_type="unknown", url=page.url)
+        prompt = (
+            "Identify all visible form fields in this screenshot. "
+            "For each field, output on ONE line: label | type (text/select/checkbox/radio/textarea/file) | options (comma-separated for select/radio, or empty) | required? (yes/no). "
+            "For radio buttons, GROUP pairs: label=question_text | type=radio | options=Yes,No | required=yes/no. "
+            "For checkboxes, use type=checkbox and options is the label text. "
+            "If no form fields are visible, respond with exactly 'NONE'."
+        )
+        # Use chunked vision for long pages (splits into horizontal sections,
+        # sends each separately, consolidates results).
+        raw, err = ask_api.ask_chunked(open(ss_path, "rb").read(), prompt, max_tokens=2048)
+        response = raw if isinstance(raw, str) else (raw[0] if raw and isinstance(raw, (list, tuple)) else "")
+        if err or not response or response.strip().upper() == "NONE":
+            return ProbeResult(strategy="vision", field_count=0, page_type="unknown", url=page.url)
+        fields = _parse_vision_response(response, page)
+        if fields:
+            return ProbeResult(
+                fields=fields,
+                strategy="vision",
+                field_count=len(fields),
+                page_type="form",
+                has_file_input=any("file" in (f.get("type","") or "").lower() for f in fields),
+                url=page.url,
+            )
+    except Exception:
+        pass
+    return ProbeResult(strategy="vision", field_count=0, page_type="unknown", url=page.url)
+
+
+def _parse_vision_response(response: str, page) -> list[dict]:
+    """Parse vision LLM's structured field list into field dicts.
+    Expected format per line: label | type | options | required"""
+    fields = []
+    import re
+    for line in response.strip().splitlines():
+        line = line.strip()
+        if not line or "|" not in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        label = parts[0] if len(parts) > 0 else ""
+        ftype = parts[1].lower() if len(parts) > 1 else "text"
+        options_str = parts[2] if len(parts) > 2 else ""
+        required = (parts[3] if len(parts) > 3 else "no").lower()
+        if not label:
+            continue
+        opts = [o.strip() for o in options_str.split(",") if o.strip()] if options_str and options_str != "-" else []
+        field = _match_label_to_element(page, label, ftype, required == "yes")
+        if field:
+            if opts:
+                field["options"] = opts
+            fields.append(field)
+        elif ftype in ("radio", "checkbox"):
+            # Create a synthetic field for radio/checkbox that the vision saw
+            # but couldn't match to a DOM element
+            fields.append({
+                "tag": "INPUT", "type": ftype, "id": "", "name": "",
+                "label": label, "required": required == "yes",
+                "selector": "", "value": "", "placeholder": "",
+                "options": opts, "vision_match": label, "vision_only": True,
+            })
+    return fields
+
+
+def _match_label_to_element(page, label: str, ftype: str, required: bool) -> dict:
+    """Best-effort match a vision-identified label to a DOM element."""
+    import json, re as _re
+    _norm = _re.sub(r"[^a-z0-9]", "", label.lower())
+    _norm_json = json.dumps(_norm)
+    candidates = page.evaluate(f"""() => {{
+        const norm = {_norm_json};
+        const sel = 'input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable="true"]';
+        const results = [];
+        document.querySelectorAll(sel).forEach(el => {{
+            const txt = (el.getAttribute('aria-label') || el.placeholder || el.id || el.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const parent = el.closest('div,fieldset,section,li,form,label');
+            const parentText = parent ? parent.textContent.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+            const score = (txt.includes(norm) || norm.includes(txt) || parentText.includes(norm)) ? 1 : 0;
+            if (score > 0) results.push({{
+                tag: el.tagName, id: el.id, name: el.getAttribute('name') || '',
+                label: el.getAttribute('aria-label') || el.placeholder || el.id || el.name,
+                type: el.type || el.tagName,
+                required: !!el.required,
+                selector: '#' + CSS.escape(el.id),
+            }});
+        }});
+        return results;
+    }}""")
+    if candidates:
+        c = candidates[0]
+        return {
+            "tag": c["tag"], "type": c["type"], "id": c.get("id", ""),
+            "name": c.get("name", ""), "label": c.get("label", label),
+            "required": c.get("required", required),
+            "selector": c.get("selector", ""), "value": "",
+            "placeholder": "", "options": [], "vision_match": label,
+        }
+    return {
+        "tag": "INPUT", "type": ftype, "id": "", "name": "",
+        "label": label, "required": required,
+        "selector": "", "value": "", "placeholder": "",
+        "options": [], "vision_match": label, "vision_only": True,
+    }
+
+
 _PROBE_STRATEGIES = [
     ("standard", _probe_standard),
     ("dialog", _probe_dialog),
@@ -436,6 +561,7 @@ _PROBE_STRATEGIES = [
     ("shadow_dom", _probe_shadow_dom),
     ("lazy_load", _probe_lazy_load),
     ("custom_widgets", _probe_custom_widgets),
+    ("vision", _probe_vision),
     ("html_scan", _probe_html_scan),
 ]
 

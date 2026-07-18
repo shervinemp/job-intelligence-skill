@@ -67,8 +67,46 @@ _KNOWN_PROFILE_KEYS = {
 }
 
 
+def _derive_provenance(label, answers, profile):
+    """Determine the provenance of a filled value for display in submit preview."""
+    from apply.common.resolve import normalize as _norm, resolution_for_fill
+    res = resolution_for_fill(label, profile, answers_override=answers)
+    if res.value is not None and res.provenance != "no_match":
+        return res.provenance
+    # Check if this was auto-declined as EEO (common_answers is normalized to dict by _validate_profile)
+    for k, v in profile.get("common_answers", {}).get("eeo", {}).items():
+        if _norm(k) == _norm(label) and v:
+            return "profile_eeo"
+    return "answers"
+
+
+def _reconcile_fields(state, jid):
+    """Compare field values across pages and return mismatches list."""
+    history = state.get("_field_values_history", [])
+    if len(history) < 2:
+        return []
+    from apply.common.resolve import normalize as _norm
+    by_label = {}
+    for entry in history:
+        nl = _norm(entry.get("label", ""))
+        by_label.setdefault(nl, []).append(entry)
+    mismatches = []
+    for nl, entries in by_label.items():
+        vals = set(e["value"] for e in entries)
+        if len(vals) > 1:
+            pages = [(e["page"], e["value"]) for e in entries]
+            mismatches.append({"label": entries[0]["label"], "pages": pages})
+    return mismatches
+
+
 def _validate_profile(profile):
-    """Warn about unrecognized keys in profile.json to catch typos early."""
+    """Normalize profile types and warn about unrecognized keys."""
+    # Normalize dict-valued fields at the boundary so downstream code never
+    # has to guard against unexpected types.
+    for _key in ("answers", "common_answers"):
+        if _key in profile and not isinstance(profile[_key], dict):
+            print(f"WARN: profile.{_key} should be a dict, got {type(profile[_key]).__name__} — resetting to empty dict", file=sys.stderr)
+            profile[_key] = {}
     unknown = set(profile.keys()) - _KNOWN_PROFILE_KEYS
     if unknown:
         print(
@@ -512,11 +550,26 @@ def _fill_text(page, fields, answers, profile, jid, state):
             if not ok_v:
                 print(f"  VALIDATION_SKIP: {lbl[:50]} -> {str(ans)[:30]} ({_vr})", file=sys.stderr)
                 if f.get("required"):
-                    unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f.get("tag", "?"), "field": f})
+                    unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f.get("tag", "?"), "field": f, "attempted": ans})
                 continue
 
         if _fill_field_deterministic(page, f, ans):
             filled += 1
+            # Track field values across pages — both current (for fill-time detection)
+            # and history (for submit-time reconciliation)
+            from apply.common.resolve import normalize as _norm
+            _norm_label = _norm(lbl)
+            _pv = state.setdefault("_field_values", {})
+            if _norm_label in _pv and _norm(_pv[_norm_label]) != _norm(str(ans)):
+                print(f"  PAGE_INCONSISTENCY: '{lbl[:40]}' was '{_pv[_norm_label][:30]}' on a previous page, now '{str(ans)[:30]}'", file=sys.stderr)
+            _pv[_norm_label] = str(ans)
+            _history = state.setdefault("_field_values_history", [])
+            _page_now = state.get("_page", "?")
+            _existing = next((e for e in _history if e["page"] == _page_now and e["label"] == lbl), None)
+            if _existing:
+                _existing["value"] = str(ans)
+            else:
+                _history.append({"page": _page_now, "label": lbl, "value": str(ans)})
             # After filling a field, check for new conditional fields (max 3 levels)
             if _conditional_depth < 3:
                 try:
@@ -529,7 +582,7 @@ def _fill_text(page, fields, answers, profile, jid, state):
                 except Exception:
                     pass
         elif f.get("required"):
-            unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f.get("tag", "?"), "field": f})
+            unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f.get("tag", "?"), "field": f, "attempted": ans})
 
         if filled > prev_filled:
             time.sleep(random.uniform(0.15, 0.4))
@@ -608,6 +661,19 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
             except Exception:
                 print("ERROR: --answers must be valid JSON or @file.json", file=sys.stderr)
 
+    # Normalize --answers values to strings at the boundary so downstream
+    # fill strategies never receive unexpected types (ints, lists, etc.)
+    if answers:
+        _normed = {}
+        for _k, _v in answers.items():
+            if _v is None:
+                continue
+            if isinstance(_v, list):
+                _normed[_k] = [str(_x) for _x in _v]
+            else:
+                _normed[_k] = str(_v)
+        answers = _normed
+
     state = load_state()
     if state.get("jid") != jid:
         print(
@@ -617,11 +683,24 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
         return
     if _check_already_submitted(state, jid):
         return
+    if not dry_run and not state.get("_dry_run_done"):
+        print("ERROR: must dry-run first — run act --fill <jid> (without --apply) to preview field mappings", file=sys.stderr)
+        print("  Dry-run is read-only — shows what values would be filled without touching the DOM.", file=sys.stderr)
+        emit_next("act --fill")
+        return
     b, ctx = connect()
     pm = PageManager(ctx, jid)
     pm.close_stale(target_url=state.get("external_url", ""))
     ext = state.get("external_url", "")
     page, _, _ = pm.find(fallback_url=ext)
+    # Wire network interception for submit detection (Playwright route,
+    # not JS monkeypatch — no fingerprinting risk)
+    if page:
+        try:
+            from apply.common.agent_bridge import setup_network_interception
+            setup_network_interception(page)
+        except Exception:
+            pass
     if not page:
         # Reuse existing page matching external URL
         if ext:
@@ -720,14 +799,18 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
 
     # Probe: try standard first, cascade on failure
     ps = read_page(page)
-    # Poll for React SPA fields that render 3-8s after DOMContentLoaded
+    # Use agent's MutationObserver-based field detection (no polling).
+    # Agent watches DOM for input/select/textarea additions and sets dirty flag.
     if ps.get("fieldCount", 0) == 0:
-        for _ in range(16):
-            time.sleep(0.5)
+        try:
+            page.wait_for_function(
+                "window.__opencode?.getFields().length > 0",
+                timeout=8000
+            )
             ps = read_page(page)
-            if ps.get("fieldCount", 0) > 0:
-                print(f"SPA_WAIT: {(_+1)*0.5:.1f}s", file=sys.stderr)
-                break
+            print(f"AGENT_WAIT: fields detected via MutationObserver", file=sys.stderr)
+        except Exception:
+            pass  # timeout — fall through to detect-phase or probe cascade
     # Use detect-phase fields (e.g., GraphQL) if DOM returned nothing
     if (
         ps.get("fieldCount", 0) == 0
@@ -781,10 +864,12 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
         allow_submit = (action == "submit")
         if not allow_submit:
             emit_status(f"submit_{action}", f"handler submit suppressed — {reason}")
+        _init_fields = ps.get("fields", [])
         result = run_modal_flow(
             handler, page, jid, profile,
-            allow_submit=allow_submit, max_steps=10,
+            answers=answers, allow_submit=allow_submit, max_steps=10,
             dry_run=dry_run,
+            initial_fields=_init_fields if _init_fields else None,
         )
         if result == "done":
             emit_status("submitted")
@@ -792,6 +877,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
             state["result"] = "submitted"
             save_state(state)
         elif result == "paused":
+            if dry_run:
+                state["_dry_run_done"] = True
             save_state(state)
         elif result == "failed":
             emit_status("flow_failed", "handler could not proceed")
@@ -951,17 +1038,21 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
     # Pass 1: Probe — enrich fields with selectors + combobox options (read-only)
     ps["fields"] = probe_fields(page, ps["fields"])
 
+    from apply.common.output import field_format_hint as _fmt_hint
+
     # Dry-run: resolve answers without touching DOM, print what would happen
     if dry_run:
         filled = 0
         total = len(ps.get("fields", []))
-        print("DRY_RUN — would fill:", file=sys.stderr)
+        auto_fields = []
+        need_fields = []
+        skip_fields = []
         for f in ps.get("fields", []):
             lbl = f.get("label", "")
             if not lbl:
                 continue
             if f["type"] == "file":
-                print(f"  [{f['tag']}] {lbl[:50]} -> <resume PDF>", file=sys.stderr)
+                auto_fields.append((f, "<resume PDF>"))
                 filled += 1
                 continue
             opts = f.get("options", [])
@@ -970,19 +1061,45 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
                 if opts and ans not in opts:
                     match = next((o for o in opts if ans.lower() in o.lower()), None)
                     if not match:
-                        print(f"  [{f['tag']}] {lbl[:50]} -> {ans[:50]}  WARN: not in options {opts[:5]}", file=sys.stderr)
-                        continue  # don't count as resolvable
-                print(f"  [{f['tag']}] {lbl[:50]} -> {ans[:50]}", file=sys.stderr)
+                        fmt = _fmt_hint(f)
+                        w = f"  fmt={fmt}" if fmt else ""
+                        print(f"  WARN: [{f['tag']}] {lbl[:50]} -> {ans[:50]} not in options {opts[:5]}{w}", file=sys.stderr)
+                        need_fields.append((f, None, "no match in options"))
+                        continue
+                auto_fields.append((f, ans))
                 filled += 1
             elif f.get("required"):
+                need_fields.append((f, None, "required"))
+            else:
+                skip_fields.append(f)
+
+        print(f"DRY_RUN — {filled}/{total} resolvable:", file=sys.stderr)
+        if auto_fields:
+            print(f"  ✅ Auto-fill ({len(auto_fields)}):", file=sys.stderr)
+            for f, val in auto_fields:
+                fmt = _fmt_hint(f)
+                w = f"  fmt={fmt}" if fmt else ""
+                print(f"    [{f['tag']}] {f.get('label','?')[:50]} -> {str(val)[:50]}{w}", file=sys.stderr)
+        if need_fields:
+            print(f"  ❓ Needs your input ({len(need_fields)}):", file=sys.stderr)
+            for f, _, reason in need_fields:
                 opts = f.get("options", [])
-                opt_hint = f"  options: {opts[:5]}" if opts else ""
-                print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (required){opt_hint}", file=sys.stderr)
-        print(f"DRY_RUN: {filled}/{total} fields resolvable", file=sys.stderr)
-        if filled < total:
-            print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
-            print("  Options shown above for combobox fields — LLM can select from them.", file=sys.stderr)
-        emit_next("proceed" if filled == total else "act --fill --answers '...'")
+                opt_str = json.dumps(opts[:5]) if opts else ""
+                fmt = _fmt_hint(f)
+                hint = f"  fmt={fmt}" if fmt else ""
+                extra = f" -> {opt_str}{hint}" if opt_str else hint
+                print(f"    [{f['tag']}] {f.get('label','?')[:50]}{extra}", file=sys.stderr)
+        if skip_fields:
+            print(f"  ⏭ Skipped ({len(skip_fields)}):", file=sys.stderr)
+            for f in skip_fields:
+                print(f"    [{f['tag']}] {f.get('label','?')[:50]} (optional, no profile match)", file=sys.stderr)
+
+        state["_dry_run_done"] = True
+        save_state(state)
+        if need_fields:
+            emit_next("act --fill --answers '{\"<label>\": \"<value>\"}'")
+        else:
+            emit_next("proceed")
         return
 
     radio_filled, radio_unfilled = _fill_radios(
@@ -994,19 +1111,28 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
     filled = radio_filled + text_filled
     unfilled = radio_unfilled + text_unfilled
 
-    # EEO/demographic fields — detect by decline options (language-agnostic),
-    # report to LLM but DO NOT auto-fill (let LLM decide via --answers).
-    # Saved answers auto-apply on future jobs.
+    # EEO/demographic fields — detect by decline options (language-agnostic).
+    # Auto-decline with "Prefer not to say" unless the user provided an explicit
+    # answer via profile.common_answers.eeo. The LLM never sees EEO fields as
+    # unfilled — eliminates any possibility of stereotyping.
     _DECLINE_SIGNALS = ["prefer not", "decline", "not say", "rather not"]
     eeo_unfilled = [f for f in unfilled if any(
         any(sig in (o or "").lower() for sig in _DECLINE_SIGNALS)
         for o in f.get("options", [])
     )]
     if eeo_unfilled:
+        _eeo_answers = profile.get("common_answers", {}).get("eeo", {})
         for ef in eeo_unfilled:
-            res = resolution_for_fill(ef["label"], profile, answers_override=answers)
+            # Try explicit EEO answer from profile first (user opt-in)
+            res = resolution_for_fill(ef["label"], {"answers": _eeo_answers}, answers_override=answers)
+            if not res.value:
+                # Auto-decline: find "Prefer not to say" style option
+                decline_opt = next((o for o in ef.get("options", [])
+                                   if any(sig in (o or "").lower() for sig in _DECLINE_SIGNALS)), None)
+                if decline_opt:
+                    res = Resolution(decline_opt, "auto_decline", ef["label"], "auto_decline")
             if res.value:
-                orig = ef.get("field")  # original field dict(s) carried on the unfilled entry
+                orig = ef.get("field")
                 eeo_answers = {ef["label"]: res.value}
                 if ef.get("tag") == "radio_group" and orig:
                     nf, _ = _fill_radios(page, orig, eeo_answers, profile, jid)
@@ -1016,10 +1142,9 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
                     nf = 0
                 if nf:
                     filled += nf
-                    unfilled = [u for u in unfilled if u is not ef]
-                    print(f"  EEO: {ef['label'][:50]} -> {res.value[:40]} ({res.provenance})", file=sys.stderr)
-            else:
-                print(f"  EEO_UNANSWERED: {ef['label'][:50]} (options: {[o[:30] for o in ef.get('options', [])[:4]]})", file=sys.stderr)
+                unfilled = [u for u in unfilled if u is not ef]
+                provenance = res.provenance if hasattr(res, 'provenance') else "auto_decline"
+                print(f"  EEO: {ef['label'][:50]} -> {res.value[:40]} ({provenance})", file=sys.stderr)
 
     # Platform post-fill hook (e.g. notify widget frameworks of DOM changes)
     if registry and registry.has_hook("post_fill"):
@@ -1118,6 +1243,9 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
     # Keep the persisted fill count current after all rescans/refills —
     # cmd_submit's confirmation preview reads it.
     state["filled"] = filled
+    # Re-fill invalidates previous submit preview — must re-preview before confirming
+    state.pop("_submit_previewed", None)
+    state["_last_answers"] = answers
     save_state(state)
 
     page_num = state.get("_page", "?")
@@ -1525,22 +1653,94 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
             warn = " (CAPTCHA was triggered last time)"
         elif last == "unknown":
             warn = " (last submit was not confirmed)"
+
+        # Load profile + last answers for provenance derivation
+        _preview_profile = {}
+        if os.path.exists(profile_path):
+            try:
+                with open(profile_path, encoding="utf-8") as _pf:
+                    _preview_profile = json.load(_pf)
+                _validate_profile(_preview_profile)
+            except Exception:
+                pass
+        _preview_answers = state.get("_last_answers", {})
+
         print(
             f"SUBMIT: {plat} — {len(fields)} fields, {len(unfilled_fields)} unfilled{warn}",
             file=sys.stderr,
         )
+
+        # Group filled fields by provenance source
+        _provenance_groups = {"profile": [], "answers": [], "auto_decline": [], "file": [], "unknown": []}
+        _prov_normalize = {"profile": "profile", "ephemeral": "profile", "derived": "profile",
+                           "answers_override": "answers", "user_typed": "answers",
+                           "auto_decline": "auto_decline", "static": "profile",
+                           "file": "file", "mapping": "profile", "profile_eeo": "auto_decline",
+                           "no_match": "unknown"}
+        _profile_eeo_answers = _preview_profile.get("common_answers", {}).get("eeo", {})
         for f in fields:
-            label = f.get("label", f.get("key", "?"))[:45]
+            label = f.get("label", f.get("key", "?"))
             val = f.get("value", "")
-            if val:
-                print(f"  FILLED  [{f.get('type','?')}] {label:45s} = {val[:40]}", file=sys.stderr)
-        for f in unfilled_fields[:5]:
-            print(f"  UNFILLED [{f.get('type','?')}] {f.get('label', f.get('key', '?'))[:45]}", file=sys.stderr)
-        if len(unfilled_fields) > 5:
-            print(f"  ... and {len(unfilled_fields)-5} more unfilled", file=sys.stderr)
+            if not val:
+                continue
+            if f.get("type") == "file":
+                _provenance_groups["file"].append(f)
+                continue
+            raw_prov = _derive_provenance(label, _preview_answers, _preview_profile)
+            if _profile_eeo_answers.get(label) or raw_prov == "auto_decline":
+                prov_group = "auto_decline"
+            else:
+                prov_group = _prov_normalize.get(raw_prov, "unknown")
+            _provenance_groups[prov_group].append(f)
+
+        source_labels = {
+            "profile": "From profile",
+            "answers": "From --answers (you provided)",
+            "auto_decline": "Auto-declined (EEO)",
+            "file": "Resume upload",
+            "unknown": "Source unknown",
+        }
+        for group_key, group_fields in _provenance_groups.items():
+            if not group_fields:
+                continue
+            group_label = source_labels.get(group_key, group_key)
+            print(f"  ── {group_label} ({len(group_fields)}):", file=sys.stderr)
+            for _gf in group_fields:
+                _glbl = _gf.get("label", _gf.get("key", "?"))[:45]
+                _gval = _gf.get("value", "")[:40]
+                _gtype = _gf.get("type", "?")
+                print(f"    [{_gtype}] {_glbl:45s} = {_gval}", file=sys.stderr)
+
+        # Unfilled fields
+        if unfilled_fields:
+            print(f"  ── Unfilled ({len(unfilled_fields)}):", file=sys.stderr)
+            for uf in unfilled_fields[:5]:
+                ulbl = uf.get("label", uf.get("key", "?"))[:45]
+                print(f"    [{uf.get('type','?')}] {ulbl}", file=sys.stderr)
+            if len(unfilled_fields) > 5:
+                print(f"    ... and {len(unfilled_fields)-5} more", file=sys.stderr)
+
         print(f"  URL: {url_short}", file=sys.stderr)
         print("  Review the values above. Pass --confirm to submit.", file=sys.stderr)
+
+        # Reconciliation: cross-page value comparison
+        _mm = _reconcile_fields(state, jid)
+        if _mm:
+            print(f"  ── Inconsistencies found ({len(_mm)}):", file=sys.stderr)
+            for _m in _mm:
+                _pages_str = "; ".join(f"pg{p[0]}={p[1][:30]}" for p in _m["pages"])
+                print(f"    '{_m['label'][:40]}': {_pages_str}", file=sys.stderr)
+            print("  Verify the values above and re-fill if needed.", file=sys.stderr)
+
+        state["_submit_previewed"] = True
+        save_state(state)
         emit_next("act --submit --confirm")
+        return
+
+    # Safety gate: must preview before confirming
+    if not state.get("_submit_previewed"):
+        print("ERROR: must preview submission first — run act --submit <jid> (without --confirm) to review", file=sys.stderr)
+        emit_next("act --submit")
         return
     print(
         f"SUBMIT: {target['text']}\nDISABLED: {target.get('disabled', False)}",

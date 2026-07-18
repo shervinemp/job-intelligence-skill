@@ -102,6 +102,44 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | `apply.py retry [<jid>]` | Re-attempt failed applies |
 | `apply.py undo <jid>` | Move back one stage |
 
+### Apply workflow — phased approach
+
+Each pipeline step has a distinct goal. Follow this mental model:
+
+```
+─── PHASE 1: RECONNAISSANCE ───
+detect → Read the page. Classify the type. Do NOT fill anything.
+          Output: TYPE: easy_apply / ats_direct / external / login_wall
+
+─── PHASE 2: FIELD INVENTORY ───
+act --fill (dry-run) → Catalogs every field on the page.
+                        Note fields resolved automatically (✅) vs.
+                        fields needing your input (❓).
+                        Do NOT provide --answers yet.
+                        Output: categorized DRY_RUN listing.
+
+─── PHASE 3: TARGETED FILLING ───
+act --fill --answers '{"label": "value"}' → Fill fields marked ❓.
+    • Fill ALL required fields in one shot. SPA forms wipe everything on validation error.
+    • Only fill fields you're confident about.
+    • Leave salary, dates, referral source unfilled unless profile has them.
+    • The preview shows provenance (profile/answers/derived/auto_decline)
+      for every value. Check it before confirming.
+    • If unfilled remain, repeat with more --answers.
+
+─── PHASE 4: NAVIGATE & REPEAT ───
+act --next → Advance to next page.
+             If submission detected → routed to --submit.
+             If validation errors → routed back to --fill.
+
+─── PHASE 5: VERIFY ───
+act --submit (preview) → Review provenance-grouped field listing.
+                         Check for inconsistencies across pages.
+                         Only pass --confirm after review.
+verify → Confirm the application was received.
+          Never skip this step.
+```
+
 ### Apply tips
 
 - Omit JID on `detect` to auto-pick the first tailored job from the queue.
@@ -115,6 +153,19 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 - 3x guard: same page 3 fills in a row → warns.
 - EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `common_answers.eeo` for reuse.
 - Platform registry (`apply/registry/*.yaml`): per-ATS config. `handler_class` field loads `PlatformHandler` from `apply/handlers/`. See `handler_base.py` header for add-platform guide.
+
+## Orchestrator rules
+
+1. **Don't guess personal data.** Check profile.json + resume first. Still missing → ask (critical) or skip (optional).
+2. **Don't fill optional fields.** If not marked required, leave it. They pass silently.
+3. **Don't echo PII.** Refer to fields by label only — never include the actual value in output.
+4. **Always run verify after `NEXT: verify`.** Even if DB says submitted. DB can be stale.
+5. **Inspect first when stuck.** `NEXT: act --inspect` → run inspect. Don't retry `--fill` or `--next` blind.
+6. **Don't collapse gates.** Each gate (dry-run, preview) needs its own round-trip. State-enforced.
+7. **One-shot fill for SPA forms.** Validation error = page re-render = all values lost. Fill everything then submit once. Never submit partially.
+8. **Autocomplete fields need clicks, not text.** Province, Country dropdowns: `el.value =` doesn't work. Flag for user intervention.
+9. **Trigger resume upload.** File input on page → upload. Don't assume auto.
+10. **Don't fabricate resume content.** Frame existing experience only. If the profile doesn't support a claim, rewrite without it.
 
 ## Platform quirks
 
@@ -185,6 +236,8 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 | DB crash | `extract.py reset` |
 | Auth wall stuck | `enrich.py open` + `--refresh` |
 
+
+
 ## Technical notes
 
 - **JI_TAILOR**: `"agent"` (default) = SLM writes `resume.json`, `admit` confirms. `"gem"` = Gemini Web gem.
@@ -192,7 +245,13 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 - **LinkedIn title dedup**: Cards repeat title — `linkedin_scraper.py` deduplicates by matching repeated half.
 - **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
 - **EEO detection**: Uses decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic, zero false positives. Saved under `common_answers.eeo` sub-key.
-- **Chrome lifecycle**: Pipeline starts its own Chrome instance on a free port (never reuses user's browser). Port persisted to `chrome-config.json` across processes.
+- **Chrome lifecycle**: Pipeline starts its own Chrome instance on a free port (never reuses user's browser). Port persisted to `chrome-config.json` across processes. Profile lives at `~/.ji/chrome-profile/` — sessions (cookies, localStorage) persist between pipeline runs.
+- **Injected agent** (`apply/common/agent.js`): Auto-injected into every page via `context.add_init_script()` in `chrome_manager.connect()`. Provides `window.__opencode` with framework auto-detection, unified `setValue()` (jQuery → React nativeValueSetter → vanilla), `click()` with disabled re-enable, MutationObserver field discovery (no polling), value change tracking, and console error capture. Bridge wrapper at `apply/common/agent_bridge.py`. All calls use optional chaining — if agent fails to inject, pipeline falls through to legacy strategies with zero regressions.
 - **PDF guard**: `detect` refuses to proceed if stage is `tailored` but no Resume PDF exists. Run `tailor.py undo <jid> && tailor.py --jid <jid>` to regenerate.
 - **Platform registry**: `apply/registry/*.yaml` defines per-ATS configs (`widget_parent` selector, custom widgets). Auto-resolved from page URL — no caller changes needed.
 - **Gems**: `categories.json` → `gems.json` → `gemini.js` resolution chain.
+- **Type normalization at boundaries**: All external data sources (profile.json, --answers JSON, common_answers) are normalized to their expected types at the load point, not at each consumer. If a value can be int or string (`"salary": 120000`), it's normalized to string once. If `common_answers` is accidentally a string instead of dict, it's coerced to `{}` at validation time. Add new normalizations to `_validate_profile` in `act.py` or the `--answers` parse block — never guard at individual access sites.
+- **Provenance tracking**: Every filled field is tagged with its source (`profile`, `answers`, `auto_decline`, `file`). The submit preview groups fields by provenance so all LLM-provided answers appear in one block for self-audit. Cross-page field values are tracked in `_field_values_history` and compared at submit time via `_reconcile_fields` — mismatches are printed before confirm.
+- **Format hints**: Unfilled fields in dry-run and fill-report display expected format hints derived from HTML type/attributes and label keywords (phone → digits only, salary → numeric, date → MM/DD/YYYY). Also shows `max N chars` and `pattern=...` from HTML attributes. Hints are informational only — the LLM decides how to use them.
+- **DIAG diagnostics**: Structured `DIAG:` lines emitted on fill failures — truncation (`DIAG: Phone | expected=+1 (343)... | actual=+1 (343) 5 | truncated | maxlength=10`), verify failure, and delta mismatch (unchanged / still empty / cleared). Machine-parseable for the LLM orchestrator to auto-correct on next iteration.
+- **Vision fallback probe**: When all DOM probe strategies return 0 fields and `ask_api.available()` is True, the probe cascade takes a screenshot and asks the vision LLM to identify form fields. Best-effort — labels are fuzzy-matched to DOM elements by text proximity. Last resort before `html_scan`.

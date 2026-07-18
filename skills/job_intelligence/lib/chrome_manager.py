@@ -5,6 +5,15 @@ managing their own profile paths and CDP connections.
 
 On import, writes {JI_HOME}/chrome-config.json so Node.js tools (gemini.js)
 can read the same paths.
+
+On connect(), injects agent.js into every page. Agent provides:
+
+  - Framework auto-detection (React, Backbone, jQuery, Angular, Ember)
+  - Unified framework-aware value setter (survives Backbone re-renders)
+  - MutationObserver-based field discovery (no polling)
+  - Value change tracking (for DIAG diagnostics)
+  - XHR/fetch submission interception (detect submit success from network)
+  - Console error capture
 """
 
 import atexit
@@ -198,43 +207,64 @@ def start():
     return False
 
 
+_AGENT_INJECTED = False
+
+
 def connect(timeout=15):
     """Get a (browser, context) pair connected to a healthy dedicated Chrome.
+    Injects the window.__opencode agent script into the browser context so
+    every page has framework detection, unified value setting, MutationObserver
+    field discovery, and XHR/fetch interception.
+
     Reuses a previously-started pipeline Chrome (from config file), or starts a new one.
     Never connects to the user's personal Chrome."""
-    global CDP_PORT, CDP_URL
+    global CDP_PORT, CDP_URL, _AGENT_INJECTED
     for attempt in range(3):
-        # (Re)start Playwright each attempt — close() below stops it on failure, so a
-        # handle fetched once before the loop would be dead on retries.
         pw = _pw()
-        # Read persisted port from last start(), or env default
         port = _read_port()
         CDP_PORT = port
         CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
         running = is_running()
         if not running:
-            # Our Chrome is not running — start a fresh one on a free port
             if not start():
                 print("ERROR: could not start Chrome", file=sys.stderr)
                 return None, None
-        # Try connecting
         for _ in range(timeout):
             try:
                 b = pw.chromium.connect_over_cdp(CDP_URL)
                 ctx = b.contexts[0]
-                # Verify connection is alive (not a zombie)
                 _ = ctx.pages
+                # Inject the __opencode agent once per context (persists across
+                # pages and SPA navigations via add_init_script)
+                if not _AGENT_INJECTED:
+                    _agent_js = _load_agent()
+                    if _agent_js:
+                        try:
+                            ctx.add_init_script(_agent_js)
+                            _AGENT_INJECTED = True
+                        except Exception:
+                            pass
                 return b, ctx
             except Exception as e:
                 err = str(e)
                 if "Target closed" in err or "Connection" in err or "Not connected" in err:
-                    break  # Chrome died — restart
+                    break
                 time.sleep(1)
-        # Chrome was running but connection failed — restart (close() resets _PW)
         print(f"Chrome unresponsive (attempt {attempt+1}/3), restarting...", file=sys.stderr)
         close()
+        _AGENT_INJECTED = False
         time.sleep(2)
     return None, None
+
+
+def _load_agent():
+    """Load the injected agent JS from disk."""
+    _agent_path = os.path.join(os.path.dirname(__file__), "..", "apply", "common", "agent.js")
+    try:
+        with open(_agent_path, encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
 
 
 def new_page(timeout=15):

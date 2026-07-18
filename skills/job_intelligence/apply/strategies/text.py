@@ -1,5 +1,5 @@
 """Text input fill strategies: visible fill, native setter, autocomplete, dispatch."""
-import time, random
+import re, time, random
 
 METHOD_CHAIN = ["fill", "native_setter", "autocomplete", "dispatch_events"]
 
@@ -70,9 +70,25 @@ def _verify(el, ans):
 
 
 def fill_text_field(page, f, ans, sel, el, method="fill"):
+    _orig_ans = ans
+
+    # Phone number: strip non-digits before maxlength truncation.
+    # Formatted phones (e.g. "+1 (343) 558-1744") are 17 chars, but
+    # fields with maxlength=10 expect 10 raw digits.
+    label = (f.get("label") or f.get("name") or "").lower()
+    if re.search(r"phone|contact|mobile|cell", label):
+        digits = re.sub(r"\D", "", ans)
+        if 7 <= len(digits) <= 15:
+            if len(digits) == 11 and digits.startswith("1"):
+                digits = digits[1:]
+            ans = digits
+
     maxlen = el.get_attribute("maxlength") if el else None
     try:
         if maxlen and ans and len(ans) > int(maxlen):
+            from apply.common.output import emit_diag
+            emit_diag(f.get("label", f.get("name", "?")), _orig_ans,
+                      ans[:int(maxlen)], "truncated", f"maxlength={maxlen}")
             ans = ans[: int(maxlen)]
     except Exception:
         pass
@@ -93,6 +109,11 @@ def fill_text_field(page, f, ans, sel, el, method="fill"):
 
     if ok and ans:
         if not _verify(el, ans):
+            from apply.common.output import emit_diag
+            current = el.evaluate("el => el.value") if el else ""
+            emit_diag(f.get("label", f.get("name", "?")), ans,
+                      current or "(empty)", "verify_failed",
+                      f"method={method} maxlen={maxlen}")
             native_setter(page, sel, ans)
             return _verify(el, ans)
     return ok

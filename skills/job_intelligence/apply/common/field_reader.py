@@ -24,6 +24,11 @@ _READER_JS = """(config) => {
             if (ref) label = ref.textContent.trim();
         }
         if (!label && el.getAttribute('aria-label')) label = el.getAttribute('aria-label');
+        // AOM: Chrome 121+ computed accessible name — bypasses obfuscated classes
+        if (!label && el.computedName) {
+            const cn = el.computedName.trim();
+            if (cn && cn.length > 0 && cn.length < 100) label = cn;
+        }
         if (!label) {
             const lbl = scopeRoot.querySelector('label[for="' + el.id + '"]');
             if (lbl) label = lbl.textContent.trim();
@@ -149,13 +154,113 @@ _READER_JS = """(config) => {
     // Standard DOM
     root.querySelectorAll(inputSel).forEach(el => { if (isVisible(el)) fields.push(fieldFromElement(el, root)); });
 
-    // Shadow DOM (recursive) — `:defined` limits to custom elements (only they can have shadow roots)
+    // Shadow DOM (recursive)
     root.querySelectorAll(':defined').forEach(el => { if (el.shadowRoot) walkShadow(el, fields); });
 
     // Custom dropdown widgets (standard DOM)
     if (customWidgets.dropdown) {
         root.querySelectorAll(customWidgets.dropdown).forEach(btn => { const d = makeDropdown(btn, root); if (d) fields.push(d); });
     }
+
+    // ── Radio button grouping ──────────────────────────────────────────────
+    // Group radios by name attribute, extract parent question as label.
+    // Individual radio -> "Yes" is useless; we need "Are you willing to relocate? → [Yes, No]"
+    const radioGroups = {};
+    const radioNames = new Set();
+    fields.forEach(f => { if (f.type === 'radio' && f.name) radioNames.add(f.name); });
+    radioNames.forEach(name => {
+        const radios = fields.filter(f => f.type === 'radio' && f.name === name);
+        if (radios.length < 2) return;
+        // Find parent question label from DOM structure.
+        // Typical HTML: <div class="row"><div class="col-4"><label>Question?</label></div><div class="col-8"><input type="radio" name="..."></div></div>
+        const firstEl = root.querySelector(`input[name="${CSS.escape(name)}"]`);
+        let question = radios[0].label || '';
+        if (firstEl) {
+            // Step 1: look at the previous sibling's label (most common pattern)
+            const myContainer = firstEl.closest('div,fieldset,section,li');
+            if (myContainer) {
+                const prevSibling = myContainer.previousElementSibling;
+                if (prevSibling) {
+                    const prevLabel = prevSibling.querySelector('label, legend, strong, b, span, p');
+                    if (prevLabel) {
+                        const txt = (prevLabel.textContent || '').trim();
+                        if (txt.length > 3 && txt.length < 200) question = txt;
+                    }
+                    if (question === radios[0].label) {
+                        const txt = (prevSibling.textContent || '').trim();
+                        if (txt.length > 3 && txt.length < 200) question = txt;
+                    }
+                }
+            }
+            // Step 2: walk up two levels and check previous sibling
+            if (question === radios[0].label) {
+                const level2 = firstEl.closest('.row, .form-group, fieldset, section');
+                if (level2) {
+                    const prev2 = level2.previousElementSibling;
+                    if (prev2) {
+                        const prevLabel2 = prev2.querySelector('label, legend, strong, b, span, p');
+                        if (prevLabel2) {
+                            const txt = (prevLabel2.textContent || '').trim();
+                            if (txt.length > 3 && txt.length < 200) question = txt;
+                        }
+                    }
+                }
+            }
+            // Step 3: fall back to container's direct text
+            if (question === radios[0].label && myContainer) {
+                const allText = myContainer.textContent || '';
+                const beforeRadio = allText.split(radios[0].label)[0] || '';
+                const clean = beforeRadio.replace(/[:*]\\s*$/, '').trim();
+                if (clean.length > 3 && clean.length < 200) question = clean;
+            }
+        }
+        // Options are the radio's value attribute (Yes/No), NOT the resolved
+        // label which is the parent question text. The visible text next to
+        // the radio is in the parent <label>'s textContent minus the input.
+        const optionLabels = radios.map(r => {
+            const val = r.value || r.name || '';
+            const el = root.querySelector(`input[name="${CSS.escape(name)}"][value="${CSS.escape(val)}"]`);
+            if (el) {
+                const parentLabel = el.closest('label');
+                if (parentLabel) {
+                    // Get the label's text excluding the input element's HTML
+                    const txt = (parentLabel.textContent || '').trim();
+                    // Remove child element text (div/span contents) to get just the option text
+                    const childText = Array.from(parentLabel.querySelectorAll('div,span'))
+                        .map(c => (c.textContent || '').trim()).join(' ');
+                    const clean = txt.replace(childText, '').replace(/\\s+/g, ' ').trim();
+                    if (clean.length > 0 && clean.length < 20) return clean;
+                }
+                // Fallback: the label might just have simple text
+                const simple = (parentLabel ? parentLabel.textContent.trim() : val);
+                if (simple.length < 20) return simple;
+            }
+            return val || 'Yes';
+        });
+        const uniqueOpts = [...new Set(optionLabels)].filter(Boolean);
+        // Remove individual radio entries, add one grouped entry
+        radioGroups[name] = {
+            tag: 'RADIO_GROUP', name: name, id: firstEl ? firstEl.id || '' : '',
+            label: question || name,
+            type: 'radio', options: uniqueOpts.length >= 2 ? uniqueOpts : (radios.length >= 2 ? ['Yes', 'No'] : optionLabels),
+            required: radios.some(r => r.required),
+            selector: `input[name="${CSS.escape(name)}"]`,
+            value: radios.find(r => r.checked) ? radios.find(r => r.checked).label : '',
+            placeholder: '', data_automation_id: '', role: 'radiogroup',
+        };
+    });
+    // Replace individual radios with grouped entries
+    const finalFields = [];
+    const groupedNames = new Set(Object.keys(radioGroups));
+    fields.forEach(f => {
+        if (f.type === 'radio' && f.name && groupedNames.has(f.name)) {
+            if (!finalFields.find(ff => ff.name === f.name && ff.tag === 'RADIO_GROUP')) {
+                finalFields.push(radioGroups[f.name]);
+            }
+        } else {
+            finalFields.push(f);
+        }
+    });
 
     // File inputs for hasFileInput flag (standard + shadow)
     let fileCount = root.querySelectorAll('input[type="file"]').length;
@@ -188,8 +293,8 @@ _READER_JS = """(config) => {
     else if (hasFormWords) pageType = 'maybe_form';
 
     return {
-        fieldCount: fields.length,
-        fields: fields.slice(0, 35),
+        fieldCount: finalFields.length,
+        fields: finalFields.slice(0, 35),
         pageType: pageType,
         hasFileInput: fileCount > 0,
         hasRequiredFile: root.querySelectorAll('input[type="file"][required]').length > 0,

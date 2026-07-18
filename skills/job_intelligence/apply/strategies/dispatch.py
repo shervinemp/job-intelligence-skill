@@ -1,29 +1,91 @@
 """Field fill dispatch — routes to correct strategy by field type.
-Tries each method in the strategy's METHOD_CHAIN before giving up."""
+Tries each method in METHOD_CHAIN, then cross-type fallbacks.
+Pre/post delta check verifies mutations actually took effect."""
+import json, sys
 from apply.strategies import combobox, text, select
 from apply.steps.probe import resolve_selector
+
+
+def _element_value(page, sel):
+    try:
+        return (page.evaluate(f"""() => {{
+            const el = document.querySelector({json.dumps(sel)});
+            if (!el) return '';
+            if (el.tagName === 'SELECT') return el.options[el.selectedIndex]?.text || el.value || '';
+            if (el.type === 'checkbox') return el.checked ? '__checked__' : '';
+            const role = el.getAttribute('role') || '';
+            if (role === 'combobox' || el.tagName === 'DROPDOWN') return el.textContent?.trim() || el.value || '';
+            if (el.tagName === 'DIV' || el.isContentEditable) return el.textContent?.trim() || '';
+            return el.value || el.textContent?.trim() || '';
+        }}""") or "").strip()
+    except Exception:
+        return ""
+
+
+def _check_delta(page, sel, before, after, ans, label):
+    from apply.common.output import emit_diag
+    if isinstance(ans, list):
+        ans = ", ".join(str(v) for v in ans)
+    elif ans is not None:
+        ans = str(ans)
+    if after and after != before and after != ans:
+        return True
+    if after and ans and (after == ans or ans in after or after in ans):
+        return True
+    if after == before and label:
+        if before:
+            emit_diag(label, ans, before, "unchanged", "ATS may have rejected the value")
+        else:
+            emit_diag(label, ans, "(empty)", "still_empty", "ATS silently rejected value")
+        return False
+    if not after and before:
+        emit_diag(label, ans, "(empty)", "cleared", "ATS silently reset the value")
+        return False
+    return True
+
+
+def _try_text_fallback(page, f, ans, sel):
+    """Last-resort cross-type fallback: text fill via contenteditable or dispatch_events."""
+    from apply.strategies import contenteditable as _ce, text as _tx
+    if f.get("contenteditable") or f["tag"] == "DIV":
+        return bool(_ce.fill(page, sel, ans))
+    el = page.query_selector(sel)
+    if el and f["tag"] in ("INPUT", "TEXTAREA"):
+        for method in getattr(_tx, "METHOD_CHAIN", ["fill"]):
+            if _tx.fill_text_field(page, f, ans, sel, el, method=method):
+                return True
+    if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
+        return bool(_tx.native_setter(page, sel, ans))
+    return False
 
 
 def field_deterministic(page, f, ans):
     sel = f.get("_sel", "")
     if not sel:
-        # Callers with freshly re-read fields (conditional fields, re-fill retries)
-        # haven't run the probe pass — resolve the selector lazily so every path fills.
         sel = resolve_selector(page, f)
         if not sel:
             return False
         f["_sel"] = sel
+
+    before = _element_value(page, sel)
+    label = f.get("label", "")
+    aft = before  # will be updated after each attempt
+
     if f["tag"] == "INPUT" and f.get("type") == "checkbox":
-        lbl = (f.get("label") or "").lower()
+        lbl = (label or "").lower()
         if any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm", "understand"]):
             try:
                 cb = page.locator(sel)
                 if cb.count() and not cb.is_checked():
                     cb.check(force=True)
-                    return True
+                    aft = _element_value(page, sel)
+                    if aft != before:
+                        return True
+                return True  # already checked = success
             except Exception:
                 pass
         return False
+
     if f["tag"] == "SELECT":
         el = page.query_selector(sel)
         if not el:
@@ -31,16 +93,37 @@ def field_deterministic(page, f, ans):
         methods = getattr(select, "METHOD_CHAIN", ["select_option"])
         for method in methods:
             if select.try_select_tag(el, f, ans, method=method):
-                return True
-        return False
+                aft = _element_value(page, sel)
+                if _check_delta(page, sel, before, aft, ans, label):
+                    return True
+        return _try_text_fallback(page, f, ans, sel)
+
     if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
-        return bool(combobox.fill(page, f, ans))
+        ok = bool(combobox.fill(page, f, ans))
+        if ok:
+            aft = _element_value(page, sel)
+            if _check_delta(page, sel, before, aft, ans, label):
+                return True
+        return _try_text_fallback(page, f, ans, sel)
+
     if f.get("datepicker") == "flatpickr":
         from apply.strategies import datepicker
-        return bool(datepicker.fill(page, sel, ans))
+        ok = bool(datepicker.fill(page, sel, ans))
+        if ok:
+            aft = _element_value(page, sel)
+            if _check_delta(page, sel, before, aft, ans, label):
+                return True
+        return _try_text_fallback(page, f, ans, sel)
+
     if f["tag"] == "DIV" or f.get("contenteditable"):
-        from apply.strategies import contenteditable
-        return bool(contenteditable.fill(page, sel, ans))
+        from apply.strategies import contenteditable as _ce
+        ok = bool(_ce.fill(page, sel, ans))
+        if ok:
+            aft = _element_value(page, sel)
+            if _check_delta(page, sel, before, aft, ans, label):
+                return True
+        return _try_text_fallback(page, f, ans, sel)
+
     if f["tag"] in ("INPUT", "TEXTAREA"):
         el = page.query_selector(sel) if sel else None
         if not el:
@@ -48,6 +131,9 @@ def field_deterministic(page, f, ans):
         methods = getattr(text, "METHOD_CHAIN", ["fill"])
         for method in methods:
             if text.fill_text_field(page, f, ans, sel, el, method=method):
-                return True
+                aft = _element_value(page, sel)
+                if _check_delta(page, sel, before, aft, ans, label):
+                    return True
         return False
+
     return False

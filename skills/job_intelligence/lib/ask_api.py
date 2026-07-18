@@ -6,7 +6,7 @@ Usage:
 
 On success prints the model reply. On failure prints the error."""
 
-import argparse, base64, json, os, time, urllib.request, urllib.error
+import argparse, base64, json, os, sys, time, urllib.request, urllib.error
 
 _PING_CACHE = os.path.join(os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), ".ask_api_ping")
 
@@ -173,7 +173,18 @@ def _payload(messages, temperature, max_tokens, cfg, timeout=60):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
-        return data["choices"][0]["message"]["content"], None
+        msg = data["choices"][0]["message"]
+        # Some models (DeepSeek R1, Qwen with reasoning) put thinking in
+        # reason_content / reasoning_content and the answer in content.
+        # If content is empty but reasoning content exists, use that instead.
+        content = msg.get("content", "") or ""
+        if not content.strip():
+            for _rc_key in ("reasoning_content", "reason_content"):
+                _rc = msg.get(_rc_key, "") or ""
+                if _rc.strip():
+                    content = _rc
+                    break
+        return content, None
     except urllib.error.HTTPError as e:
         return None, f"HTTP {e.code}: {e.read().decode()[:200]}"
     except urllib.error.URLError as e:

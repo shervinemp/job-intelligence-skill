@@ -1,9 +1,9 @@
-name: ripplehire
+name: coalition_careers
 version: 1
 detect:
   domains:
-    - ripplehire.com
-# handler_class: apply.handlers.standard_form.StandardFormHandler
+    - coalitioninc.com
+handler_class: apply.handlers.standard_form.StandardFormHandler
 probe:
   best_strategy: standard
 properties:

@@ -69,12 +69,16 @@ def _build_ephemeral(profile: dict) -> dict:
     # Derive location parts from "location" only if not given as explicit keys
     # (explicit profile.city/country/state win over the derivation).
     loc = profile.get("location", "")
+    if loc:
+        ephemeral.setdefault("address", (loc, "derived"))
     if loc and "," in loc:
         parts = [p.strip() for p in loc.split(",")]
         if len(parts) >= 1 and parts[0]:
             ephemeral.setdefault("city", (parts[0], "derived"))
         if len(parts) >= 2 and parts[1]:
             ephemeral.setdefault("state_province", (parts[1], "derived"))
+            ephemeral.setdefault("state", (parts[1], "derived"))
+            ephemeral.setdefault("province", (parts[1], "derived"))
         if len(parts) >= 3 and parts[-1]:
             ephemeral.setdefault("country", (parts[-1], "derived"))
 
@@ -82,7 +86,7 @@ def _build_ephemeral(profile: dict) -> dict:
     if isinstance(answers, dict):
         for k, v in answers.items():
             if v:
-                ephemeral[k] = (v, "static")
+                ephemeral[k] = (str(v) if not isinstance(v, list) else [str(x) for x in v], "static")
 
     return ephemeral
 
@@ -119,6 +123,16 @@ def resolve(
     ephemeral = _build_ephemeral(profile)
     for key, (val, _source) in ephemeral.items():
         if normalize(key.replace("_", " ")) == norm:
+            return Resolution(val, key, label, "ephemeral")
+
+    # Step 3: keyword-level match — profile answer keys often contain key terms
+    # that appear inside the field label (e.g. profile:willing_to_relocate →
+    # field:"Are you willing to relocate"). Match when profile key's keywords
+    # are a strong subset of the field label's keywords.
+    _norm_words = set(norm.split())
+    for key, (val, _source) in ephemeral.items():
+        _key_words = set(normalize(key.replace("_", " ")).split())
+        if len(_key_words) >= 2 and _key_words.issubset(_norm_words):
             return Resolution(val, key, label, "ephemeral")
 
     return Resolution(None, None, label, "no_match")
