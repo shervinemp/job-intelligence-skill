@@ -120,6 +120,28 @@ class FuzzyComboboxReader(FieldValueReader):
             return None
 
 
+class VisionReader(FieldValueReader):
+    """Last resort: screenshot and ask vision API if the expected value is visible.
+    Only fires when ans is provided and all other readers returned empty.
+    No platform assumptions — works for any custom widget that renders values visually."""
+    name = "vision"
+
+    def read(self, page, sel, ans=None):
+        if not ans:
+            return None
+        try:
+            from lib.ask_api import ask
+            import tempfile, os
+            path = os.path.join(tempfile.gettempdir(), f'vision_read_{id(self)}.jpg')
+            page.screenshot(path=path, full_page=False)
+            result = ask(path, f'Look at this screenshot carefully. Is the value "{ans}" selected or filled in any field? Answer only YES or NO.')
+            if result and result[0] and 'YES' in result[0].upper():
+                return ans
+            return None
+        except Exception:
+            return None
+
+
 # ── Default cascade ────────────────────────────────────────────────────────
 
 _DEFAULT_CASCADE = [
@@ -127,6 +149,7 @@ _DEFAULT_CASCADE = [
     AriaComboboxReader(),
     ReactSelectReader(),
     FuzzyComboboxReader(),
+    VisionReader(),
 ]
 
 
