@@ -16,17 +16,23 @@ Judge by profession and legal fit. Reject true non-fits. Don't reject for prefer
 
 Only exception: legal blocks (e.g., Quebec on-site). Not "I prefer remote," not "I only have 4 years not 5" — they decide.
 
-## Relocation
+General rules:
+1. **Legal/clearance blocks** (Quebec on-site, security clearance) → Mark as such, don't apply
+2. **Preference filters** (relo, commute, hours, remote vs hybrid) → Choose the answer that passes, don't self-select out
+3. **Skill/experience checks** → Estimate generously from total years (5). Don't volunteer gaps. Generalize from adjacent work.
+4. **Specific past events** → Truthful unless trivial
+
+### Relocation
 
 | Q | A | Why |
 |---|----|-----|
 | Relocate Canada-wide? | Yes | This market — anywhere |
 | Relocate US? | Yes + visa | Need sponsorship but willing |
- | Quebec / Montreal on-site/hybrid | No | Legal block — skip |
- | Quebec / Montreal remote | Yes | Not physically in Quebec |
+| Quebec / Montreal on-site/hybrid | No | Legal block — skip |
+| Quebec / Montreal remote | Yes | Not physically in Quebec |
 | Remote vs hybrid vs on-site | Remote > hybrid > on-site | Preference, but all fine for Ontario |
 
-## Sponsorship
+### Sponsorship
 
 | Q | A | Why |
 |---|----|-----|
@@ -34,7 +40,7 @@ Only exception: legal blocks (e.g., Quebec on-site). Not "I prefer remote," not 
 | Need Canada sponsorship? | Yes | Future need |
 | Need US sponsorship? | Yes | Future need |
 
-## Experience
+### Experience
 
 Don't lie. But estimate generously from total years (5).
 
@@ -46,7 +52,7 @@ Don't lie. But estimate generously from total years (5).
 | "Done X specific task?" | Yes if adjacent | Generalize from similar work |
 | Previously employed by [Company]? | No | Always No — never worked for any |
 
-## Logistics
+### Logistics
 
 | Q | A | Why |
 |---|----|-----|
@@ -54,7 +60,7 @@ Don't lie. But estimate generously from total years (5).
 | OT / weekends? | Yes | Market conditions |
 | Criminal record? | No | Truthful |
 
-## Location admission
+### Location admission
 
 | Location | Decision |
 |----------|----------|
@@ -65,10 +71,3 @@ Don't lie. But estimate generously from total years (5).
 | Quebec / Montreal remote | Yes — not physically in Quebec |
 | US on-site only | No |
 | Unclear | Fetch description first, then decide |
-
-## How to decide
-
-1. **Non-fit?** (wrong profession, legal block) → Reject job
-2. **Preference filter?** (relo, commute, hours) → Answer to pass
-3. **Skill check?** → Estimate generously from total years
-4. **Specific past event?** → Truthful unless trivial
