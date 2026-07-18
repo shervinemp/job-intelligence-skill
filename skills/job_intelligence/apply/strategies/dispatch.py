@@ -18,6 +18,9 @@ def _frame_for_sel(page, sel):
 
 
 def _element_value(page, sel):
+    """Read field value from DOM. Covers 99% of sites — el.value for inputs,
+    textContent for DIVs, selected option text for SELECTs.
+    Comboboxes with custom rendering (e.g. Greenhouse) may return empty."""
     try:
         fr = _frame_for_sel(page, sel) or page
         return (fr.evaluate(f"""() => {{
@@ -25,22 +28,8 @@ def _element_value(page, sel):
             if (!el) return '';
             if (el.tagName === 'SELECT') return el.options[el.selectedIndex]?.text || el.value || '';
             if (el.type === 'checkbox') return el.checked ? '__checked__' : '';
-            const role = el.getAttribute('role') || '';
-            if (role === 'combobox' || el.tagName === 'DROPDOWN') {{
-                const v = el.value || '';
-                if (v) return v;
-                const owns = el.getAttribute('aria-owns');
-                if (owns) {{
-                    const lb = document.getElementById(owns);
-                    if (lb) {{
-                        const s = lb.querySelector('[aria-selected="true"], [class*="selected"], [class*="highlight"]');
-                        if (s) return s.textContent?.trim() || '';
-                    }}
-                }}
-                return el.textContent?.trim() || '';
-            }}
             if (el.tagName === 'DIV' || el.isContentEditable) return el.textContent?.trim() || '';
-            return el.value || el.textContent?.trim() || '';
+            return el.value || '';
         }}""") or "").strip()
     except Exception:
         return ""
