@@ -14,53 +14,25 @@ Judge by profession and legal fit. Reject true non-fits. Don't reject for prefer
 
 **Don't self-reject.** Screening questions are meant to cull you. Answer to pass through, let company reject post-resume.
 
-Only exception: legal blocks (e.g., Quebec on-site). Not "I prefer remote," not "I only have 4 years not 5" — they decide.
+Exception: legal blocks (e.g., Quebec on-site). Not preference filters — they decide.
 
 General rules:
-1. **Legal/clearance blocks** (Quebec on-site, security clearance) → Mark as such, don't apply
-2. **Preference filters** (relo, commute, hours, remote vs hybrid) → Choose the answer that passes, don't self-select out
-3. **Skill/experience checks** → Estimate generously from total years (5). Don't volunteer gaps. Generalize from adjacent work.
-4. **Specific past events** → Truthful unless trivial
+1. **Legal/clearance blocks** → Skip. Don't spend time on CANNOT-hire locations.
+2. **Preference filters** (relo, commute, hours, remote vs hybrid) → Answer the way that passes the filter. Let the company decide if it matters.
+3. **Skill/experience checks** → Infer from resume and `profile.json`. When range is ambiguous (e.g. "3-5 years"), round up generously. Never volunteer gaps or lack. Generalize from adjacent work if the core skill transfers.
+4. **Specific past events** (previously employed, criminal history) → Truthful unless trivial (e.g. expired parking ticket).
 
-### Relocation
+### Answer sourcing
 
-| Q | A | Why |
-|---|----|-----|
-| Relocate Canada-wide? | Yes | This market — anywhere |
-| Relocate US? | Yes + visa | Need sponsorship but willing |
-| Quebec / Montreal on-site/hybrid | No | Legal block — skip |
-| Quebec / Montreal remote | Yes | Not physically in Quebec |
-| Remote vs hybrid vs on-site | Remote > hybrid > on-site | Preference, but all fine for Ontario |
+Each answer is resolved from (in priority order):
+1. `--answers` JSON (explicit overrides from the operator)
+2. `common_answers` (reused values saved per key)
+3. `profile.json` (canonical source of truth)
+4. Resume inference (extrapolated from CV content)
 
-### Sponsorship
+The `profile.json` is where all personal data lives (years per skill group, work authorization, location preferences, availability). Do not hardcode profile values in this file — they change over time and per person. Update `profile.json` instead.
 
-| Q | A | Why |
-|---|----|-----|
-| Authorized Canada? | Yes | Current status valid |
-| Need Canada sponsorship? | Yes | Future need |
-| Need US sponsorship? | Yes | Future need |
-
-### Experience
-
-Don't lie. But estimate generously from total years (5).
-
-| Q | A | Why |
-|---|----|-----|
-| Years core skill (Python/backend/web)? | 5 | Core skillset, matches total |
-| Years adjacent (AWS, Docker, CI/CD)? | 2-4 | Touched these, round up |
-| Specific framework unfamiliar? | No | Don't volunteer gaps |
-| "Done X specific task?" | Yes if adjacent | Generalize from similar work |
-| Previously employed by [Company]? | No | Always No — never worked for any |
-
-### Logistics
-
-| Q | A | Why |
-|---|----|-----|
-| Available start? | Immediately / 2 weeks | Current job abusive, can leave fast |
-| OT / weekends? | Yes | Market conditions |
-| Criminal record? | No | Truthful |
-
-### Location admission
+### Location rules
 
 | Location | Decision |
 |----------|----------|
