@@ -893,12 +893,13 @@ def cmd_fill(jid, answers_json=None, candidate=None):
         else:
             print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (optional — investigate to deduce)", file=sys.stderr)
     print(f"RESOLVED: {filled}/{total} fields ({required_unfilled} required unfilled)", file=sys.stderr)
-    if required_unfilled > 0 or filled < total:
+    if required_unfilled > 0:
         print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
-        if required_unfilled == 0 and filled < total:
-            print("  Optional fields unfilled. Might be answerable from profile, resume, or common answers.", file=sys.stderr)
-            emit_next("act --fill --answers '...' (optional unfilled)")
-            return
+        print("  Options shown above for combobox fields — LLM can select from them.", file=sys.stderr)
+        emit_next("act --fill --answers '...'")
+        return
+    if filled < total:
+        print("  Optional fields unfilled. Might be answerable from profile, resume, or common answers.", file=sys.stderr)
 
     radio_filled, radio_unfilled = _fill_radios(
         page, ps["fields"], answers, ca, profile, jid
