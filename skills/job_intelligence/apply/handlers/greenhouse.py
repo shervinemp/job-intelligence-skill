@@ -159,7 +159,16 @@ class GreenhouseHandler(PlatformHandler):
                     return true;
                 }}""")
             else:
-                ok = set_react_input(page, field.selector, value)
+                # Route combobox fields through graduated escalation
+                is_combobox = page.evaluate(f"""() =>
+                    document.querySelector({json.dumps(field.selector)})?.getAttribute('role') === 'combobox'
+                """)
+                if is_combobox:
+                    from apply.strategies.combobox import fill as combo_fill
+                    fake_f = {"_sel": field.selector, "label": field.label, "tag": "INPUT"}
+                    ok = combo_fill(page, fake_f, value)
+                else:
+                    ok = set_react_input(page, field.selector, value)
             return FillResult(ok=ok, field_key=field.key)
         except Exception as e:
             return FillResult(ok=False, field_key=field.key, error=str(e))
