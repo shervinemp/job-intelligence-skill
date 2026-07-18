@@ -3,6 +3,7 @@ Tries each method in METHOD_CHAIN, then cross-type fallbacks.
 Pre/post delta check verifies mutations actually took effect."""
 import json, sys
 from apply.strategies import combobox, text, select
+from apply.common.value_reader import read_value as _read_value
 from apply.steps.probe import resolve_selector
 
 
@@ -18,44 +19,10 @@ def _frame_for_sel(page, sel):
 
 
 def _element_value(page, sel, ans=None):
-    """Read field value from DOM. Waterfall:
-    1. el.value (standard inputs, ~85%)
-    2. aria-owns listbox: aria-selected option text (WAI-ARIA, ~10-15%)
-    3. aria-owns listbox: fuzzy match all options against ans (~5%, Greenhouse)
-    4. textContent (DIV-based fields)"""
+    """Read field value using FieldValueReader cascade (see value_reader.py)."""
     try:
         fr = _frame_for_sel(page, sel) or page
-        ans_json = json.dumps(ans) if ans else "null"
-        return (fr.evaluate(f"""() => {{
-            const el = document.querySelector({json.dumps(sel)});
-            if (!el) return '';
-            if (el.tagName === 'SELECT') return el.options[el.selectedIndex]?.text || el.value || '';
-            if (el.type === 'checkbox') return el.checked ? '__checked__' : '';
-            if (el.tagName === 'DIV' || el.isContentEditable) return el.textContent?.trim() || '';
-            const v = el.value || '';
-            if (v) return v;
-            const owns = el.getAttribute('aria-owns');
-            if (owns) {{
-                const lb = document.getElementById(owns);
-                if (lb) {{
-                    const opts = lb.querySelectorAll('[role="option"]');
-                    // Level 2: aria-selected
-                    for (const o of opts) {{
-                        if (o.getAttribute('aria-selected') === 'true') return o.textContent?.trim() || '';
-                    }}
-                    // Level 3: fuzzy match against expected answer
-                    const a = {ans_json};
-                    if (a) {{
-                        const aL = a.toLowerCase();
-                        for (const o of opts) {{
-                            const t = (o.textContent || '').trim();
-                            if (t.toLowerCase().includes(aL) || aL.includes(t.toLowerCase())) return t;
-                        }}
-                    }}
-                }}
-            }}
-            return '';
-        }}""") or "").strip()
+        return _read_value(fr, sel, ans=ans)
     except Exception:
         return ""
 
