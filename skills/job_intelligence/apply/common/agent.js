@@ -206,7 +206,71 @@
     if (AGENT._submitLog.length > 50) AGENT._submitLog.shift();
   };
 
-  // ── 7. Console error capture ─────────────────────────────────────────
+  // ── 7. Autocomplete / multiselect widget handler ────────────────────
+  // Province, Country, and similar dropdowns that use a button + search input + radio list.
+  // Returns a Promise — Playwright's page.evaluate() awaits it.
+  // Sequential calls are safe since each fully resolves before the next starts.
+  AGENT.fillAutocomplete = async function (fieldLabel, value) {
+    var btn = null;
+    var btns = document.querySelectorAll(
+      'button.multiselect, .multiselect.dropdown-toggle, [data-toggle="dropdown"]'
+    );
+    var labelLower = fieldLabel.toLowerCase();
+    for (var i = 0; i < btns.length; i++) {
+      var txt = (btns[i].textContent || "").toLowerCase().trim();
+      if (txt.includes(labelLower) || labelLower.includes(txt)) {
+        btn = btns[i];
+        break;
+      }
+    }
+    if (!btn) return { ok: false, error: "button not found" };
+    btn.click();
+
+    // Wait for dropdown to render
+    await new Promise(function (r) { setTimeout(r, 500); });
+
+    // Type into the visible search input
+    var searchInp = null;
+    var inputs = document.querySelectorAll("input.singleselect-search");
+    for (var j = 0; j < inputs.length; j++) {
+      if (inputs[j].offsetParent !== null) {
+        searchInp = inputs[j];
+        break;
+      }
+    }
+    if (searchInp) {
+      searchInp.value = value;
+      searchInp.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise(function (r) { setTimeout(r, 300); });
+    }
+
+    // Find and click the matching option
+    var items = document.querySelectorAll(
+      '.multiselect-container li label, .dropdown-menu li label'
+    );
+    var valLower = value.toLowerCase();
+    var clicked = false;
+    for (var k = 0; k < items.length; k++) {
+      var itemText = (items[k].textContent || "").trim().toLowerCase();
+      // Exact match + prefix match (handles "Ontario" matching "Ontario" in a list)
+      if (
+        itemText === valLower ||
+        itemText.indexOf(valLower + " ") === 0 ||
+        itemText.indexOf(valLower + ",") === 0 ||
+        itemText === valLower + "." ||
+        itemText === valLower + ":"
+      ) {
+        var radio = items[k].querySelector('input[type="radio"], input[type="checkbox"]');
+        if (radio) { radio.click(); }
+        else { items[k].click(); }
+        clicked = true;
+        break;
+      }
+    }
+    return { ok: clicked, field: fieldLabel, value: value };
+  };
+
+  // ── 8. Console error capture ─────────────────────────────────────────
   AGENT._consoleErrors = [];
   AGENT.drainConsoleErrors = function () {
     var copy = AGENT._consoleErrors.slice();

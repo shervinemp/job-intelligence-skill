@@ -38,6 +38,16 @@ def click(page, selector: str) -> dict:
     return result or {"ok": False, "error": "agent not available"}
 
 
+def fill_autocomplete(page, field_label: str, value: str) -> dict:
+    """Fill an autocomplete/search dropdown (Province, Country, etc.).
+    Clicks the dropdown button, types the search term, selects the matching option.
+    Returns {ok: bool, field: str, value: str, error: str}."""
+    result = page.evaluate(
+        f"window.__opencode?.fillAutocomplete({json.dumps(field_label)}, {json.dumps(value)})"
+    )
+    return result or {"ok": False, "error": "agent not available"}
+
+
 def drain_value_log(page) -> list[dict]:
     """Get and clear the value change log since last drain.
     Each entry: {selector, label, oldVal, newVal, ts, trusted}."""
