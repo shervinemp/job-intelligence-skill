@@ -1,8 +1,20 @@
 # Decisions
 
-**Don't self-reject.** Screening filters are meant to cull you. Answer to pass through, let company reject post-resume.
+## Pipeline admission (extract/enrich)
 
-Only exception: true non-fit (wrong profession, Quebec/Montreal any = legal block). Not "I prefer remote" — they decide.
+Judge by profession and legal fit. Reject true non-fits. Don't reject for preferences (remote vs hybrid, salary range, imposter syndrome) — let the company decide.
+
+| If | Then |
+|----|------|
+| Wrong profession (hardware, embedded, non-tech roles) | Reject |
+| Legal block (Quebec on-site/hybrid, requires clearance you lack) | Reject |
+| Everything else (any tech role, any location that's not blocked) | Admit — you're a generalist |
+
+## Application screening (apply.py)
+
+**Don't self-reject.** Screening questions are meant to cull you. Answer to pass through, let company reject post-resume.
+
+Only exception: legal blocks (e.g., Quebec on-site). Not "I prefer remote," not "I only have 4 years not 5" — they decide.
 
 ## Relocation
 

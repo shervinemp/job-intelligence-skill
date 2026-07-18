@@ -80,6 +80,38 @@ def run(jid):
     ep.goto(external_url, wait_until="domcontentloaded", timeout=30000)
     time.sleep(5)
 
+    # Some ATS board URLs redirect to branded career pages that wrap the form in a
+    # cross-origin iframe (e.g., boards.greenhouse.io → mongodb.com/careers/... with a
+    # GHG embed iframe). Navigate to the iframe URL directly so fill can reach the fields.
+    # General approach: try each iframe URL, check if the loaded page has real form fields
+    # (required inputs with meaningful labels). Works for any ATS, known or unknown.
+    actual_url = ep.url
+    if actual_url.rstrip("/") != external_url.rstrip("/"):
+        iframe_urls = ep.evaluate("""() =>
+            Array.from(document.querySelectorAll('iframe'))
+                .map(f => f.src).filter(s => s && s.startsWith('http'))
+        """) or []
+        for u in iframe_urls:
+            try:
+                ep.goto(u, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(3)
+                ps = read_page(ep)
+                has_form = any(
+                    f.get("required") and len((f.get("label") or "").strip()) > 1
+                    and f.get("tag") not in ("CHECKBOX", "FILE")
+                    for f in ps.get("fields", [])
+                )
+                if has_form:
+                    print(f"IFRAME_FORM: found {sum(1 for f in ps['fields'] if f.get('required'))} required fields — using {u}", file=sys.stderr)
+                    p = detect_platform(u)
+                    if p:
+                        plat = p
+                    external_url = u
+                    page_state = ps
+                    break
+            except Exception as e:
+                print(f"IFRAME_SKIP: {u} — {e}", file=sys.stderr)
+
     from apply.common.page_manager import PageManager
 
     page_state = read_page(ep)
