@@ -861,9 +861,10 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     # Pass 1: Probe — enrich fields with available options and constraints
     ps["fields"] = _probe_fields(page, ps["fields"])
 
-    # Preview: resolve answers and print what will fill — runs for both dry-run and --apply
+    # Preview: resolve answers and print what will fill
     filled = 0
     total = len(ps.get("fields", []))
+    required_unfilled = 0
     print("FIELDS — preview:", file=sys.stderr)
     for f in ps.get("fields", []):
         lbl = f.get("label", "")
@@ -888,8 +889,9 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             opts = f.get("options", [])
             opt_hint = f"  options: {opts[:5]}" if opts else ""
             print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (required){opt_hint}", file=sys.stderr)
-    print(f"RESOLVED: {filled}/{total} fields", file=sys.stderr)
-    if filled < total:
+            required_unfilled += 1
+    print(f"RESOLVED: {filled}/{total} fields ({required_unfilled} required unfilled)", file=sys.stderr)
+    if required_unfilled > 0:
         print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
         print("  Options shown above for combobox fields — LLM can select from them.", file=sys.stderr)
         emit_next("act --fill --answers '...'")
@@ -997,12 +999,12 @@ def cmd_fill(jid, answers_json=None, candidate=None):
 
     read_and_save(page, state)
 
-    # Verify filled values persisted (ATS may reject or clear values silently)
+    # Verify filled values persisted — single retry, then proceed regardless
     ps_v = read_page(page)
     missing = [fv.get("label", "?")[:50] for fv in ps_v.get("fields", [])
                if fv.get("required") and not fv.get("value", "").strip() and fv.get("type") != "file"]
     if missing:
-        print(f"RE_FILL: {len(missing)} required fields empty after fill — retrying", file=sys.stderr)
+        print(f"RE_FILL: {len(missing)} required fields empty — retrying once", file=sys.stderr)
         for ml in missing:
             match = next((ff for ff in ps_v["fields"] if ff.get("label", "")[:50] == ml), None)
             if match:
