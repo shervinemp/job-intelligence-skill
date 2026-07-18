@@ -137,7 +137,7 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
             with open(resume_path, "w", encoding="utf-8") as f:
                 json.dump(resume_data, f, indent=2)
             from lib.build_resume import build as build_pdfs
-            out = build_pdfs(resume_path, app_dir)
+            out = build_pdfs(resume_path, app_dir, company=job.get("company", ""))
             if out:
                 print(f"  RESUME: {out['resume']}", file=sys.stderr)
                 if out.get('cover'):

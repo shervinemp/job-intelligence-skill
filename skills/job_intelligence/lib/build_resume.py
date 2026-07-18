@@ -133,7 +133,7 @@ def _read_json(path):
         return json.load(f)
 
 
-def _build_resume(pdf, data):
+def _build_resume(pdf, data, company=None):
     """Render resume from JSON Resume format data."""
     pdf.set_auto_page_break(auto=True, margin=10)
     pdf.add_page()
@@ -245,16 +245,17 @@ def _build_resume(pdf, data):
                 pdf.bullet_point(c)
             pdf.ln(0.5)
 
-    # Filename from data
+    # Filename from data — use target company, fall back to most recent work entry
     name_slug = _clean_fn(name.replace(" ", "_"))
-    company_slug = _clean_fn(work[0].get("company", "").replace(" ", "_")) if work else ""
+    target = company or (work[0].get("company", "") if work else "")
+    company_slug = _clean_fn(target.replace(" ", "_"))
     label_slug = _clean_fn(label.replace(" ", "_")[:30]) if label else "Resume"
     fn = f"{name_slug}_{company_slug}_{label_slug}_Resume.pdf"
     pdf.output(fn)
     return os.path.abspath(fn)
 
 
-def _build_cover_letter(pdf, data):
+def _build_cover_letter(pdf, data, company=None):
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
     st = pdf.st
@@ -267,7 +268,8 @@ def _build_cover_letter(pdf, data):
     pdf.multi_cell(0, 6, _s(body), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     basics = data.get("basics", {})
     work = data.get("work", [])
-    company_slug = _clean_fn(work[0].get("company", "").replace(" ", "_")) if work else ""
+    target = company or (work[0].get("company", "") if work else "")
+    company_slug = _clean_fn(target.replace(" ", "_"))
     name_slug = _clean_fn(basics.get("name", "Cover_Letter").replace(" ", "_"))
     fn = f"{name_slug}_{company_slug}_Cover_Letter.pdf" if company_slug else f"{name_slug}_Cover_Letter.pdf"
     pdf.output(fn)
@@ -382,12 +384,13 @@ def validate_file(path):
     return True
 
 
-def build(data_path, output_dir):
+def build(data_path, output_dir, company=None):
     """Validate + build resume and cover letter PDFs from a JSON Resume data file.
 
     Args:
         data_path: Path to resume JSON
         output_dir: Directory to write PDFs into
+        company: Target company name for filenames (falls back to most recent work entry)
 
     Returns: dict with keys "resume" and "cover" (paths to generated PDFs, or None),
              or None if validation fails.
@@ -402,7 +405,7 @@ def build(data_path, output_dir):
 
     try:
         rpdf = _ResumePDF(data.get("_style", {}))
-        rpath = _build_resume(rpdf, data)
+        rpath = _build_resume(rpdf, data, company=company)
         basics = data.get("basics", {})
         cover_style = dict(data.get("_style", {}))
         cover_style.update(name=basics.get("name", ""), email=basics.get("email", ""), phone=basics.get("phone", ""),
@@ -412,7 +415,7 @@ def build(data_path, output_dir):
             cover_style["portfolio"] = profiles[0].get("url", "")
             cover_style["portfolio_url"] = profiles[0].get("url", "")
         cpdf = _CoverLetterPDF(cover_style)
-        cpath = _build_cover_letter(cpdf, data)
+        cpath = _build_cover_letter(cpdf, data, company=company)
         return {"resume": rpath, "cover": cpath}
     finally:
         os.chdir(cwd)
