@@ -894,10 +894,10 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (optional — investigate to deduce)", file=sys.stderr)
     print(f"RESOLVED: {filled}/{total} fields ({required_unfilled} required unfilled)", file=sys.stderr)
     if required_unfilled > 0 or filled < total:
-        print("  Optional unfilled fields may be deduced from job source, resume, or prior answers.", file=sys.stderr)
         print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
-        if required_unfilled == 0:
-            emit_next("act --fill --answers '...'  (optional fields only)")
+        if required_unfilled == 0 and filled < total:
+            print("  Optional unfilled — investigate using resume.json, vision, profile before skipping.", file=sys.stderr)
+            emit_next("act --fill --answers '...' (optional unfilled)")
             return
 
     radio_filled, radio_unfilled = _fill_radios(
