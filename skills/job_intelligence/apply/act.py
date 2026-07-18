@@ -890,6 +890,10 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             opt_hint = f"  options: {opts[:5]}" if opts else ""
             print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (required){opt_hint}", file=sys.stderr)
             required_unfilled += 1
+        else:
+            # Optional unfilled — show profile keys that might match
+            url_keys = [k for k in profile.get("answers", {}) if k.endswith(("_url", "_path", "_handle", "email", "phone"))]
+            print(f"  [{f['tag']}] {lbl[:50]} -> optional (profile has: {', '.join(url_keys)})", file=sys.stderr)
     print(f"RESOLVED: {filled}/{total} fields ({required_unfilled} required unfilled)", file=sys.stderr)
     if required_unfilled > 0:
         print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
