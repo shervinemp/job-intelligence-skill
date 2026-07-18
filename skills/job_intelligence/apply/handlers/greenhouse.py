@@ -99,7 +99,17 @@ class GreenhouseHandler(PlatformHandler):
                     }
                 }
                 if (!label) label = el.name || '';
-                const val = (el.value || '').trim();
+                let val = (el.value || '').trim();
+                if (!val && el.getAttribute('role') === 'combobox') {
+                    const owns = el.getAttribute('aria-owns');
+                    if (owns) {
+                        const lb = document.getElementById(owns);
+                        if (lb) {
+                            const sel = lb.querySelector('[aria-selected="true"]');
+                            if (sel) val = (sel.textContent || '').trim();
+                        }
+                    }
+                }
                 const empty = !val || ['select', 'select...', 'select one', 'select an option', 'none', 'no selection'].includes(val.toLowerCase());
                 let type = 'TEXT';
                 if (el.tagName === 'SELECT') type = 'SELECT';
