@@ -38,12 +38,36 @@ class GreenhouseHandler(PlatformHandler):
     name = "greenhouse"
     domains = ["greenhouse.io", "boards.greenhouse.io", "grnh.se"]
 
+    def __init__(self):
+        self._frame = None
+
+    def _target(self, page):
+        """Return the page or frame containing the Greenhouse form.
+        Detects if the form is embedded in a cross-origin iframe and
+        returns the iframe frame so all operations target the right context."""
+        if hasattr(self, '_frame') and self._frame is not None:
+            try:
+                self._frame.evaluate('1+1')
+                return self._frame
+            except Exception:
+                pass
+        for f in page.frames:
+            if f == page.main_frame:
+                continue
+            u = f.url.lower()
+            if 'greenhouse.io' in u or 'grnh.se' in u:
+                self._frame = f
+                return f
+        self._frame = None
+        return page
+
     def detect(self, page) -> PageState:
-        text = (page.evaluate("() => document.body.innerText") or "").lower()
+        t = self._target(page)
+        text = (t.evaluate("() => document.body.innerText") or "").lower()
         applied = any(s in text for s in _SUCCESS_TEXTS)
         fields = self.extract_fields(page) if not applied else []
 
-        buttons = page.evaluate("""() => {
+        buttons = t.evaluate("""() => {
             return Array.from(document.querySelectorAll('button, a[role="button"], input[type="submit"]'))
                 .filter(el => el.offsetParent !== null && !el.disabled)
                 .map(el => (el.textContent || el.value || '').trim().toLowerCase())
@@ -52,7 +76,7 @@ class GreenhouseHandler(PlatformHandler):
 
         submit = next((b for b in buttons if any(s in b for s in _SUBMIT_TEXTS)), None)
         errors = self.get_errors(page) if not applied else []
-        has_file = bool(page.evaluate(f"() => document.querySelector('{_FILE_SEL}')"))
+        has_file = bool(t.evaluate(f"() => document.querySelector('{_FILE_SEL}')"))
 
         return PageState(
             flow_type=FlowType.PAGE,
@@ -81,7 +105,8 @@ class GreenhouseHandler(PlatformHandler):
         return "form"
 
     def extract_fields(self, page) -> list[Field]:
-        raw: list[dict[str, Any]] = page.evaluate("""() => {
+        t = self._target(page)
+        raw: list[dict[str, Any]] = t.evaluate("""() => {
             const results = [];
             const form = document.querySelector('form') || document.body;
             const sel = 'input:not([type=hidden]):not([type=submit]):not([type=radio]), select, textarea';
@@ -157,8 +182,9 @@ class GreenhouseHandler(PlatformHandler):
 
     def fill(self, page, field: Field, value: str) -> FillResult:
         try:
+            t = self._target(page)
             if field.type == FieldType.SELECT:
-                ok = page.evaluate(f"""() => {{
+                ok = t.evaluate(f"""() => {{
                     const el = document.querySelector({json.dumps(field.selector)});
                     if (!el) return false;
                     el.value = {json.dumps(value)};
@@ -167,7 +193,7 @@ class GreenhouseHandler(PlatformHandler):
                     return true;
                 }}""")
             elif field.type == FieldType.FILE:
-                ok = page.evaluate(f"""() => {{
+                ok = t.evaluate(f"""() => {{
                     const el = document.querySelector({json.dumps(field.selector)});
                     if (!el) return false;
                     el.style.display = 'block';
@@ -175,7 +201,7 @@ class GreenhouseHandler(PlatformHandler):
                 }}""")
             else:
                 # Route combobox fields through graduated escalation
-                is_combobox = page.evaluate(f"""() =>
+                is_combobox = t.evaluate(f"""() =>
                     document.querySelector({json.dumps(field.selector)})?.getAttribute('role') === 'combobox'
                 """)
                 if is_combobox:
@@ -238,16 +264,17 @@ class GreenhouseHandler(PlatformHandler):
 
     def ensure_modal_open(self, page) -> bool:
         """Open the Greenhouse apply form. Handles login walls and 'Apply Now' buttons."""
+        t = self._target(page)
         # Check if form fields are already visible
         fields = self.extract_fields(page)
         if len(fields) > 2:
             return True
 
-        text = (page.evaluate("() => document.body.innerText") or "").lower()
+        text = (t.evaluate("() => document.body.innerText") or "").lower()
 
         # Handle guest apply / login wall
         if "sign in to apply" in text or "already have an account" in text:
-            guest = page.evaluate("""() => {
+            guest = t.evaluate("""() => {
                 for (const el of document.querySelectorAll('button, a')) {
                     const t = (el.textContent || '').trim().toLowerCase();
                     if (t.includes('continue without signing in') || t.includes('apply as guest')) {
@@ -261,7 +288,7 @@ class GreenhouseHandler(PlatformHandler):
                 return len(self.extract_fields(page)) > 1
 
         # Click "Apply Now" or "Apply for this job" to reveal the form
-        clicked = page.evaluate("""() => {
+        clicked = t.evaluate("""() => {
             const kws = ['apply now', 'apply for this job', 'apply', 'submit application'];
             for (const el of document.querySelectorAll('button, a')) {
                 if (el.offsetParent === null || el.disabled) continue;
@@ -309,7 +336,7 @@ class GreenhouseHandler(PlatformHandler):
             return True
 
     def is_applied(self, page) -> bool:
-        return check_applied_signal(page)
+        return check_applied_signal(self._target(page))
 
     def get_errors(self, page) -> list[str]:
         return page.evaluate("""() => {
