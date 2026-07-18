@@ -208,12 +208,12 @@ def _build_resume(pdf, data, company=None):
     if work:
         pdf.section_title("Experience")
         for w in work:
-            company = w.get("company", "")
+            co = w.get("company", "")
             position = w.get("position", "")
             sd = (w.get("startDate") or "")[:7]
             ed = (w.get("endDate") or "")[:7]
             date_str = f"{sd} - {ed}" if sd or ed else ""
-            pdf.job_header(position, company, w.get("location", ""), date_str)
+            pdf.job_header(position, co, w.get("location", ""), date_str)
             for h in w.get("highlights", []):
                 pdf.bullet_point(_s(h))
             pdf.ln(1.5)
