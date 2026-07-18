@@ -655,6 +655,19 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     # Registry + probe cascade
     domain = _domain(page.url)
     registry = resolve_registry(page.url)
+    # If no registry found for the wrapper page, check iframes
+    # (e.g. Greenhouse form embedded on MongoDB's careers page)
+    if not registry:
+        for f in page.frames:
+            if f == page.main_frame:
+                continue
+            try:
+                reg = resolve_registry(f.url)
+                if reg:
+                    registry = reg
+                    break
+            except Exception:
+                continue
     if registry:
         registry.emit_notes()
 
