@@ -17,13 +17,15 @@ def _frame_for_sel(page, sel):
     return None
 
 
-def _element_value(page, sel):
+def _element_value(page, sel, ans=None):
     """Read field value from DOM. Waterfall:
-    1. el.value (standard inputs, 85% of sites)
-    2. aria-owns listbox option text (WAI-ARIA combobox pattern, 10-15%)
-    3. textContent (DIV-based fields)"""
+    1. el.value (standard inputs, ~85%)
+    2. aria-owns listbox: aria-selected option text (WAI-ARIA, ~10-15%)
+    3. aria-owns listbox: fuzzy match all options against ans (~5%, Greenhouse)
+    4. textContent (DIV-based fields)"""
     try:
         fr = _frame_for_sel(page, sel) or page
+        ans_json = json.dumps(ans) if ans else "null"
         return (fr.evaluate(f"""() => {{
             const el = document.querySelector({json.dumps(sel)});
             if (!el) return '';
@@ -32,13 +34,23 @@ def _element_value(page, sel):
             if (el.tagName === 'DIV' || el.isContentEditable) return el.textContent?.trim() || '';
             const v = el.value || '';
             if (v) return v;
-            // Standard WAI-ARIA combobox: read selected option from listbox
             const owns = el.getAttribute('aria-owns');
             if (owns) {{
                 const lb = document.getElementById(owns);
                 if (lb) {{
-                    for (const o of lb.querySelectorAll('[role="option"]')) {{
+                    const opts = lb.querySelectorAll('[role="option"]');
+                    // Level 2: aria-selected
+                    for (const o of opts) {{
                         if (o.getAttribute('aria-selected') === 'true') return o.textContent?.trim() || '';
+                    }}
+                    // Level 3: fuzzy match against expected answer
+                    const a = {ans_json};
+                    if (a) {{
+                        const aL = a.toLowerCase();
+                        for (const o of opts) {{
+                            const t = (o.textContent || '').trim();
+                            if (t.toLowerCase().includes(aL) || aL.includes(t.toLowerCase())) return t;
+                        }}
                     }}
                 }}
             }}
@@ -130,7 +142,7 @@ def field_deterministic(page, f, ans):
     if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
         ok = bool(combobox.fill(fr, f, ans))
         if ok:
-            aft = _element_value(page, sel)
+            aft = _element_value(page, sel, ans=ans)
             if _check_delta(page, sel, before, aft, ans, label):
                 return True
         return _try_text_fallback(fr, f, ans, sel)
