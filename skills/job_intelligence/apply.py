@@ -84,7 +84,7 @@ def main():
         from apply.navigate import run
         run(args.jid)
     elif args.command == "act":
-        from apply.act import run
+        from apply.core import run
         run(args)
     elif args.command == "verify":
         from apply.verify import run
