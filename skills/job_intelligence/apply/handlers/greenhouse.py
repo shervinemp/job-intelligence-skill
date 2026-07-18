@@ -208,6 +208,17 @@ class GreenhouseHandler(PlatformHandler):
                     document.querySelector({json.dumps(field.selector)})?.getAttribute('role') === 'combobox'
                 """)
                 if is_combobox:
+                    # React-Select: click control to open menu before generic combobox fill
+                    try:
+                        t.evaluate(f"""() => {{
+                            const el = document.querySelector({json.dumps(field.selector)});
+                            if (!el) return;
+                            const ctrl = el.closest('.select__control');
+                            if (ctrl) ctrl.click();
+                        }}""")
+                        time.sleep(1)
+                    except Exception:
+                        pass
                     from apply.strategies.combobox import fill as combo_fill
                     fake_f = {"_sel": field.selector, "label": field.label, "tag": "INPUT"}
                     ok = combo_fill(page, fake_f, value)
