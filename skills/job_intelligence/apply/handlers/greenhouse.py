@@ -205,7 +205,7 @@ class GreenhouseHandler(PlatformHandler):
         # Use locator (cross-frame) not evaluate (main-frame only)
         for t in _SUBMIT_TEXTS + _NEXT_TEXTS + ("review", "done"):
             try:
-                btn = page.locator(f'button:has-text("{t}")')
+                btn = page.locator(f'button:has-text("{t}"):visible')
                 if btn.count() > 0:
                     return True
             except Exception:
