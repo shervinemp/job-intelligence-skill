@@ -242,7 +242,12 @@ class GreenhouseHandler(PlatformHandler):
             return False
 
     def can_proceed(self, page) -> bool:
-        # Use locator (cross-frame) not evaluate (main-frame only)
+        # Check required fields first — don't proceed if empty
+        fields = self.extract_fields(page)
+        required_empty = [f for f in fields if f.required and not f.value]
+        if required_empty:
+            return False
+        # Then check for submit/next buttons using locator (cross-frame, visibility-checked)
         for t in _SUBMIT_TEXTS + _NEXT_TEXTS + ("review", "done"):
             try:
                 btn = page.locator(f'button:has-text("{t}"):visible')
