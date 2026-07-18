@@ -891,15 +891,14 @@ def cmd_fill(jid, answers_json=None, candidate=None):
             print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (required){opt_hint}", file=sys.stderr)
             required_unfilled += 1
         else:
-            # Optional unfilled — show profile keys that might match
-            url_keys = [k for k in profile.get("answers", {}) if k.endswith(("_url", "_path", "_handle", "email", "phone"))]
-            print(f"  [{f['tag']}] {lbl[:50]} -> optional (profile has: {', '.join(url_keys)})", file=sys.stderr)
+            print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (optional — investigate to deduce)", file=sys.stderr)
     print(f"RESOLVED: {filled}/{total} fields ({required_unfilled} required unfilled)", file=sys.stderr)
-    if required_unfilled > 0:
+    if required_unfilled > 0 or filled < total:
+        print("  Optional unfilled fields may be deduced from job source, resume, or prior answers.", file=sys.stderr)
         print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
-        print("  Options shown above for combobox fields — LLM can select from them.", file=sys.stderr)
-        emit_next("act --fill --answers '...'")
-        return
+        if required_unfilled == 0:
+            emit_next("act --fill --answers '...'  (optional fields only)")
+            return
 
     radio_filled, radio_unfilled = _fill_radios(
         page, ps["fields"], answers, ca, profile, jid
