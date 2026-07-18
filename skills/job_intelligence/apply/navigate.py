@@ -25,14 +25,11 @@ def run(jid):
     print(f"JOB: {title or '?'} @ {company or '?'}", file=sys.stderr)
 
     # External URL was stored by detect — use it directly, skip LinkedIn re-navigation
-    st = load_state()
-    if st.get("jid") != jid:
-        # Never navigate using another job's URL — require detect to run first.
-        emit_error(f"state is for job {st.get('jid','?')}, not {jid} — run detect {jid} first")
-        sys.exit(1)
-    external_url = st.get("external_url", "")
+    state = load_state()
+    external_url = state.get("external_url", "")
     if not external_url or "linkedin.com" in external_url:
         # Fallback: detect may not have found it — try opening LinkedIn job page
+        from apply.common.page_helpers import tag_page as _tp
         b, ctx = connect()
         p = ctx.new_page()
         p.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -109,8 +106,17 @@ def run(jid):
                     external_url = u
                     page_state = ps
                     break
+                # No form — return to the redirect target before trying the next iframe
+                ep.goto(actual_url, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(2)
             except Exception as e:
                 print(f"IFRAME_SKIP: {u} — {e}", file=sys.stderr)
+                # Try to recover to the redirect target
+                try:
+                    ep.goto(actual_url, wait_until="domcontentloaded", timeout=30000)
+                    time.sleep(2)
+                except Exception:
+                    pass
 
     from apply.common.page_manager import PageManager
 
@@ -147,14 +153,13 @@ def run(jid):
                     mark_auth_wall(jid, ep.url, title or "", company or "")
                     print(f"AUTH_WALL: {jid} — {title} @ {company}", file=sys.stderr)
                     print("  Browser is on the sign-in page. Log in, then run again.", file=sys.stderr)
-                    save_state({"jid": jid, "external_url": external_url, "page": page_state,
-                                "title": title, "company": company})
+                    save_state({"jid": jid, "external_url": external_url, "page": page_state})
                     emit_next("apply.py detect")
                     sys.exit(0)
 
     pm = PageManager(ctx, jid)
-    pm.cleanup_all()
     pm.register(ep)
+    pm.cleanup_all()
     pm.close_others(ep)
     page_state = read_page(ep)
     print(f"PAGE: {json.dumps(page_state)}", file=sys.stderr)
@@ -163,6 +168,5 @@ def run(jid):
     # Use actual page URL (Greenhouse rewrites boards -> job-boards on redirect)
     actual_url = ep.url
     save_state(
-        {"jid": jid, "external_url": actual_url, "platform": plat, "page": page_state,
-         "title": title, "company": company}
+        {"jid": jid, "external_url": actual_url, "platform": plat, "page": page_state}
     )

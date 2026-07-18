@@ -79,69 +79,12 @@ def field_deterministic(page, f, ans):
     label = f.get("label", "")
     aft = before
 
-    if f["tag"] == "INPUT" and f.get("type") == "checkbox":
-        lbl = (label or "").lower()
-        if any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm", "understand"]):
-            try:
-                cb = fr.locator(sel)
-                if cb.count() and not cb.is_checked():
-                    cb.check(force=True)
-                    aft = _element_value(page, sel)
-                    if aft != before:
-                        return True
-                return True
-            except Exception:
-                pass
-        return False
-
-    if f["tag"] == "SELECT":
-        el = fr.query_selector(sel)
-        if not el:
-            return False
-        methods = getattr(select, "METHOD_CHAIN", ["select_option"])
-        for method in methods:
-            if select.try_select_tag(el, f, ans, method=method):
-                aft = _element_value(page, sel)
-                if _check_delta(page, sel, before, aft, ans, label):
-                    return True
-        return _try_text_fallback(fr, f, ans, sel)
-
-    if f.get("role") == "combobox" or f["tag"] == "DROPDOWN":
-        ok = bool(combobox.fill(fr, f, ans))
-        if ok:
-            aft = _element_value(page, sel, ans=ans)
-            if _check_delta(page, sel, before, aft, ans, label):
-                return True
-        return _try_text_fallback(fr, f, ans, sel)
-
-    if f.get("datepicker") == "flatpickr":
-        from apply.strategies import datepicker
-        ok = bool(datepicker.fill(fr, sel, ans))
-        if ok:
-            aft = _element_value(page, sel)
-            if _check_delta(page, sel, before, aft, ans, label):
-                return True
-        return _try_text_fallback(fr, f, ans, sel)
-
-    if f["tag"] == "DIV" or f.get("contenteditable"):
-        from apply.strategies import contenteditable as _ce
-        ok = bool(_ce.fill(fr, sel, ans))
-        if ok:
-            aft = _element_value(page, sel)
-            if _check_delta(page, sel, before, aft, ans, label):
-                return True
-        return _try_text_fallback(fr, f, ans, sel)
-
-    if f["tag"] in ("INPUT", "TEXTAREA"):
-        el = fr.query_selector(sel) if sel else None
-        if not el:
-            return False
-        methods = getattr(text, "METHOD_CHAIN", ["fill"])
-        for method in methods:
-            if text.fill_text_field(fr, f, ans, sel, el, method=method):
-                aft = _element_value(page, sel)
-                if _check_delta(page, sel, before, aft, ans, label):
-                    return True
-        return False
-
-    return False
+    # Use FieldFiller registry for type dispatch
+    from apply.common.filler import fill_field as _fill_field
+    ok, filler = _fill_field(fr, f, ans)
+    if ok:
+        aft = _element_value(page, sel, ans=ans)
+        if _check_delta(page, sel, before, aft, ans, label):
+            return True
+        # Filler reported success but value didn't stick — try text fallback
+    return _try_text_fallback(fr, f, ans, sel)
