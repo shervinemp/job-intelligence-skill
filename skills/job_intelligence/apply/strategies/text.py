@@ -72,16 +72,22 @@ def _verify(el, ans):
 def fill_text_field(page, f, ans, sel, el, method="fill"):
     _orig_ans = ans
 
-    # Phone number: strip non-digits before maxlength truncation.
-    # Formatted phones (e.g. "+1 (343) 558-1744") are 17 chars, but
-    # fields with maxlength=10 expect 10 raw digits.
     label = (f.get("label") or f.get("name") or "").lower()
+
+    # Phone number: strip non-digits before maxlength truncation.
     if re.search(r"phone|contact|mobile|cell", label):
         digits = re.sub(r"\D", "", ans)
         if 7 <= len(digits) <= 15:
             if len(digits) == 11 and digits.startswith("1"):
                 digits = digits[1:]
             ans = digits
+
+    # Postal code: strip spaces for maxlength=6 fields (Canadian format).
+    # Filling "K2P 1J6" (7 chars) into a maxlength=6 field overflows and
+    # truncates to "K2P 1J". Stripping the space gives "K2P1J6" (6 chars).
+    # The site may auto-insert the space on display.
+    if re.search(r"postal|zip|code", label):
+        ans = ans.replace(" ", "")
 
     maxlen = el.get_attribute("maxlength") if el else None
     try:
