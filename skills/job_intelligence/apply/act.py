@@ -896,7 +896,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     if required_unfilled > 0 or filled < total:
         print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
         if required_unfilled == 0 and filled < total:
-            print("  Optional unfilled — investigate using resume.json, vision, profile before skipping.", file=sys.stderr)
+            print("  Optional fields unfilled. Deduce from resume, vision, profile rather than skip.", file=sys.stderr)
             emit_next("act --fill --answers '...' (optional unfilled)")
             return
 
