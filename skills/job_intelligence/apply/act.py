@@ -655,19 +655,6 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     # Registry + probe cascade
     domain = _domain(page.url)
     registry = resolve_registry(page.url)
-    # If no registry found for the wrapper page, check iframes
-    # (e.g. Greenhouse form embedded on MongoDB's careers page)
-    if not registry:
-        for f in page.frames:
-            if f == page.main_frame:
-                continue
-            try:
-                reg = resolve_registry(f.url)
-                if reg:
-                    registry = reg
-                    break
-            except Exception:
-                continue
     if registry:
         registry.emit_notes()
 
@@ -676,6 +663,22 @@ def cmd_fill(jid, answers_json=None, candidate=None):
 
     # Probe: try standard first, cascade on failure
     ps = read_page(page)
+
+    # If no registry found for the wrapper page, check iframes
+    # (e.g. Greenhouse form embedded on MongoDB's careers page).
+    # Must run AFTER read_page (probe cascade) — the iframe may not be loaded yet.
+    if not registry:
+        for f in page.frames:
+            if f == page.main_frame:
+                continue
+            try:
+                reg = resolve_registry(f.url)
+                if reg:
+                    registry = reg
+                    registry.emit_notes()
+                    break
+            except Exception:
+                continue
     # Poll for React SPA fields that render 3-8s after DOMContentLoaded
     if ps.get("fieldCount", 0) == 0:
         for _ in range(16):
