@@ -76,6 +76,19 @@ def fill(page, f, ans):
     except Exception:
         return bool(_text.native_setter(page, sel, ans))
     url_before = page.url
+    # Type the answer into the input to trigger autocomplete suggestions before polling
+    # for options — required for Greenhouse, Workday, and other search-based dropdowns
+    try:
+        page.evaluate(f"""() => {{
+            const el = document.querySelector({json.dumps(sel)});
+            if (!el) return;
+            el.value = {json.dumps(ans)};
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        }}""")
+        time.sleep(1)
+    except Exception:
+        pass
     if _select_option(page, sel, ans):
         return True
     if page.url != url_before:
