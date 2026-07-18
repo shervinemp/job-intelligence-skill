@@ -17,12 +17,9 @@ from apply.common.page_helpers import (
     page_text,
     scan_actions,
     read_and_save,
-    mark_applied,
     DEFAULT_EXCLUDED_BUTTONS as _EXCLUDED_BUTTONS,
 )
-from apply.common.signals import SUCCESS_BROAD, has_success_text
 from apply.common.registry import resolve as resolve_registry
-from apply.common.apply_state import init as _as_init, record_fill as _as_record, advance_page as _as_advance
 from apply.common.inspector import probe as probe_page
 from apply.common.learner import ButtonIntentClassifier
 from apply.common.field_reader import scan_errors
@@ -36,11 +33,8 @@ from apply.common.output import (
 from apply.common.page_manager import PageManager
 from apply.common.platforms import check_page, LOGIN_WALL, GUEST_APPLY
 from apply.common.resolve import resolution_for_fill
-from apply.common.policy import resolve_mode, submits_for_real
-from apply.common import audit
-from apply.steps.probe import run as probe_fields
 
-from lib.config import PROFILE_PATH as profile_path
+profile_path = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 
 
 def _domain(url):
@@ -50,11 +44,6 @@ def _domain(url):
         return ""
 
 
-# Typo-detection set for profile.json (warns on unrecognized keys). NOT the same
-# as what gets auto-resolved: deterministic resolution uses the string-valued
-# subset in resolve._PROFILE_KEYS (+ the profile["answers"] map + name/location
-# derivations). Booleans like authorized_to_work are valid keys but are resolved
-# via the mapping layer (ADR-001 Phase 3), not by exact label match.
 _KNOWN_PROFILE_KEYS = {
     "first_name", "last_name", "email", "phone",
     "linkedin_url", "github_url", "portfolio_url", "website",
@@ -67,46 +56,8 @@ _KNOWN_PROFILE_KEYS = {
 }
 
 
-def _derive_provenance(label, answers, profile):
-    """Determine the provenance of a filled value for display in submit preview."""
-    from apply.common.resolve import normalize as _norm, resolution_for_fill
-    res = resolution_for_fill(label, profile, answers_override=answers)
-    if res.value is not None and res.provenance != "no_match":
-        return res.provenance
-    # Check if this was auto-declined as EEO (common_answers is normalized to dict by _validate_profile)
-    for k, v in profile.get("common_answers", {}).get("eeo", {}).items():
-        if _norm(k) == _norm(label) and v:
-            return "profile_eeo"
-    return "answers"
-
-
-def _reconcile_fields(state, jid):
-    """Compare field values across pages and return mismatches list."""
-    history = state.get("_field_values_history", [])
-    if len(history) < 2:
-        return []
-    from apply.common.resolve import normalize as _norm
-    by_label = {}
-    for entry in history:
-        nl = _norm(entry.get("label", ""))
-        by_label.setdefault(nl, []).append(entry)
-    mismatches = []
-    for nl, entries in by_label.items():
-        vals = set(e["value"] for e in entries)
-        if len(vals) > 1:
-            pages = [(e["page"], e["value"]) for e in entries]
-            mismatches.append({"label": entries[0]["label"], "pages": pages})
-    return mismatches
-
-
 def _validate_profile(profile):
-    """Normalize profile types and warn about unrecognized keys."""
-    # Normalize dict-valued fields at the boundary so downstream code never
-    # has to guard against unexpected types.
-    for _key in ("answers", "common_answers"):
-        if _key in profile and not isinstance(profile[_key], dict):
-            print(f"WARN: profile.{_key} should be a dict, got {type(profile[_key]).__name__} — resetting to empty dict", file=sys.stderr)
-            profile[_key] = {}
+    """Warn about unrecognized keys in profile.json to catch typos early."""
     unknown = set(profile.keys()) - _KNOWN_PROFILE_KEYS
     if unknown:
         print(
@@ -118,18 +69,10 @@ def _validate_profile(profile):
         )
 
 
-def _find_answer(label, answers, profile, field=None):
-    """Find answer via resolve chain (--answers override → profile facts →
-    confirmed mapping). The mapping step is a no-op unless policy.use_mappings."""
-    res = resolution_for_fill(label, profile, answers_override=answers)
-    if res.value is not None:
-        return res.value
-    if field is not None:
-        from apply.common import mappings
-        m = mappings.resolve_field(field, profile)
-        if m:
-            return m[0]
-    return None
+def _find_answer(label, label_norm, answers, ca, profile, required=False, available_options=None):
+    """Find answer via resolve chain. Ignores ca (old common_answers) — resolve reads profile directly."""
+    res = resolution_for_fill(label, profile, answers_override=answers, available_options=available_options)
+    return res.value
 
 
 def _page_hash(page):
@@ -254,13 +197,14 @@ def _handle_post_click(state, ps, page):
         )
         if has_submit_btn:
             return False
-        text = page_text(page) or ""
-        if has_success_text(text):
-            emit_status("submitted")
-            emit_next("verify")
-            state["result"] = "submitted"
-            save_state(state)
-            return True
+        text = (page_text(page) or "").lower()
+        for w in ["your application has been", "your application was", "has been sent", "you have applied"]:
+            if w in text:
+                emit_status("submitted")
+                emit_next("verify")
+                state["result"] = "submitted"
+                save_state(state)
+                return True
         emit_status("modal_closed")
         emit_next("verify")
         state["result"] = "modal_closed"
@@ -283,22 +227,7 @@ def _handle_post_click(state, ps, page):
     return False
 
 
-def _redirect_submit_intent(cand, state):
-    """Structural invariant: only cmd_submit clicks submit-intent buttons — that is
-    where the gate, --confirm, and audit live. Returns True if redirected."""
-    intent, _ = ButtonIntentClassifier.classify(cand.get("text", ""))
-    if intent != "submit":
-        return False
-    print(
-        f"SUBMIT_REDIRECT: '{cand.get('text', '?')}' is a submit action — routed through act --submit",
-        file=sys.stderr,
-    )
-    save_state(state)
-    emit_next("act --submit")
-    return True
-
-
-def _fill_radios(page, fields, answers, profile, jid):
+def _fill_radios(page, fields, answers, ca, profile, jid):
     """Fill radio groups. Returns filled count + unfilled list."""
     filled = 0
     unfilled = []
@@ -319,21 +248,19 @@ def _fill_radios(page, fields, answers, profile, jid):
         # Last resort: unique key per radio — each becomes its own group
         return f"_ungrouped_{idx}"
 
-    radios = [f for f in fields if f.get("type") == "radio"]
+    radios = [f for f in fields if f["type"] == "radio"]
     groups = {}
     for idx, rf in enumerate(radios):
         gk = _radio_group_key(rf, idx)
         groups.setdefault(gk, []).append(rf)
 
     def _check_radio(rf):
-        """Check a radio element by id or name+value. Returns True if the radio
-        ends up checked — an already-checked target counts (idempotent success)."""
+        """Check a radio element by id or name+value. Returns True if checked."""
         try:
             if rf.get("id"):
                 el = page.locator(f'id={rf["id"]}')
-                if el.count() > 0:
-                    if not el.first.is_checked():
-                        el.first.check()
+                if el.count() > 0 and not el.first.is_checked():
+                    el.first.check()
                     return True
             if rf.get("name"):
                 selector = f'input[type="radio"][name="{rf["name"]}"]'
@@ -341,9 +268,8 @@ def _fill_radios(page, fields, answers, profile, jid):
                 if rv:
                     selector += f'[value="{rv}"]'
                 el = page.query_selector(selector)
-                if el:
-                    if not el.is_checked():
-                        el.check()
+                if el and not el.is_checked():
+                    el.check()
                     return True
         except Exception:
             pass
@@ -352,9 +278,9 @@ def _fill_radios(page, fields, answers, profile, jid):
     for gk, group in groups.items():
         opts = [rf["label"] for rf in group]
         q_label = opts[0].split(" - ")[0] if " - " in opts[0] else opts[0]
+        q_norm = re.sub(r"[^a-z0-9+#]+", " ", q_label.lower()).strip()
 
-        ans = _find_answer(q_label, answers, profile,
-                           field={"label": q_label, "options": opts, "tag": "radio"})
+        ans = _find_answer(q_label, q_norm, answers, ca, profile)
         if ans:
             ans_lower = ans.lower()
             matched = False
@@ -375,25 +301,32 @@ def _fill_radios(page, fields, answers, profile, jid):
                             filled += 1
                             matched = True
                             break
-            if not matched:
-                # Answer exists but matched no option — surface it, never drop it
-                # silently (the submit path trusts `unfilled` to be complete).
-                print(
-                    f"  RADIO_MISMATCH: '{ans[:40]}' matched no option of {q_label[:50]}",
-                    file=sys.stderr,
-                )
-                unfilled.append(
-                    {"label": q_label[:60], "options": opts, "tag": "radio_group", "field": group}
-                )
         else:
             unfilled.append(
-                {"label": q_label[:60], "options": opts, "tag": "radio_group", "field": group}
+                {"label": q_label[:60], "options": opts, "tag": "radio_group"}
             )
     return filled, unfilled
 
 
+def _probe_fields(page, fields):
+    """Pass 1: resolve stable selectors for every field.
+    Returns fields enriched with _sel (element selector).
+    No interactive probing — read-only DOM queries, no side effects."""
+    for f in fields:
+        sel = _resolve_selector(page, f)
+        if not sel:
+            continue
+        f["_sel"] = sel
+    return fields
+
+
+def _normalize_label(lbl):
+    return re.sub(r"[^a-z0-9+#]+", " ", lbl.lower()).strip()
+
+
 def _fill_file_upload(page, f, results_dir, jid, state):
     """Upload resume PDF to a file input. Returns 'skip', 'filled', 'unfilled', or None."""
+    lbl_lower = (f.get("label", "") or "").lower()
     if not os.path.isdir(results_dir) or not any("Resume" in fn and fn.endswith(".pdf") for fn in os.listdir(results_dir)):
         return "unfilled"
     candidates = []
@@ -454,17 +387,54 @@ def _try_drag_drop(page, results_dir):
         return False
 
 
+def _resolve_selector(page, f):
+    """Resolve a CSS selector for a field element."""
+    if f.get("id"):
+        return f'[id="{f["id"]}"]'
+    if f.get("name"):
+        return f'[name="{f["name"]}"]'
+    if f.get("data_automation_id"):
+        return f'[data-automation-id="{f["data_automation_id"]}"]'
+    if f.get("placeholder"):
+        return f'[placeholder="{f["placeholder"]}"]'
+    if f.get("label"):
+        try:
+            return (
+                page.evaluate(
+                    """(lbl) => {
+                    const labels = document.querySelectorAll('label');
+                    for (const l of labels) {
+                        if (l.textContent.trim().toLowerCase() === lbl.toLowerCase()) {
+                            const forId = l.getAttribute('for');
+                            if (forId && document.getElementById(forId)) return '#' + CSS.escape(forId);
+                            const inp = l.querySelector('input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable]');
+                            if (inp && inp.id) return '#' + CSS.escape(inp.id);
+                        }
+                    }
+                    const all = document.querySelectorAll('[aria-labelledby]');
+                    for (const el of all) {
+                        const ref = document.getElementById(el.getAttribute('aria-labelledby'));
+                        if (ref && ref.textContent.trim().toLowerCase() === lbl.toLowerCase() && el.id) return '#' + CSS.escape(el.id);
+                    }
+                    return '';
+                }""",
+                    f["label"],
+                )
+                or ""
+            )
+        except Exception:
+            pass
+    return ""
+
+
 def _fill_field_deterministic(page, f, ans):
     """Dispatch to canonical strategy module."""
     from apply.strategies import field_deterministic as _fd
     return _fd(page, f, ans)
 
 
-def _fill_text(page, fields, answers, profile, jid, state):
+def _fill_text(page, fields, answers, ca, profile, jid, state):
     """Fill text/select/textarea fields. Returns filled count + unfilled list."""
-    from apply.common.policy import load_policy
-    from apply.common.validate import validate_value
-    _enforce_validation = bool(load_policy().get("enforce_validation", False))
     filled = 0
     unfilled = []
     file_uploaded = False
@@ -474,7 +444,7 @@ def _fill_text(page, fields, answers, profile, jid, state):
 
     for f in fields:
         prev_filled = filled
-        if f.get("type") == "radio":
+        if f["type"] == "radio":
             continue
 
         # Mid-fill guard: check session timeout (long fills may expire)
@@ -485,7 +455,7 @@ def _fill_text(page, fields, answers, profile, jid, state):
             pass
 
         # File upload (resume PDF)
-        if f.get("tag") == "INPUT" and f.get("type") == "file":
+        if f["tag"] == "INPUT" and f["type"] == "file":
             lbl_lower = (f.get("label", "") or "").lower()
             if file_uploaded and not f.get("required", False):
                 if "cover" not in lbl_lower and "letter" not in lbl_lower and "discovery" not in lbl_lower:
@@ -512,6 +482,7 @@ def _fill_text(page, fields, answers, profile, jid, state):
 
         # Standard field
         lbl = f["label"]
+        lbl_norm = _normalize_label(lbl)
         _seen_labels.add(lbl)
 
         # Skip pre-filled fields with valid data (any non-empty value is filled,
@@ -525,7 +496,7 @@ def _fill_text(page, fields, answers, profile, jid, state):
         elif current_stripped and len(current_stripped) > 1:
             # For required fields, still check if answer contradicts the current value
             if f.get("required"):
-                ans_check = _find_answer(lbl, answers, profile, field=f)
+                ans_check = _find_answer(lbl, lbl_norm, answers, ca, profile, available_options=f.get("options"))
                 if ans_check:
                     cw = current_stripped.lower().split()
                     aw = ans_check.lower().split()
@@ -538,38 +509,14 @@ def _fill_text(page, fields, answers, profile, jid, state):
             else:
                 continue
 
-        ans = _find_answer(lbl, answers, profile, field=f)
+        ans = _find_answer(lbl, lbl_norm, answers, ca, profile, available_options=f.get("options"))
         if ans is None:
             if f.get("required"):
-                unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f.get("tag", "?"), "field": f})
+                unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
             continue
-
-        # Phase 4: escalate values that fail validation instead of filling them.
-        if _enforce_validation:
-            ok_v, _vr = validate_value(f, ans)
-            if not ok_v:
-                print(f"  VALIDATION_SKIP: {lbl[:50]} -> {str(ans)[:30]} ({_vr})", file=sys.stderr)
-                if f.get("required"):
-                    unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f.get("tag", "?"), "field": f, "attempted": ans})
-                continue
 
         if _fill_field_deterministic(page, f, ans):
             filled += 1
-            # Track field values across pages — both current (for fill-time detection)
-            # and history (for submit-time reconciliation)
-            from apply.common.resolve import normalize as _norm
-            _norm_label = _norm(lbl)
-            _pv = state.setdefault("_field_values", {})
-            if _norm_label in _pv and _norm(_pv[_norm_label]) != _norm(str(ans)):
-                print(f"  PAGE_INCONSISTENCY: '{lbl[:40]}' was '{_pv[_norm_label][:30]}' on a previous page, now '{str(ans)[:30]}'", file=sys.stderr)
-            _pv[_norm_label] = str(ans)
-            _history = state.setdefault("_field_values_history", [])
-            _page_now = state.get("_page", "?")
-            _existing = next((e for e in _history if e["page"] == _page_now and e["label"] == lbl), None)
-            if _existing:
-                _existing["value"] = str(ans)
-            else:
-                _history.append({"page": _page_now, "label": lbl, "value": str(ans)})
             # After filling a field, check for new conditional fields (max 3 levels)
             if _conditional_depth < 3:
                 try:
@@ -582,7 +529,7 @@ def _fill_text(page, fields, answers, profile, jid, state):
                 except Exception:
                     pass
         elif f.get("required"):
-            unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f.get("tag", "?"), "field": f, "attempted": ans})
+            unfilled.append({"label": lbl[:60], "options": f.get("options", []), "tag": f["tag"]})
 
         if filled > prev_filled:
             time.sleep(random.uniform(0.15, 0.4))
@@ -608,45 +555,7 @@ def _check_already_submitted(state, jid):
     return False
 
 
-def _audit_fill(jid, fields, answers, profile, page_num, platform="", corrected_labels=()):
-    """Read-only audit pass: for each detected field, record the resolved tier
-    (value + provenance + category) and whether it ended up filled. Decoupled
-    from the fill mutation so it cannot affect form state. Also feeds the mapping
-    learner (no-op unless policy.use_mappings)."""
-    from apply.common.validate import validate_value
-    from apply.common import mappings
-    corrected = set(corrected_labels or ())
-    for f in fields:
-        lbl = f.get("label", "")
-        if not lbl:
-            continue
-        if f.get("type") == "file":
-            cur = (f.get("value", "") or "").strip()
-            audit.log_field(jid, lbl, "<resume PDF>" if cur else "", provenance="file",
-                            category="generic", filled=bool(cur), page=page_num)
-            continue
-        res = resolution_for_fill(lbl, profile, answers_override=answers)
-        value, provenance = res.value, res.provenance
-        if value is None:
-            # Reflect a mapping-store fill too (read-only — don't bump hit_count here).
-            m = mappings.resolve_field(f, profile, bump=False)
-            if m:
-                value, provenance = m
-        cur = (f.get("value", "") or "").strip()
-        validated = None
-        if value:
-            validated, _reason = validate_value(f, value)
-        audit.log_field(jid, lbl, value or cur, provenance=provenance,
-                        category=audit.categorize(lbl, f.get("options"), f.get("tag")),
-                        filled=bool(cur), validated=validated, page=page_num)
-        # Learn: record a pending mapping for explicitly-answered fields.
-        if value:
-            mappings.learn(jid, f, value, provenance, profile,
-                           platform=platform, corrected=(lbl in corrected))
-
-
-def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False):
-    dry_run = True if dry_run is None else dry_run  # default: preview only
+def cmd_fill(jid, answers_json=None, candidate=None):
     answers = {}
     if answers_json:
         if answers_json.startswith("@"):
@@ -661,19 +570,6 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
             except Exception:
                 print("ERROR: --answers must be valid JSON or @file.json", file=sys.stderr)
 
-    # Normalize --answers values to strings at the boundary so downstream
-    # fill strategies never receive unexpected types (ints, lists, etc.)
-    if answers:
-        _normed = {}
-        for _k, _v in answers.items():
-            if _v is None:
-                continue
-            if isinstance(_v, list):
-                _normed[_k] = [str(_x) for _x in _v]
-            else:
-                _normed[_k] = str(_v)
-        answers = _normed
-
     state = load_state()
     if state.get("jid") != jid:
         print(
@@ -683,24 +579,11 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
         return
     if _check_already_submitted(state, jid):
         return
-    if not dry_run and not state.get("_dry_run_done"):
-        print("ERROR: must dry-run first — run act --fill <jid> (without --apply) to preview field mappings", file=sys.stderr)
-        print("  Dry-run is read-only — shows what values would be filled without touching the DOM.", file=sys.stderr)
-        emit_next("act --fill")
-        return
     b, ctx = connect()
     pm = PageManager(ctx, jid)
     pm.close_stale(target_url=state.get("external_url", ""))
     ext = state.get("external_url", "")
     page, _, _ = pm.find(fallback_url=ext)
-    # Wire network interception for submit detection (Playwright route,
-    # not JS monkeypatch — no fingerprinting risk)
-    if page:
-        try:
-            from apply.common.agent_bridge import setup_network_interception
-            setup_network_interception(page)
-        except Exception:
-            pass
     if not page:
         # Reuse existing page matching external URL
         if ext:
@@ -769,56 +652,25 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
                     )
                     time.sleep(3)
 
-    profile = {}
-    if os.path.exists(profile_path):
-        try:
-            with open(profile_path) as f:
-                profile = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            print(
-                f"WARN: profile.json corrupt or unreadable — using empty profile",
-                file=sys.stderr,
-            )
-            profile = {}
-        else:
-            _validate_profile(profile)
-
     # Registry + probe cascade
     domain = _domain(page.url)
     registry = resolve_registry(page.url)
     if registry:
         registry.emit_notes()
 
-    # Initialize/reconcile apply state for crash recovery
-    try:
-        _as = _as_init(jid, state.get("external_url", ""), state.get("platform", ""))
-        if _as:
-            _as_advance(jid)
-    except Exception:
-        pass
-
-    # Dismiss cookie consent overlays — remove OneTrust and similar banners from DOM
-    page.evaluate("""() => {
-        for (const el of document.querySelectorAll('#onetrust-banner-sdk, #onetrust-consent-sdk, .otFlat, [class*="onetrust"], [id*="onetrust"]')) {
-            el.remove();
-        }
-    }""")
-    time.sleep(0.5)
+    # Track page number for progress indicator
+    state["_page"] = state.get("_page", 0) + 1
 
     # Probe: try standard first, cascade on failure
     ps = read_page(page)
-    # Use agent's MutationObserver-based field detection (no polling).
-    # Agent watches DOM for input/select/textarea additions and sets dirty flag.
+    # Poll for React SPA fields that render 3-8s after DOMContentLoaded
     if ps.get("fieldCount", 0) == 0:
-        try:
-            page.wait_for_function(
-                "window.__opencode?.getFields().length > 0",
-                timeout=8000
-            )
+        for _ in range(16):
+            time.sleep(0.5)
             ps = read_page(page)
-            print(f"AGENT_WAIT: fields detected via MutationObserver", file=sys.stderr)
-        except Exception:
-            pass  # timeout — fall through to detect-phase or probe cascade
+            if ps.get("fieldCount", 0) > 0:
+                print(f"SPA_WAIT: {(_+1)*0.5:.1f}s", file=sys.stderr)
+                break
     # Use detect-phase fields (e.g., GraphQL) if DOM returned nothing
     if (
         ps.get("fieldCount", 0) == 0
@@ -860,51 +712,10 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
         time.sleep(1)
         ps = read_page(page)
 
-    # Platform handler (PlatformHandler interface): replaces the entire
-    # fill/navigate/submit chain for platforms with ephemeral state.
-    handler = registry.get_handler() if registry else None
-    if handler:
-        from apply.common import gate
-        from apply.common.policy import load_policy
-        from apply.common.handler_base import run_modal_flow
-        mode = resolve_mode("shadow" if shadow else None)
-        action, reason = gate.submit_decision(mode, load_policy(), audit.summarize(jid))
-        allow_submit = (action == "submit")
-        if not allow_submit:
-            emit_status(f"submit_{action}", f"handler submit suppressed — {reason}")
-        _init_fields = ps.get("fields", [])
-        result = run_modal_flow(
-            handler, page, jid, profile,
-            answers=answers, allow_submit=allow_submit, max_steps=10,
-            dry_run=dry_run,
-            initial_fields=_init_fields if _init_fields else None,
-        )
-        if result == "done":
-            emit_status("submitted")
-            emit_next("verify")
-            state["result"] = "submitted"
-            save_state(state)
-        elif result == "paused":
-            if dry_run:
-                state["_dry_run_done"] = True
-            save_state(state)
-        elif result == "failed":
-            emit_status("flow_failed", "handler could not proceed")
-            emit_next("act --inspect")
-        return
-
-    # Legacy flow hook fallback
+    # Platform flow hook: replaces the entire fill/navigate/submit chain for
+    # platforms with ephemeral state (LinkedIn Easy Apply modals, etc.)
     if registry and registry.flow_hook and registry.has_hook(registry.flow_hook):
-        from apply.common import gate
-        from apply.common.policy import load_policy
-        mode = resolve_mode("shadow" if shadow else None)
-        action, reason = gate.submit_decision(mode, load_policy(), audit.summarize(jid))
-        if action != "submit":
-            emit_status(f"submit_{action}", f"flow hook submit suppressed — {reason}")
-        result = registry.call_hook(
-            registry.flow_hook, page, jid,
-            profile=profile, answers=answers, allow_submit=(action == "submit"),
-        )
+        result = registry.call_hook(registry.flow_hook, page, jid)
         if result == "done":
             emit_status("submitted")
             emit_next("verify")
@@ -917,27 +728,20 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
             emit_next("act --inspect")
         return
 
-    # Page counter: only bump when the page actually changed. Re-fills of the same
-    # page (the normal --answers correction loop) must keep the same page number, or
-    # the audit's latest-record-per-(page,label) dedup breaks and a once-invalid
-    # field wedges the submit gate forever.
+    # Guard: if this page was already filled, warn but proceed
     last_fingerprint = state.get("page_fingerprint", "")
     label_fp = "_".join(f.get("label", "")[:20] for f in ps["fields"][:3])
     current_fingerprint = f"{len(ps['fields'])}:{len(ps.get('buttons',[]))}:{label_fp}"
-    if current_fingerprint == last_fingerprint:
-        if state.get("filled", 0) > 0:
-            print(
-                "WARN: page looks unchanged from last fill — verify the form advanced",
-                file=sys.stderr,
-            )
-    else:
-        state["_page"] = state.get("_page", 0) + 1
+    if current_fingerprint == last_fingerprint and state.get("filled", 0) > 0:
+        print(
+            "WARN: page looks unchanged from last fill — verify the form advanced",
+            file=sys.stderr,
+        )
     state["page_fingerprint"] = current_fingerprint
 
     # If candidate was specified, find and click it
-    # (entry-point buttons only — no "submit": clicking submit is cmd_submit's job)
     if candidate is not None and ps["fieldCount"] == 0:
-        kws = ["apply", "apply for this job", "apply manually", "apply now"]
+        kws = ["apply", "apply for this job", "apply manually", "submit", "apply now"]
         cands = scan_actions(page, kws, _EXCLUDED_BUTTONS)
         if candidate < len(cands):
             c = cands[candidate]
@@ -954,12 +758,11 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
             )
             return
 
-    # Check for login wall — only when no form is visible (a fillable form is
-    # direct counter-evidence of a wall). Try guest apply first, then abort.
+    # Check for login wall — try guest apply first, then abort
     text = page_text(page) or ""
     plat = state.get("platform", "")
     guest_clicked = False
-    if ps.get("fieldCount", 0) == 0 and check_page(text, plat, LOGIN_WALL):
+    if check_page(text, plat, LOGIN_WALL):
         # Try guest apply buttons
         guest_patterns = GUEST_APPLY.get(plat, []) + GUEST_APPLY["default"]
         for gp in guest_patterns:
@@ -1001,12 +804,8 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
                 print(f"GUEST_APPLY: clicked '{gp}'", file=sys.stderr)
                 break
         if not guest_clicked:
-            state["page"] = ps
-            state["filled"] = 0
-            save_state(state)
             emit_status("login_wall", "sign in required — retry after login")
             emit_next("retry after login")
-            return
 
     # If no fields detected, use model-assisted action finding
     if ps["fieldCount"] == 0:
@@ -1014,6 +813,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
             "apply",
             "apply for this job",
             "apply manually",
+            "submit",
             "apply now",
         ]
         candidates = scan_actions(page, apply_kws, _EXCLUDED_BUTTONS)
@@ -1043,116 +843,84 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
             save_state(state)
             return
 
-    # Pass 1: Probe — enrich fields with selectors + combobox options (read-only)
-    ps["fields"] = probe_fields(page, ps["fields"])
-
-    from apply.common.output import field_format_hint as _fmt_hint
-
-    # Dry-run: resolve answers without touching DOM, print what would happen
-    if dry_run:
-        filled = 0
-        total = len(ps.get("fields", []))
-        auto_fields = []
-        need_fields = []
-        skip_fields = []
-        for f in ps.get("fields", []):
-            lbl = f.get("label", "")
-            if not lbl:
-                continue
-            if f["type"] == "file":
-                auto_fields.append((f, "<resume PDF>"))
-                filled += 1
-                continue
-            opts = f.get("options", [])
-            ans = _find_answer(lbl, answers, profile, field=f)
-            if ans:
-                if opts and ans not in opts:
-                    match = next((o for o in opts if ans.lower() in o.lower()), None)
-                    if not match:
-                        fmt = _fmt_hint(f)
-                        w = f"  fmt={fmt}" if fmt else ""
-                        print(f"  WARN: [{f['tag']}] {lbl[:50]} -> {ans[:50]} not in options {opts[:5]}{w}", file=sys.stderr)
-                        need_fields.append((f, None, "no match in options"))
-                        continue
-                auto_fields.append((f, ans))
-                filled += 1
-            elif f.get("required"):
-                need_fields.append((f, None, "required"))
-            else:
-                skip_fields.append(f)
-
-        print(f"DRY_RUN — {filled}/{total} resolvable:", file=sys.stderr)
-        if auto_fields:
-            print(f"  ✅ Auto-fill ({len(auto_fields)}):", file=sys.stderr)
-            for f, val in auto_fields:
-                fmt = _fmt_hint(f)
-                w = f"  fmt={fmt}" if fmt else ""
-                print(f"    [{f['tag']}] {f.get('label','?')[:50]} -> {str(val)[:50]}{w}", file=sys.stderr)
-        if need_fields:
-            print(f"  ❓ Needs your input ({len(need_fields)}):", file=sys.stderr)
-            for f, _, reason in need_fields:
-                opts = f.get("options", [])
-                opt_str = json.dumps(opts[:5]) if opts else ""
-                fmt = _fmt_hint(f)
-                hint = f"  fmt={fmt}" if fmt else ""
-                extra = f" -> {opt_str}{hint}" if opt_str else hint
-                print(f"    [{f['tag']}] {f.get('label','?')[:50]}{extra}", file=sys.stderr)
-        if skip_fields:
-            print(f"  ⏭ Skipped ({len(skip_fields)}):", file=sys.stderr)
-            for f in skip_fields:
-                print(f"    [{f['tag']}] {f.get('label','?')[:50]} (optional, no profile match)", file=sys.stderr)
-
-        state["_dry_run_done"] = True
-        save_state(state)
-        if need_fields:
-            emit_next("act --fill --answers '{\"<label>\": \"<value>\"}'")
+    profile = {}
+    if os.path.exists(profile_path):
+        try:
+            with open(profile_path) as f:
+                profile = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            print(
+                f"WARN: profile.json corrupt or unreadable — using empty profile",
+                file=sys.stderr,
+            )
+            profile = {}
         else:
-            emit_next("proceed")
+            _validate_profile(profile)
+    ca = profile.get("common_answers", {})
+
+    # Pass 1: Probe — enrich fields with available options and constraints
+    ps["fields"] = _probe_fields(page, ps["fields"])
+
+    # Preview: resolve answers and print what will fill — runs for both dry-run and --apply
+    filled = 0
+    total = len(ps.get("fields", []))
+    print("FIELDS — preview:", file=sys.stderr)
+    for f in ps.get("fields", []):
+        lbl = f.get("label", "")
+        if not lbl:
+            continue
+        if f["type"] == "file":
+            print(f"  [{f['tag']}] {lbl[:50]} -> <resume PDF>", file=sys.stderr)
+            filled += 1
+            continue
+        lbl_norm = re.sub(r'[^a-z0-9+#]+', ' ', lbl.lower()).strip()
+        opts = f.get("options", [])
+        ans = _find_answer(lbl, lbl_norm, answers, ca, profile, required=f.get("required", False), available_options=opts)
+        if ans:
+            if opts and ans not in opts:
+                match = next((o for o in opts if ans.lower() in o.lower()), None)
+                if not match:
+                    print(f"  [{f['tag']}] {lbl[:50]} -> {ans[:50]}  WARN: not in options {opts[:5]}", file=sys.stderr)
+                    continue
+            print(f"  [{f['tag']}] {lbl[:50]} -> {ans[:50]}", file=sys.stderr)
+            filled += 1
+        elif f.get("required"):
+            opts = f.get("options", [])
+            opt_hint = f"  options: {opts[:5]}" if opts else ""
+            print(f"  [{f['tag']}] {lbl[:50]} -> UNFILLED (required){opt_hint}", file=sys.stderr)
+    print(f"RESOLVED: {filled}/{total} fields", file=sys.stderr)
+    if filled < total:
+        print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
+        print("  Options shown above for combobox fields — LLM can select from them.", file=sys.stderr)
+        emit_next("act --fill --answers '...'")
         return
 
     radio_filled, radio_unfilled = _fill_radios(
-        page, ps["fields"], answers, profile, jid
+        page, ps["fields"], answers, ca, profile, jid
     )
     text_filled, text_unfilled = _fill_text(
-        page, ps["fields"], answers, profile, jid, state
+        page, ps["fields"], answers, ca, profile, jid, state
     )
     filled = radio_filled + text_filled
     unfilled = radio_unfilled + text_unfilled
 
-    # EEO/demographic fields — detect by decline options (language-agnostic).
-    # Auto-decline with "Prefer not to say" unless the user provided an explicit
-    # answer via profile.common_answers.eeo. The LLM never sees EEO fields as
-    # unfilled — eliminates any possibility of stereotyping.
+    # EEO/demographic fields — detect by decline options (language-agnostic),
+    # report to LLM but DO NOT auto-fill (let LLM decide via --answers).
+    # Saved answers auto-apply on future jobs.
     _DECLINE_SIGNALS = ["prefer not", "decline", "not say", "rather not"]
     eeo_unfilled = [f for f in unfilled if any(
         any(sig in (o or "").lower() for sig in _DECLINE_SIGNALS)
         for o in f.get("options", [])
     )]
     if eeo_unfilled:
-        _eeo_answers = profile.get("common_answers", {}).get("eeo", {})
         for ef in eeo_unfilled:
-            # Try explicit EEO answer from profile first (user opt-in)
-            res = resolution_for_fill(ef["label"], {"answers": _eeo_answers}, answers_override=answers)
-            if not res.value:
-                # Auto-decline: find "Prefer not to say" style option
-                decline_opt = next((o for o in ef.get("options", [])
-                                   if any(sig in (o or "").lower() for sig in _DECLINE_SIGNALS)), None)
-                if decline_opt:
-                    res = Resolution(decline_opt, "auto_decline", ef["label"], "auto_decline")
+            res = resolution_for_fill(ef["label"], profile, answers_override=answers, available_options=ef.get("options"))
             if res.value:
-                orig = ef.get("field")
-                eeo_answers = {ef["label"]: res.value}
-                if ef.get("tag") == "radio_group" and orig:
-                    nf, _ = _fill_radios(page, orig, eeo_answers, profile, jid)
-                elif orig:
-                    nf, _ = _fill_text(page, [orig], eeo_answers, profile, jid, state)
-                else:
-                    nf = 0
-                if nf:
-                    filled += nf
-                unfilled = [u for u in unfilled if u is not ef]
-                provenance = res.provenance if hasattr(res, 'provenance') else "auto_decline"
-                print(f"  EEO: {ef['label'][:50]} -> {res.value[:40]} ({provenance})", file=sys.stderr)
+                nf, _ = _fill_text(page, [ef], {ef["label"]: res.value}, ca, profile, jid, state)
+                filled += nf
+                print(f"  EEO: {ef['label'][:50]} -> {res.value[:40]} ({res.provenance})", file=sys.stderr)
+            else:
+                print(f"  EEO_UNANSWERED: {ef['label'][:50]} (options: {[o[:30] for o in ef.get('options', [])[:4]]})", file=sys.stderr)
 
     # Platform post-fill hook (e.g. notify widget frameworks of DOM changes)
     if registry and registry.has_hook("post_fill"):
@@ -1193,7 +961,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
         ]
         if new_fields:
             text_filled2, text_unfilled2 = _fill_text(
-                page, new_fields, answers, profile, jid, state
+                page, new_fields, answers, ca, profile, jid, state
             )
             filled += text_filled2
             unfilled.extend(text_unfilled2)
@@ -1217,7 +985,7 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
             if match and len(match.get("options", [])) > len(
                 cf.get("options", []) or []
             ):
-                nf, nu = _fill_text(page, [match], answers, profile, jid, state)
+                nf, nu = _fill_text(page, [match], answers, ca, profile, jid, state)
                 if nf:
                     filled_any = True
                     filled += nf
@@ -1238,47 +1006,17 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
         for ml in missing:
             match = next((ff for ff in ps_v["fields"] if ff.get("label", "")[:50] == ml), None)
             if match:
-                nf, _ = _fill_text(page, [match], answers, profile, jid, state)
+                nf, _ = _fill_text(page, [match], answers, ca, profile, jid, state)
                 filled += nf
         if registry and registry.has_hook("post_fill"):
             registry.call_hook("post_fill", page)
         state.pop("_fields_with_errors", None)
         read_and_save(page, state)
 
-    # --answers values apply only to this run; they are not persisted. To reuse an
-    # answer across jobs, add it to profile.json ("answers" map or a known key).
-
-    # Keep the persisted fill count current after all rescans/refills —
-    # cmd_submit's confirmation preview reads it.
-    state["filled"] = filled
-    # Re-fill invalidates previous submit preview — must re-preview before confirming
-    state.pop("_submit_previewed", None)
-    state["_last_answers"] = answers
-    save_state(state)
+    # Save ephemeral resolutions after verify (handled by caller on success).
+    # --answers values are saved to profile.answers via resolve's commit flow.
 
     page_num = state.get("_page", "?")
-
-    # Audit pass (read-only) + shadow-mode evidence.
-    mode = resolve_mode("shadow" if shadow else None)
-    try:
-        ps_audit = read_page(page)
-        _platform = state.get("platform", "") or _domain(page.url)
-        _corrected = state.get("_fields_with_errors", [])
-        _audit_fill(jid, ps_audit.get("fields", []), answers, profile, page_num,
-                    platform=_platform, corrected_labels=_corrected)
-        asum = audit.summarize(jid)
-        emit_status("audit", f"fields={asum['fields']} filled={asum['filled']} "
-                             f"invalid={asum['invalid']} prov={asum['by_provenance']} cat={asum['by_category']}")
-    except Exception as _e:
-        print(f"AUDIT_WARN: {_e}", file=sys.stderr)
-    if not submits_for_real(mode):
-        try:
-            from apply.common.inspect_lib import capture
-            capture(page, jid, prefix="shadow_fill")
-        except Exception:
-            pass
-        emit_status(f"{mode}_mode", "fill recorded; submit will be blocked (set JI_APPLY_MODE=live to submit)")
-
     emit_fill_report(filled, unfilled, page_num, profile if unfilled else None)
 
     btns = ps.get("buttons", [])
@@ -1293,13 +1031,6 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
         and not b["disabled"]
         for b in btns
     )
-    # Track fill progress in apply state for crash recovery
-    if not unfilled:
-        filled_fields = {f.get("label", f.get("_sel", f"field_{i}")): "" for i, f in enumerate(ps.get("fields", [])) if f.get("filled")}
-        try:
-            _as_record(jid, state.get("_page", 1), filled_fields)
-        except Exception:
-            pass
     if unfilled:
         emit_next('act --fill --answers \'{"<question>": "<answer>"}\'')
     elif has_submit:
@@ -1308,8 +1039,11 @@ def cmd_fill(jid, answers_json=None, candidate=None, dry_run=None, shadow=False)
         emit_next("act --next")
     elif not unfilled and not has_submit and not has_next:
         # All fields filled, no buttons — possible auto-submit
-        body_text = page_text(page) or ""
-        if has_success_text(body_text):
+        body_text = (page_text(page) or "").lower()
+        if any(
+            w in body_text
+            for w in ["your application has been", "your application was", "has been sent", "you have applied"]
+        ):
             emit_status("submitted", "auto-submit without clicking")
             emit_next("verify")
         else:
@@ -1438,8 +1172,6 @@ def cmd_next(jid, candidate=None):
     if candidate is not None:
         if candidate < len(all_candidates):
             c = all_candidates[candidate]
-            if _redirect_submit_intent(c, state):
-                return
             _click_candidate(page, c, state)
             ps2 = read_page(page)
             _handle_post_click(state, ps2, page)
@@ -1503,8 +1235,6 @@ def cmd_next(jid, candidate=None):
         emit_next("act --inspect")
         return
 
-    if _redirect_submit_intent(target, state):
-        return
     print(f"ACTION: {target['text']}", file=sys.stderr)
     _click_candidate(page, target, state)
     ps2 = read_page(page)
@@ -1546,7 +1276,7 @@ def cmd_back(jid):
     emit_next("act --fill")
 
 
-def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
+def cmd_submit(jid, confirm=False, candidate=None):
     state = load_state()
     if state.get("jid") != jid:
         print(
@@ -1583,17 +1313,21 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
     _alerts = []
     page.on("dialog", lambda d: (_alerts.append(d.message), d.accept()))
 
-    # ButtonIntentClassifier for submit buttons
-    all_buttons = (
-        page.evaluate(
-            """() => {
-        return Array.from(document.querySelectorAll('button, [role="button"]'))
-            .filter(b => b.offsetParent)
-            .map(b => ({text: (b.textContent||'').trim().slice(0,30), disabled: b.disabled}));
-    }"""
-        )
-        or []
-    )
+    # ButtonIntentClassifier for submit buttons — search main page + iframes
+    all_buttons = []
+    for f in page.frames:
+        is_main = (f == page.main_frame)
+        try:
+            btns = f.evaluate("""() =>
+                Array.from(document.querySelectorAll('button, [role="button"]'))
+                    .filter(b => b.offsetParent)
+                    .map(b => ({text: (b.textContent||'').trim().slice(0,30), disabled: b.disabled}))
+            """) or []
+            all_buttons.extend(btns)
+        except Exception:
+            if is_main:
+                pass  # Main frame shouldn't fail — but handle gracefully
+            # Cross-origin iframe — skip
     best = ButtonIntentClassifier.pick(all_buttons, "submit")
 
     cands = []
@@ -1650,9 +1384,11 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
         url = state.get("external_url", "") or state.get("url", "")
         url_short = url.split("?")[0][:80] if url else "?"
         plat = state.get("platform", "") or _domain(url) or "unknown"
+        filled = state.get("filled", 0)
         ps = state.get("page", {})
-        fields = ps.get("fields", [])
-        unfilled_fields = [f for f in fields if f.get("required") and not f.get("value")]
+        unfilled_fields = [
+            f for f in ps.get("fields", []) if f.get("required") and not f.get("value")
+        ]
         last = state.get("_last_submit", "")
         warn = ""
         if last == "validation_error":
@@ -1661,115 +1397,22 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
             warn = " (CAPTCHA was triggered last time)"
         elif last == "unknown":
             warn = " (last submit was not confirmed)"
-
-        # Load profile + last answers for provenance derivation
-        _preview_profile = {}
-        if os.path.exists(profile_path):
-            try:
-                with open(profile_path, encoding="utf-8") as _pf:
-                    _preview_profile = json.load(_pf)
-                _validate_profile(_preview_profile)
-            except Exception:
-                pass
-        _preview_answers = state.get("_last_answers", {})
-
         print(
-            f"SUBMIT: {plat} — {len(fields)} fields, {len(unfilled_fields)} unfilled{warn}",
+            f"SUBMIT: {plat} — {filled} filled, {len(unfilled_fields)} unfilled{warn}",
             file=sys.stderr,
         )
-
-        # Group filled fields by provenance source
-        _provenance_groups = {"profile": [], "answers": [], "auto_decline": [], "file": [], "unknown": []}
-        _prov_normalize = {"profile": "profile", "ephemeral": "profile", "derived": "profile",
-                           "answers_override": "answers", "user_typed": "answers",
-                           "auto_decline": "auto_decline", "static": "profile",
-                           "file": "file", "mapping": "profile", "profile_eeo": "auto_decline",
-                           "no_match": "unknown"}
-        _profile_eeo_answers = _preview_profile.get("common_answers", {}).get("eeo", {})
-        for f in fields:
-            label = f.get("label", f.get("key", "?"))
-            val = f.get("value", "")
-            if not val:
-                continue
-            if f.get("type") == "file":
-                _provenance_groups["file"].append(f)
-                continue
-            raw_prov = _derive_provenance(label, _preview_answers, _preview_profile)
-            if _profile_eeo_answers.get(label) or raw_prov == "auto_decline":
-                prov_group = "auto_decline"
-            else:
-                prov_group = _prov_normalize.get(raw_prov, "unknown")
-            _provenance_groups[prov_group].append(f)
-
-        source_labels = {
-            "profile": "From profile",
-            "answers": "From --answers (you provided)",
-            "auto_decline": "Auto-declined (EEO)",
-            "file": "Resume upload",
-            "unknown": "Source unknown",
-        }
-        for group_key, group_fields in _provenance_groups.items():
-            if not group_fields:
-                continue
-            group_label = source_labels.get(group_key, group_key)
-            print(f"  ── {group_label} ({len(group_fields)}):", file=sys.stderr)
-            for _gf in group_fields:
-                _glbl = _gf.get("label", _gf.get("key", "?"))[:45]
-                _gval = _gf.get("value", "")[:40]
-                _gtype = _gf.get("type", "?")
-                print(f"    [{_gtype}] {_glbl:45s} = {_gval}", file=sys.stderr)
-
-        # Unfilled fields
-        if unfilled_fields:
-            print(f"  ── Unfilled ({len(unfilled_fields)}):", file=sys.stderr)
-            for uf in unfilled_fields[:5]:
-                ulbl = uf.get("label", uf.get("key", "?"))[:45]
-                print(f"    [{uf.get('type','?')}] {ulbl}", file=sys.stderr)
-            if len(unfilled_fields) > 5:
-                print(f"    ... and {len(unfilled_fields)-5} more", file=sys.stderr)
-
+        for f in unfilled_fields[:3]:
+            print(f"  Unfilled: {f.get('label', '?')}", file=sys.stderr)
+        if len(unfilled_fields) > 3:
+            print(f"  ... and {len(unfilled_fields)-3} more", file=sys.stderr)
         print(f"  URL: {url_short}", file=sys.stderr)
-        print("  Review the values above. Pass --confirm to submit.", file=sys.stderr)
-
-        # Reconciliation: cross-page value comparison
-        _mm = _reconcile_fields(state, jid)
-        if _mm:
-            print(f"  ── Inconsistencies found ({len(_mm)}):", file=sys.stderr)
-            for _m in _mm:
-                _pages_str = "; ".join(f"pg{p[0]}={p[1][:30]}" for p in _m["pages"])
-                print(f"    '{_m['label'][:40]}': {_pages_str}", file=sys.stderr)
-            print("  Verify the values above and re-fill if needed.", file=sys.stderr)
-
-        state["_submit_previewed"] = True
-        save_state(state)
+        print("  Pass --confirm to submit, or investigate first.", file=sys.stderr)
         emit_next("act --submit --confirm")
-        return
-
-    # Safety gate: must preview before confirming
-    if not state.get("_submit_previewed"):
-        print("ERROR: must preview submission first — run act --submit <jid> (without --confirm) to review", file=sys.stderr)
-        emit_next("act --submit")
         return
     print(
         f"SUBMIT: {target['text']}\nDISABLED: {target.get('disabled', False)}",
         file=sys.stderr,
     )
-
-    # Gate the submit: shadow/hold mode, kill-switch, or validation gate (Phase 4).
-    from apply.common.policy import load_policy
-    from apply.common import gate
-    mode = resolve_mode("shadow" if shadow else None)
-    action, reason = gate.submit_decision(mode, load_policy(), audit.summarize(jid))
-    if action != "submit":
-        try:
-            from apply.common.inspect_lib import capture
-            capture(page, jid, prefix="shadow_submit")
-        except Exception:
-            pass
-        audit.log_event(jid, "submit_blocked", mode=mode, detail=f"{target['text']} | {reason}")
-        emit_status(f"submit_{action}", f"would submit '{target['text']}' — {reason}")
-        emit_next("verify, or resolve the reason above and set JI_APPLY_MODE=live")
-        return
 
     # Platform pre-submit hook (e.g., scroll to reveal button)
     reg = resolve_registry(page.url)
@@ -1801,10 +1444,12 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
 
     # If error text was detected, don't trust it yet — poll for success signals
     # which may arrive after validation errors (SAP SF async pattern).
-    # Broad tier is fine here: this only ends the poll, it never marks applied.
+    success_signals = ["your application has been", "your application was",
+                       "has been sent", "application received", "you have applied",
+                       "successfully applied", "thank you for"]
     for _ in range(10):
-        current_text = page_text(page) or ""
-        if has_success_text(current_text, SUCCESS_BROAD):
+        current_text = (page_text(page) or "").lower()
+        if any(s in current_text for s in success_signals + _alerts):
             break
         time.sleep(0.5)
 
@@ -1822,13 +1467,23 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
     for msg in _alerts:
         text += " " + msg.lower()
     # Check for success signals first (handles AJAX submit where form stays visible)
-    if has_success_text(text):
-        mark_applied(jid)
-        state["_last_submit"] = ""
-        save_state(state)
-        emit_status("submitted (via AJAX)")
-        emit_next("verify")
-        return
+    for signal in [
+        "your application has been",
+        "your application was",
+        "has been sent",
+        "application received",
+        "you have applied",
+    ]:
+        if signal in text:
+            get_conn().execute(
+                "UPDATE jobs SET stage=?, updated_at=? WHERE id=?",
+                ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid),
+            ).connection.commit()
+            state["_last_submit"] = ""
+            save_state(state)
+            emit_status("submitted (via AJAX)")
+            emit_next("verify")
+            return
 
     has_form = (
         page.evaluate(
@@ -1868,7 +1523,10 @@ def cmd_submit(jid, confirm=False, candidate=None, shadow=False):
         not page.evaluate("() => document.querySelector('[role=\"dialog\"]')")
         and not has_form
     ):
-        mark_applied(jid)
+        get_conn().execute(
+            "UPDATE jobs SET stage=?, updated_at=? WHERE id=?",
+            ("applied", time.strftime("%Y-%m-%dT%H:%M:%S"), jid),
+        ).connection.commit()
         state["_last_submit"] = ""
         save_state(state)
         emit_status("submitted")
@@ -1888,7 +1546,7 @@ def cmd_inspect(jid, candidate=None):
     if state.get("jid") != jid:
         emit_error(f"state is for job {state.get('jid','?')}, not {jid}")
         print("  Run detect first.", file=sys.stderr)
-        return
+    return
 
     from apply.common.inspect_lib import capture, probe_state
     from lib.ask_api import available as _vision_available
@@ -1922,7 +1580,7 @@ def cmd_inspect(jid, candidate=None):
     print(f"Platform: {state.get('platform', '?')}", file=sys.stderr)
     print(f"Filled: {state.get('filled', 0)} fields", file=sys.stderr)
 
-    capture(page, jid)
+    img_path = capture(page, jid)
     if _vision_available():
         print(f"  ask: lib/ask_api.py --img <path> --prompt '?'", file=sys.stderr)
     fc, _, _, _ = probe_state(page)
@@ -1931,17 +1589,16 @@ def cmd_inspect(jid, candidate=None):
 
 
 def run(args):
-    shadow = getattr(args, "shadow", False)
     if args.inspect:
         cmd_inspect(args.jid, args.candidate)
     elif args.fill:
-        cmd_fill(args.jid, args.answers, args.candidate, not args.apply, shadow)
+        cmd_fill(args.jid, args.answers, args.candidate)
     elif args.next:
         cmd_next(args.jid, args.candidate)
     elif args.back:
         cmd_back(args.jid)
     elif args.submit:
-        cmd_submit(args.jid, args.confirm, args.candidate, shadow)
+        cmd_submit(args.jid, args.confirm, args.candidate)
     else:
         print(
             "ERROR: specify --fill, --next, --back, --submit, or --inspect",
