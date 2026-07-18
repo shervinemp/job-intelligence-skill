@@ -96,6 +96,24 @@ def fill(page, f, ans):
     if _select_option(page, sel, ans):
         return True
 
+    # Level 1b: React-Select dropdown — click the indicator to open menu, then select option
+    try:
+        indicator = page.evaluate(f"""() => {{
+            const el = document.querySelector('{sel}');
+            if (!el) return '';
+            const ind = el.parentElement?.querySelector('.select__dropdown-indicator, .select__indicator');
+            if (ind && ind.offsetParent !== null) {{ ind.click(); return 'clicked'; }}
+            const ctrl = el.closest('.select__control');
+            if (ctrl) {{ ctrl.click(); return 'clicked'; }}
+            return '';
+        }}""")
+        if indicator:
+            time.sleep(1)
+            if _select_option(page, sel, ans):
+                return True
+    except Exception:
+        pass
+
     # Level 2: real keystrokes to trigger search-based autocomplete (Greenhouse etc.)
     try:
         el = page.locator(sel)
