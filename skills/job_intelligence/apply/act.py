@@ -896,7 +896,7 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     if required_unfilled > 0 or filled < total:
         print("  Add --answers '{\"<label>\": \"<value>\"}' for unfilled fields", file=sys.stderr)
         if required_unfilled == 0 and filled < total:
-            print("  Optional fields unfilled. Clues may exist in resume, profile, or page context.", file=sys.stderr)
+            print("  Optional fields unfilled. Check profile or resume for these.", file=sys.stderr)
             emit_next("act --fill --answers '...' (optional unfilled)")
             return
 
