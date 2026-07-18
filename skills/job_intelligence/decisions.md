@@ -22,6 +22,8 @@ Answer sourcing hierarchy:
 3. `profile.json` (canonical data: years per skill group, authorization, availability, location)
 4. Resume inference (extrapolate from CV content)
 
+**Investigate before skipping.** Optional unfilled fields should be deduced from available context (job source, resume, prior answers, vision) before giving up. Do not guess from word-similarity alone.
+
 ### Relocation strategy
 
 | Q | Strategy | Why |
