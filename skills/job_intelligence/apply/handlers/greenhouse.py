@@ -41,23 +41,26 @@ class GreenhouseHandler(PlatformHandler):
     def __init__(self):
         self._frame = None
 
-    def _target(self, page):
+    def _target(self, page, timeout=5):
         """Return the page or frame containing the Greenhouse form.
-        Detects if the form is embedded in a cross-origin iframe and
-        returns the iframe frame so all operations target the right context."""
-        if hasattr(self, '_frame') and self._frame is not None:
+        Retries up to `timeout` seconds for the iframe to appear."""
+        if self._frame is not None:
             try:
                 self._frame.evaluate('1+1')
                 return self._frame
             except Exception:
-                pass
-        for f in page.frames:
-            if f == page.main_frame:
-                continue
-            u = f.url.lower()
-            if 'greenhouse.io' in u or 'grnh.se' in u:
-                self._frame = f
-                return f
+                self._frame = None
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for f in page.frames:
+                if f == page.main_frame:
+                    continue
+                u = f.url.lower()
+                if 'greenhouse.io' in u or 'grnh.se' in u:
+                    self._frame = f
+                    return f
+            time.sleep(0.5)
         self._frame = None
         return page
 
