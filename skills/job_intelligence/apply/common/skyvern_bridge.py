@@ -84,6 +84,7 @@ def _ensure_server():
     env = os.environ.copy()
     env.setdefault("OPENAI_API_BASE", "http://localhost:9000/v1")
     env.setdefault("OPENAI_API_KEY", "sk-dummy")
+    env.setdefault("ENABLE_OPENAI", "true")
     env.setdefault("LLM_CONFIG", '{"model":"gpt-4","api_key":"sk-dummy"}')
     log = os.path.join(os.path.dirname(__file__), "..", "..", "..", "tmp", "skyvern_server.log")
     os.makedirs(os.path.dirname(log), exist_ok=True)
