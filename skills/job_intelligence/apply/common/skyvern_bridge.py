@@ -1,12 +1,12 @@
 """skyvern_bridge.py — Sync Skyvern client via Python SDK.
 
-Connects to a containerized Skyvern server at http://localhost:8000.
-Uses the Skyvern SDK with asyncio.run() — no event loop conflict
-because all Playwright has been removed from the pipeline.
+Connects to containerized Skyvern server at http://localhost:8000 via SDK.
+The server runs in Docker with PostgreSQL and its own Playwright browser.
+The pipeline never launches a browser — Skyvern handles everything.
 
 Usage:
     from apply.common.skyvern_bridge import fill_form, submit_form, close_session
-    result = fill_form(url, answers)  # returns {status, browser_session_id, run_id, ...}
+    result = fill_form(url, answers)  # fills form, returns browser_session_id
     result = submit_form(url, browser_session_id)
     close_session(browser_session_id)
 """
@@ -17,26 +17,8 @@ import os
 import sys
 import time
 
-SKYVERN_URL = os.environ.get("SKYVERN_URL", "http://localhost:8000")
-_SKYVERN_API_KEY = os.environ.get("SKYVERN_API_TOKEN", "")
 RESULTS_DIR = os.environ.get("JI_HOME", os.path.join(os.path.expanduser("~"), ".ji"))
-
-def _api_key() -> str:
-    global _SKYVERN_API_KEY
-    if _SKYVERN_API_KEY:
-        return _SKYVERN_API_KEY
-    import subprocess, re
-    try:
-        r = subprocess.run(
-            ["docker", "exec", "skyvern-skyvern-1", "cat", "/app/.skyvern/credentials.toml"],
-            capture_output=True, text=True, timeout=5,
-        )
-        m = re.search(r'cred="([^"]+)"', r.stdout)
-        if m:
-            _SKYVERN_API_KEY = m.group(1)
-    except Exception:
-        pass
-    return _SKYVERN_API_KEY
+RESULTS_DIR = os.path.join(RESULTS_DIR, "results")
 
 
 def _fmt_answers(answers: dict) -> str:
@@ -70,28 +52,82 @@ def _build_prompt(url: str, answers: dict, jid: str = "", submit: bool = False) 
         "6. STOP before clicking Submit Application or Submit. Do NOT submit.",
     ]
     if jid:
-        rd = os.path.join(RESULTS_DIR, "results", jid)
+        rd = os.path.join(RESULTS_DIR, jid)
         resumes = glob.glob(os.path.join(rd, "*Resume*.pdf"))
         covers = glob.glob(os.path.join(rd, "*Cover*.pdf"))
         if resumes:
-            parts.append(f"\nUpload resume from /ji-results/{jid}/{os.path.basename(resumes[0])} to the Resume/CV file input.")
+            parts.append(f"\nUpload resume from {resumes[0]} to the Resume/CV file input.")
         if covers:
-            parts.append(f"Upload cover letter from /ji-results/{jid}/{os.path.basename(covers[0])} to the cover letter file input.")
+            parts.append(f"Upload cover letter from {covers[0]} to the cover letter file input.")
     return "\n".join(parts)
 
 
 def _run_async(coro, timeout=300):
-    """Run async SDK call synchronously. Safe because Pipeline has no event loop."""
+    """Run async SDK call synchronously. Safe because pipeline has no event loop."""
     try:
         return asyncio.run(asyncio.wait_for(coro, timeout=timeout))
     except asyncio.TimeoutError:
         return None
 
 
+def _ensure_server():
+    """Start the local Skyvern server if not already running, with LLM config."""
+    import subprocess, time, urllib.request, json
+    # Check if server is already up
+    try:
+        req = urllib.request.Request("http://localhost:8000/v1/run/tasks", method="GET")
+        urllib.request.urlopen(req, timeout=2)
+        return  # already running
+    except Exception:
+        pass
+    # Set LLM env vars so litellm routes OpenAI models to our local proxy
+    env = os.environ.copy()
+    env.setdefault("OPENAI_API_BASE", "http://localhost:9000/v1")
+    env.setdefault("OPENAI_API_KEY", "sk-dummy")
+    env.setdefault("LLM_CONFIG", '{"model":"gpt-4","api_key":"sk-dummy"}')
+    log = os.path.join(os.path.dirname(__file__), "..", "..", "..", "tmp", "skyvern_server.log")
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "skyvern", "run", "server"],
+        env=env, stdout=open(log, "w"), stderr=subprocess.STDOUT,
+    )
+    # Wait for startup
+    for _ in range(30):
+        try:
+            req = urllib.request.Request("http://localhost:8000/v1/run/tasks", method="GET")
+            urllib.request.urlopen(req, timeout=2)
+            return
+        except Exception:
+            time.sleep(1)
+
+
+def _api_key() -> str:
+    """Get Skyvern API key from env or .env file."""
+    key = os.environ.get("SKYVERN_API_TOKEN", "")
+    if key:
+        return key
+    import re
+    for env_path in [
+        r"C:\Users\sherv\.openclaw\workspace\skills\.env",
+        r"C:\Users\sherv\.openclaw\workspace\skills\job_intelligence\.env",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", ".env"),
+    ]:
+        if not os.path.exists(env_path):
+            continue
+        with open(env_path) as f:
+            for line in f:
+                if "SKYVERN_API_KEY" in line:
+                    m = re.search(r"SKYVERN_API_KEY='([^']+)'", line)
+                    if m:
+                        return m.group(1)
+    return ""
+
+
 def _client():
-    """Lazy import + create Skyvern client. Import is slow (~2s)."""
+    """Lazy import + create Skyvern client. Auto-starts server if needed."""
+    _ensure_server()
     from skyvern import Skyvern
-    return Skyvern(base_url=SKYVERN_URL, api_key=_api_key())
+    return Skyvern(base_url="http://localhost:8000", api_key=_api_key())
 
 
 def fill_form(url: str, answers: dict, jid: str = "", timeout: int = 300) -> dict:
@@ -103,11 +139,12 @@ def fill_form(url: str, answers: dict, jid: str = "", timeout: int = 300) -> dic
         return await sk.run_task(
             prompt=prompt, url=url, max_steps=50,
             wait_for_completion=True, timeout=timeout * 1000,
+            model={"max_tokens": 4096},
         )
 
     task = _run_async(run(), timeout=timeout + 30)
     if task is None:
-        return {"status": "timed_out", "details": f"Sskyvern did not complete within {timeout}s"}
+        return {"status": "timed_out", "details": f"Skyvern did not complete within {timeout}s"}
     return {
         "status": getattr(task, "status", "unknown"),
         "details": getattr(task, "failure_reason", "") or str(task)[:300],
@@ -142,7 +179,16 @@ def submit_form(url: str, browser_session_id: str = "", timeout: int = 120) -> d
 
 def get_task(run_id: str) -> dict:
     """Get task result by run_id (for state recovery)."""
-    return _call_api("GET", f"/v1/runs/{run_id}")
+    sk = _client()
+    async def run():
+        return await sk.get_run(run_id)
+    task = _run_async(run(), timeout=15)
+    if task is None:
+        return {}
+    return {
+        "status": getattr(task, "status", "unknown"),
+        "browser_session_id": getattr(task, "browser_session_id", None),
+    }
 
 
 def close_session(browser_session_id: str) -> bool:
@@ -157,15 +203,3 @@ def close_session(browser_session_id: str) -> bool:
         return True
     except Exception:
         return False
-
-
-def _call_api(method: str, path: str) -> dict:
-    """Minimal REST helper for state recovery (no SDK needed for a GET)."""
-    import urllib.request, json
-    url = f"{SKYVERN_URL}{path}"
-    req = urllib.request.Request(url, headers={"x-api-key": _api_key()}, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        return {"error": str(e)}
