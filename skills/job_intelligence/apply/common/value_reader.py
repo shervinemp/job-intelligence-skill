@@ -74,7 +74,9 @@ class AriaComboboxReader(FieldValueReader):
 class ReactSelectReader(FieldValueReader):
     """React-Select: selected value rendered in sibling div.select__single-value.
     React-Select is used by thousands of sites (Greenhouse, many others).
-    The selected option text is rendered as a styled div, not in el.value."""
+    The selected option text is rendered as a styled div, not in el.value.
+    The input element is nested inside .select__input which is a sibling
+    of .select__single-value — walk up to find the containing control."""
     name = "react_select"
 
     def read(self, page, sel, ans=None):
@@ -82,8 +84,13 @@ class ReactSelectReader(FieldValueReader):
             v = (page.evaluate(f"""() => {{
                 const el = document.querySelector({json.dumps(sel)});
                 if (!el) return null;
-                const sv = el.parentElement?.querySelector('.select__single-value');
-                return sv ? sv.textContent?.trim() || null : null;
+                let p = el.parentElement;
+                while (p) {{
+                    const sv = p.querySelector('.select__single-value');
+                    if (sv) return sv.textContent?.trim() || null;
+                    p = p.parentElement;
+                }}
+                return null;
             }}""") or "").strip() or None
             return v
         except Exception:

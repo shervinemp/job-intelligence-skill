@@ -129,9 +129,15 @@ class GreenhouseHandler(PlatformHandler):
                 if (!label) label = el.name || '';
                 let val = (el.value || '').trim();
                 if (!val && el.getAttribute('role') === 'combobox') {
-                    // React-Select: selected value rendered in sibling div
-                    const sv = el.parentElement?.querySelector('.select__single-value');
-                    if (sv) val = (sv.textContent || '').trim();
+                    // React-Select: selected value rendered in sibling div.
+                    // Input is nested inside .select__input which is a sibling
+                    // of .select__single-value — walk up parent chain.
+                    let p = el.parentElement;
+                    while (p) {
+                        const sv = p.querySelector('.select__single-value');
+                        if (sv) { val = (sv.textContent || '').trim(); break; }
+                        p = p.parentElement;
+                    }
                     if (!val) {
                         const owns = el.getAttribute('aria-owns');
                         if (owns) {
