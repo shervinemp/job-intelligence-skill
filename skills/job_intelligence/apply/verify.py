@@ -48,6 +48,9 @@ def _vision_confirms(page, jid):
     Returns True only on a clear YES."""
     try:
         from lib.ask_api import available, ask
+    except ImportError:
+        return False
+    try:
         if not available():
             return False
         from apply.common.inspect_lib import page_jpeg

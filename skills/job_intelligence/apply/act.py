@@ -1626,7 +1626,10 @@ def cmd_inspect(jid, candidate=None):
     return
 
     from apply.common.inspect_lib import capture, probe_state
-    from lib.ask_api import available as _vision_available
+    try:
+        from lib.ask_api import available as _vision_available
+    except ImportError:
+        _vision_available = lambda: False
     b, ctx = connect()
     pm = PageManager(ctx, jid)
     pm.close_stale(target_url=state.get("external_url", ""))
