@@ -918,39 +918,68 @@ def cmd_fill(jid, answers_json=None, candidate=None):
     if filled < total:
         print("  Optional fields unfilled. Might be answerable from profile, resume, or common answers.", file=sys.stderr)
 
-    radio_filled, radio_unfilled = _fill_radios(
-        page, ps["fields"], answers, ca, profile, jid
-    )
-    text_filled, text_unfilled = _fill_text(
-        page, ps["fields"], answers, ca, profile, jid, state
-    )
-    filled = radio_filled + text_filled
-    unfilled = radio_unfilled + text_unfilled
-
-    # Platform handler: run_modal_flow handles multi-page forms + submission
-    from apply.common.handler_base import run_modal_flow
-    handler = registry.get_handler() if registry else None
-    if handler:
-        from apply.common.policy import load_policy, resolve_mode
-        from apply.common.gate import submit_decision
-        mode = resolve_mode(None)
-        policy = load_policy()
-        action, reason = submit_decision(mode, policy, None)
-        allow_submit = (action == "submit")
-        modal_result = run_modal_flow(
-            handler, page, jid, profile,
-            answers=answers,
-            allow_submit=allow_submit,
-            initial_fields=ps.get("fields", []),
-        )
-        if modal_result == "done":
-            filled = len(ps.get("fields", []))
-            unfilled = []
+    # Skyvern fill path — replaces the entire fill loop + run_modal_flow
+    from apply.common.skyvern_bridge import fill_form as _skyvern_fill
+    from lib.chrome_manager import CDP_URL as _CDP_URL
+    url = state.get("external_url", "") or page.url
+    skyvern_result = _skyvern_fill(url, answers, _CDP_URL, timeout=300)
+    if skyvern_result["status"] == "completed":
+        print(f"SKYVERN: fill completed", file=sys.stderr)
+        # Skyvern may have opened a new tab — find the page with the filled form
+        for pg in ctx.pages:
+            u = pg.url.strip("/ ")
+            if u and any(ext in u for ext in ["greenhouse.io", "mongodb.com/careers"]):
+                page = pg
+                pm.register(page)
+                break
+        filled = len(ps.get("fields", []))
+        unfilled = []
+        read_and_save(page, state)
+        # Check if submission happened (Skyvern might have submitted despite instructions)
+        body = (page_text(page) or "").lower()
+        if any(w in body for w in ["your application has been", "your application was", "has been sent", "you have applied"]):
             emit_status("submitted")
             emit_next("verify")
             state["result"] = "submitted"
             read_and_save(page, state)
             return
+        emit_status("filled")
+        read_and_save(page, state)
+    else:
+        print(f"SKYVERN: {skyvern_result['status']} — {skyvern_result['details']}", file=sys.stderr)
+        print("Falling back to legacy fill...", file=sys.stderr)
+        radio_filled, radio_unfilled = _fill_radios(
+            page, ps["fields"], answers, ca, profile, jid
+        )
+        text_filled, text_unfilled = _fill_text(
+            page, ps["fields"], answers, ca, profile, jid, state
+        )
+        filled = radio_filled + text_filled
+        unfilled = radio_unfilled + text_unfilled
+
+        from apply.common.handler_base import run_modal_flow
+        handler = registry.get_handler() if registry else None
+        if handler:
+            from apply.common.policy import load_policy, resolve_mode
+            from apply.common.gate import submit_decision
+            mode = resolve_mode(None)
+            policy = load_policy()
+            action, reason = submit_decision(mode, policy, None)
+            allow_submit = (action == "submit")
+            modal_result = run_modal_flow(
+                handler, page, jid, profile,
+                answers=answers,
+                allow_submit=allow_submit,
+                initial_fields=ps.get("fields", []),
+            )
+            if modal_result == "done":
+                filled = len(ps.get("fields", []))
+                unfilled = []
+                emit_status("submitted")
+                emit_next("verify")
+                state["result"] = "submitted"
+                read_and_save(page, state)
+                return
 
     # EEO/demographic fields — detect by decline options (language-agnostic),
     # report to LLM but DO NOT auto-fill (let LLM decide via --answers).

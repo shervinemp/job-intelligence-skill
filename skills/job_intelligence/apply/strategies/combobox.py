@@ -23,16 +23,18 @@ def _find_any_trigger(page, sel):
 def _select_option(page, sel, ans):
     """Poll for option matching `ans` within the combobox's own listbox.
     Returns True if option was found, clicked, and the dropdown closed
-    (indicating the selection was accepted)."""
+    (indicating the selection was accepted).
+    Falls back to clicking by text content when options lack an `id` attr
+    (common in React-Select and other custom dropdowns)."""
     for _ in range(15):
         time.sleep(0.5)
-        oid = page.evaluate(f"""() => {{
+        result = page.evaluate(f"""() => {{
             const a = {json.dumps(ans)};
             const input = document.querySelector('{sel}');
-            if (!input) return '';
+            if (!input) return {{}};
             const owns = input.getAttribute('aria-owns');
             const root = owns ? document.getElementById(owns) : document;
-            if (!root) return '';
+            if (!root) return {{}};
             function parseNum(s) {{ const d = s.replace(/[^0-9]/g, ''); return d ? parseInt(d, 10) : null; }}
             function match(aText, optText) {{
                 const aL = aText.toLowerCase().trim(), oL = optText.trim().toLowerCase();
@@ -53,15 +55,23 @@ def _select_option(page, sel, ans):
             }}
             const opts = Array.from(root.querySelectorAll('[role="option"], li, [role="menuitem"]'));
             const found = opts.find(o => match(a, o.textContent.trim()));
-            return (found && found.id) ? '[id="' + found.id + '"]' : '';
+            if (!found) return {{}};
+            return {{ id: found.id || '', index: Array.from(opts).indexOf(found), text: (found.textContent || '').trim() }};
         }}""")
-        if oid:
-            try:
-                page.locator(oid).click(force=True, timeout=3000)
-                time.sleep(0.3)
-                return True
-            except Exception:
-                pass
+        opt_id = result.get('id', '') if result else ''
+        opt_idx = result.get('index', -1) if result else -1
+        opt_text = result.get('text', '') if result else ''
+        try:
+            if opt_id:
+                page.locator(opt_id).click(force=True, timeout=3000)
+            elif opt_idx >= 0 and opt_text:
+                page.locator(f'[role="option"]:has-text("{opt_text}"):visible').first.click(timeout=3000)
+            else:
+                continue
+            time.sleep(0.3)
+            return True
+        except Exception:
+            continue
     return False
 
 
@@ -85,11 +95,31 @@ def fill(page, f, ans):
     if not sel:
         return False
     from apply.strategies import text as _text
-    click_sel = _find_any_trigger(page, sel)
+
+    # React-Select: click the .select__control wrapper to open the dropdown menu.
+    # Clicking the hidden <input> directly won't open it. If no React-Select
+    # control found, fall back to _find_any_trigger for the clickable element.
+    clicked_control = False
     try:
-        page.evaluate(f"document.querySelector('{click_sel}')?.click()")
+        clicked_control = page.evaluate(f"""() => {{
+            const el = document.querySelector('{sel}');
+            const ctrl = el?.closest('.select__control');
+            if (ctrl) {{ ctrl.click(); return true; }}
+            const sv = el?.closest('[class*="-control"], [class*="select"]');
+            if (sv) {{ sv.click(); return true; }}
+            return false;
+        }}""")
+        if clicked_control:
+            time.sleep(0.3)
     except Exception:
-        return bool(_text.native_setter(page, sel, ans))
+        pass
+
+    if not clicked_control:
+        click_sel = _find_any_trigger(page, sel)
+        try:
+            page.evaluate(f"document.querySelector('{click_sel}')?.click()")
+        except Exception:
+            return bool(_text.native_setter(page, sel, ans))
     url_before = page.url
 
     # Level 1: click + poll for pre-existing options (standard dropdowns)

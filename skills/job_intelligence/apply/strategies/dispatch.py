@@ -81,10 +81,11 @@ def field_deterministic(page, f, ans):
 
     # Use FieldFiller registry for type dispatch
     from apply.common.filler import fill_field as _fill_field
-    ok, filler = _fill_field(fr, f, ans)
-    if ok:
-        aft = _element_value(page, sel, ans=ans)
-        if _check_delta(page, sel, before, aft, ans, label):
-            return True
-        # Filler reported success but value didn't stick — try text fallback
+    _fill_field(fr, f, ans)
+    # Always verify after fill — the filler may have set the value but returned
+    # False (e.g., React-Select option had no id attr). The verification cascade
+    # (DOM readers → VisionReader as last resort) is the final arbiter.
+    aft = _element_value(page, sel, ans=ans)
+    if _check_delta(page, sel, before, aft, ans, label):
+        return True
     return _try_text_fallback(fr, f, ans, sel)
