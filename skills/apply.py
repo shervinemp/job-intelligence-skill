@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""apply.py — Unified apply pipeline: detect, navigate, act, verify.
+"""apply.py — Apply pipeline: detect, navigate, fill via Skyvern.
 
 Usage:
-  python3 apply.py detect [<jid>]       Auto-pick first tailored if no JID
+  python3 apply.py detect [<jid>]
   python3 apply.py navigate <jid>
   python3 apply.py act --fill <jid> [--answers '{}']
-  python3 apply.py act --next <jid>
-  python3 apply.py act --back <jid>
-  python3 apply.py act --submit <jid> [--confirm]
-  python3 apply.py act --inspect <jid> [--candidate N]
+  python3 apply.py act --submit <jid>
   python3 apply.py verify <jid>
   python3 apply.py reject <jid>         Skip permanently
   python3 apply.py flag <jid>           Toggle auth wall
-  python3 apply.py retry [<jid>]        Re-attempt failed (or specific JID)
+  python3 apply.py retry [<jid>]        Re-attempt failed
   python3 apply.py undo <jid>           Move back one stage
 """
 import os, sys
@@ -132,21 +129,7 @@ def main():
             remove(args.jid)
             print(f"UNDO: {args.jid} {stage} -> {new_stage}", file=sys.stderr)
     elif args.command == "mappings":
-        from apply.common import mappings
-        if args.action == "list":
-            pending = mappings.list_pending(args.jid)
-            if not pending:
-                print(f"No pending mappings for {args.jid}", file=sys.stderr)
-            for fp, e in pending.items():
-                tgt = e.get("target") or e.get("value")
-                flag = " [corrected]" if e.get("corrected") else ""
-                print(f"  {fp[:8]} {e.get('label','?')[:40]} -> {e.get('target_kind')}:{tgt} ({e.get('category')}){flag}", file=sys.stderr)
-        elif args.action == "confirm":
-            n = mappings.confirm(args.jid)
-            print(f"CONFIRMED: promoted {n} mapping(s) for {args.jid}", file=sys.stderr)
-        elif args.action == "clear":
-            mappings.clear(args.jid)
-            print(f"CLEARED: pending mappings for {args.jid}", file=sys.stderr)
+        print("MAPPINGS: removed in Skyvern migration", file=sys.stderr)
 
 
 if __name__ == "__main__":

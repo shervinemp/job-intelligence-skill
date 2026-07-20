@@ -1,8 +1,8 @@
 """skyvern_bridge.py — Sync Skyvern client via Python SDK.
 
-Connects to containerized Skyvern server at http://localhost:8000 via SDK.
-The server runs in Docker with PostgreSQL and its own Playwright browser.
-The pipeline never launches a browser — Skyvern handles everything.
+Auto-starts a local Skyvern server (SQLite, no Docker) with LLM config
+pointing to the local proxy on port 9000. The pipeline never launches
+a browser — Skyvern handles everything in its own Playwright instance.
 
 Usage:
     from apply.common.skyvern_bridge import fill_form, submit_form, close_session
@@ -70,9 +70,13 @@ def _run_async(coro, timeout=300):
         return None
 
 
+_SERVER_PROC: "subprocess.Popen[bytes]" | None = None
+
+
 def _ensure_server():
     """Start the local Skyvern server if not already running, with LLM config."""
     import subprocess, time, urllib.request, json
+    global _SERVER_PROC
     # Check if server is already up
     try:
         req = urllib.request.Request("http://localhost:8000/v1/run/tasks", method="GET")
@@ -86,12 +90,18 @@ def _ensure_server():
     env.setdefault("OPENAI_API_KEY", "sk-dummy")
     env.setdefault("ENABLE_OPENAI", "true")
     env.setdefault("LLM_CONFIG", '{"model":"gpt-4","api_key":"sk-dummy"}')
-    log = os.path.join(os.path.dirname(__file__), "..", "..", "..", "tmp", "skyvern_server.log")
-    os.makedirs(os.path.dirname(log), exist_ok=True)
-    proc = subprocess.Popen(
+    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                           "..", "tmp")
+    log_dir = os.path.normpath(log_dir)
+    os.makedirs(log_dir, exist_ok=True)
+    log = os.path.join(log_dir, "skyvern_server.log")
+    _SERVER_PROC = subprocess.Popen(
         [sys.executable, "-m", "skyvern", "run", "server"],
         env=env, stdout=open(log, "w"), stderr=subprocess.STDOUT,
     )
+    # Register cleanup on normal interpreter exit
+    import atexit
+    atexit.register(lambda: _kill_server())
     # Wait for startup
     for _ in range(30):
         try:
@@ -100,6 +110,19 @@ def _ensure_server():
             return
         except Exception:
             time.sleep(1)
+    print("WARN: Skyvern server may not have started (port 8000 not responding after 30s)",
+          file=sys.stderr)
+
+
+def _kill_server():
+    global _SERVER_PROC
+    if _SERVER_PROC is not None and _SERVER_PROC.poll() is None:
+        _SERVER_PROC.terminate()
+        try:
+            _SERVER_PROC.wait(timeout=5)
+        except Exception:
+            _SERVER_PROC.kill()
+        _SERVER_PROC = None
 
 
 def _api_key() -> str:
@@ -107,12 +130,15 @@ def _api_key() -> str:
     key = os.environ.get("SKYVERN_API_TOKEN", "")
     if key:
         return key
+    # Walk up from __file__ to find .env files
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../apply
     import re
     for env_path in [
-        r"C:\Users\sherv\.openclaw\workspace\skills\.env",
-        r"C:\Users\sherv\.openclaw\workspace\skills\job_intelligence\.env",
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", ".env"),
+        os.path.join(_root, "..", "..", ".env"),           # skill root (parent of job_intelligence)
+        os.path.join(_root, "..", "job_intelligence", ".env"),  # nested package
+        os.path.join(_root, "..", ".env"),                  # skill root from apply dir
     ]:
+        env_path = os.path.normpath(env_path)
         if not os.path.exists(env_path):
             continue
         with open(env_path) as f:
@@ -163,7 +189,8 @@ def submit_form(url: str, browser_session_id: str = "", timeout: int = 120) -> d
 
     async def run():
         kwargs = dict(prompt=prompt, url=url, max_steps=20,
-                      wait_for_completion=True, timeout=timeout * 1000)
+                      wait_for_completion=True, timeout=timeout * 1000,
+                      model={"max_tokens": 4096})
         if browser_session_id:
             kwargs["browser_session_id"] = browser_session_id
         return await sk.run_task(**kwargs)

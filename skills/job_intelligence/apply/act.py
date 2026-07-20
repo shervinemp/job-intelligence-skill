@@ -8,7 +8,6 @@ Usage:
   act --fill <jid> [--answers JSON]
   act --submit <jid>
 """
-import asyncio
 import json
 import os
 import sys
@@ -18,7 +17,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
 from apply.common.output import emit_next, emit_status
 from apply.common.page_helpers import load_state, save_state
-from apply.common.resolve import resolution_for_fill
 
 _PROFILE_PATH = os.path.join(os.path.dirname(__file__), "..", "profile.json")
 
@@ -119,13 +117,12 @@ def cmd_submit(jid):
     url = state.get("external_url", "")
     session_id = state.get("browser_session_id", "")
 
-    # Recover session from fill run_id if missing
     if not session_id:
         fill_run_id = state.get("fill_run_id", "")
         if fill_run_id:
             from apply.common.skyvern_bridge import get_task
             task = get_task(fill_run_id)
-            session_id = task.get("browser_session_id", "")
+            session_id = (task or {}).get("browser_session_id", "")
             if session_id:
                 state["browser_session_id"] = session_id
                 save_state(state)
