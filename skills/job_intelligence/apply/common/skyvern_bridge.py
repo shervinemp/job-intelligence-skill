@@ -167,18 +167,74 @@ def _client():
     return Skyvern(base_url="http://localhost:8000", api_key=_api_key())
 
 
-def _chrome_cdp_url() -> str:
-    """Return Chrome CDP URL if a debuggable Chrome is running, else empty."""
+_CHROME_PROC = None
+_CHROME_PROFILE = os.path.join(
+    os.environ.get("JI_HOME", os.path.join(os.path.expanduser("~"), ".ji")),
+    "chrome-profile",
+)
+
+
+def _find_chrome() -> str:
+    candidates = [
+        os.environ.get("CHROME_PATH", ""),
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    return "chrome"
+
+
+def _start_chrome() -> str:
+    """Start Chrome with CDP, reuse if already running. Returns CDP URL."""
+    global _CHROME_PROC
     try:
-        req = urllib.request.Request("http://127.0.0.1:9222/json/version")
-        with urllib.request.urlopen(req, timeout=1) as resp:
-            info = json.loads(resp.read())
-            webSocketDebuggerUrl = info.get("webSocketDebuggerUrl", "")
-            if webSocketDebuggerUrl:
-                return "http://127.0.0.1:9222"
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:9222/json/version"), timeout=2)
+        return "http://127.0.0.1:9222"
     except Exception:
         pass
+    chrome_path = _find_chrome()
+    os.makedirs(_CHROME_PROFILE, exist_ok=True)
+    stealth = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-infobars", "--no-default-browser-check",
+        "--disable-component-update", "--disable-background-timer-throttling",
+    ]
+    _CHROME_PROC = subprocess.Popen(
+        [chrome_path,
+         f"--user-data-dir={_CHROME_PROFILE}",
+         "--remote-debugging-port=9222",
+         "--no-first-run", "--disable-session-crashed-bubble",
+         "--disable-restore-session-state"] + stealth,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    import atexit
+    atexit.register(_kill_chrome)
+    for _ in range(30):
+        try:
+            urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:9222/json/version"), timeout=2)
+            return "http://127.0.0.1:9222"
+        except Exception:
+            time.sleep(1)
+    print("WARN: Chrome didn't start on port 9222", file=sys.stderr)
     return ""
+
+
+def _kill_chrome():
+    global _CHROME_PROC
+    if _CHROME_PROC is not None and _CHROME_PROC.poll() is None:
+        _CHROME_PROC.terminate()
+        try:
+            _CHROME_PROC.wait(timeout=5)
+        except Exception:
+            _CHROME_PROC.kill()
+        _CHROME_PROC = None
+
+
+def _chrome_cdp_url() -> str:
+    """Auto-start Chrome with CDP, return the CDP address."""
+    return _start_chrome()
 
 
 def fill_form(url: str, answers: dict, jid: str = "", timeout: int = 300) -> dict:
