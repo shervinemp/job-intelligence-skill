@@ -13,6 +13,7 @@ Usage:
 
 import asyncio
 import glob
+import json
 import os
 import subprocess
 import sys
@@ -90,7 +91,6 @@ def _server_alive() -> bool:
 
 def _ensure_server():
     """Start the local Skyvern server if not already running, with LLM config."""
-    import json
     global _SERVER_PROC
     if _server_alive():
         return
@@ -167,17 +167,33 @@ def _client():
     return Skyvern(base_url="http://localhost:8000", api_key=_api_key())
 
 
+def _chrome_cdp_url() -> str:
+    """Return Chrome CDP URL if a debuggable Chrome is running, else empty."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:9222/json/version")
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            info = json.loads(resp.read())
+            webSocketDebuggerUrl = info.get("webSocketDebuggerUrl", "")
+            if webSocketDebuggerUrl:
+                return "http://127.0.0.1:9222"
+    except Exception:
+        pass
+    return ""
+
+
 def fill_form(url: str, answers: dict, jid: str = "", timeout: int = 300) -> dict:
     """Fill a job application form. Returns task result with browser_session_id."""
     prompt = _build_prompt(url, answers, jid=jid)
     sk = _client()
+    cdp = _chrome_cdp_url()
 
     async def run():
-        return await sk.run_task(
-            prompt=prompt, url=url, max_steps=50,
-            wait_for_completion=True, timeout=timeout * 1000,
-            model={"max_tokens": 4096},
-        )
+        kwargs = dict(prompt=prompt, url=url, max_steps=50,
+                      wait_for_completion=True, timeout=timeout * 1000,
+                      model={"max_tokens": 4096})
+        if cdp:
+            kwargs["browser_address"] = cdp
+        return await sk.run_task(**kwargs)
 
     task = _run_async(run(), timeout=timeout + 30)
     if task is None:
@@ -196,6 +212,7 @@ def submit_form(url: str, browser_session_id: str = "", timeout: int = 120) -> d
     """Click Submit on a job application form. Reuses browser_session_id."""
     prompt = _build_prompt(url, {}, submit=True)
     sk = _client()
+    cdp = _chrome_cdp_url()
 
     async def run():
         kwargs = dict(prompt=prompt, url=url, max_steps=20,
@@ -203,6 +220,8 @@ def submit_form(url: str, browser_session_id: str = "", timeout: int = 120) -> d
                       model={"max_tokens": 4096})
         if browser_session_id:
             kwargs["browser_session_id"] = browser_session_id
+        if cdp:
+            kwargs["browser_address"] = cdp
         return await sk.run_task(**kwargs)
 
     task = _run_async(run(), timeout=timeout + 30)
