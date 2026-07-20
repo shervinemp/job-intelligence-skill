@@ -14,8 +14,11 @@ Usage:
 import asyncio
 import glob
 import os
+import subprocess
 import sys
 import time
+import urllib.request
+import urllib.error
 
 RESULTS_DIR = os.environ.get("JI_HOME", os.path.join(os.path.expanduser("~"), ".ji"))
 RESULTS_DIR = os.path.join(RESULTS_DIR, "results")
@@ -70,20 +73,27 @@ def _run_async(coro, timeout=300):
         return None
 
 
-_SERVER_PROC: "subprocess.Popen[bytes]" | None = None
+_SERVER_PROC = None  # type: ignore
+
+
+def _server_alive() -> bool:
+    """True if the Skyvern server is responding on port 8000."""
+    try:
+        req = urllib.request.Request("http://localhost:8000/openapi.json", method="GET")
+        urllib.request.urlopen(req, timeout=2)
+        return True  # 200 OK
+    except urllib.error.HTTPError:
+        return True  # any HTTP response means the server is up
+    except Exception:
+        return False  # connection refused / timeout = not up
 
 
 def _ensure_server():
     """Start the local Skyvern server if not already running, with LLM config."""
-    import subprocess, time, urllib.request, json
+    import json
     global _SERVER_PROC
-    # Check if server is already up
-    try:
-        req = urllib.request.Request("http://localhost:8000/v1/run/tasks", method="GET")
-        urllib.request.urlopen(req, timeout=2)
-        return  # already running
-    except Exception:
-        pass
+    if _server_alive():
+        return
     # Set LLM env vars so litellm routes OpenAI models to our local proxy
     env = os.environ.copy()
     env.setdefault("OPENAI_API_BASE", "http://localhost:9000/v1")
