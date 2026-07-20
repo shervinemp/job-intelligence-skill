@@ -246,10 +246,13 @@ def fill_form(url: str, answers: dict, jid: str = "", timeout: int = 300) -> dic
     async def run():
         kwargs = dict(prompt=prompt, url=url, max_steps=50,
                       wait_for_completion=True, timeout=timeout * 1000,
-                      model={"max_tokens": 4096})
+                      model={"max_tokens": 4096},
+                      proxy_location="NONE")
         if cdp:
             kwargs["browser_address"] = cdp
         return await sk.run_task(**kwargs)
+
+    return _run_and_extract(run, timeout, sk)
 
     task = _run_async(run(), timeout=timeout + 30)
     if task is None:
@@ -273,7 +276,8 @@ def submit_form(url: str, browser_session_id: str = "", timeout: int = 120) -> d
     async def run():
         kwargs = dict(prompt=prompt, url=url, max_steps=20,
                       wait_for_completion=True, timeout=timeout * 1000,
-                      model={"max_tokens": 4096})
+                      model={"max_tokens": 4096},
+                      proxy_location="NONE")
         if browser_session_id:
             kwargs["browser_session_id"] = browser_session_id
         if cdp:
