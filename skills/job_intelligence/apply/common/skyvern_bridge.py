@@ -67,7 +67,17 @@ def _build_prompt(url: str, answers: dict, jid: str = "", submit: bool = False) 
 
 
 def _run_async(coro, timeout=300):
-    """Run async SDK call synchronously. Safe because pipeline has no event loop."""
+    """Run async SDK call synchronously. Handles both main-thread and
+    already-running-event-loop scenarios (Playwright sync API case)."""
+    try:
+        loop = asyncio.get_running_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, asyncio.wait_for(coro, timeout=timeout))
+                return future.result(timeout=timeout + 30)
+    except RuntimeError:
+        pass
     try:
         return asyncio.run(asyncio.wait_for(coro, timeout=timeout))
     except asyncio.TimeoutError:
@@ -327,13 +337,10 @@ def close_session(browser_session_id: str) -> bool:
 
 
 def fill_remaining(url: str, answers: dict, filled_fields: list[str] = None,
-                   browser_session_id: str = "", timeout: int = 300) -> dict:
+                   browser_session_id: str = "", timeout: int = 300,
+                   wait: bool = True) -> dict:
     """Fill only fields that weren't already filled by Playwright.
-    Skyvern navigates to the URL (relying on ATS server-side persistence),
-    sees the already-filled fields, and fills only the remaining ones.
-
-    filled_fields: list of field labels already filled by Playwright.
-    """
+    If wait=False, returns immediately with the run_id for polling."""
     skip = filled_fields or []
     skip_hint = ""
     if skip:
@@ -358,7 +365,7 @@ def fill_remaining(url: str, answers: dict, filled_fields: list[str] = None,
 
     async def run():
         kwargs = dict(prompt=prompt, url=url, max_steps=30,
-                      wait_for_completion=True, timeout=timeout * 1000,
+                      wait_for_completion=wait,
                       model={"max_tokens": 4096},
                       proxy_location="NONE")
         if browser_session_id:
@@ -367,15 +374,25 @@ def fill_remaining(url: str, answers: dict, filled_fields: list[str] = None,
             kwargs["browser_address"] = cdp
         return await sk.run_task(**kwargs)
 
-    task = _run_async(run(), timeout=timeout + 30)
-    if task is None:
-        return {"status": "timed_out", "details": f"Skyvern fill_remaining did not complete within {timeout}s"}
-    return {
-        "status": getattr(task, "status", "unknown"),
-        "details": getattr(task, "failure_reason", "") or str(task)[:300],
-        "browser_session_id": getattr(task, "browser_session_id", None),
-        "run_id": getattr(task, "run_id", None),
-    }
+    if wait:
+        task = _run_async(run(), timeout=timeout + 30)
+        if task is None:
+            return {"status": "timed_out", "details": f"Skyvern fill_remaining did not complete within {timeout}s"}
+        return {
+            "status": getattr(task, "status", "unknown"),
+            "details": getattr(task, "failure_reason", "") or str(task)[:300],
+            "browser_session_id": getattr(task, "browser_session_id", None),
+            "run_id": getattr(task, "run_id", None),
+        }
+    else:
+        # Fire-and-forget: return run_id immediately for polling
+        task = _run_async(run(), timeout=timeout + 30)
+        run_id = getattr(task, "run_id", None) if task else None
+        return {
+            "status": "started",
+            "run_id": run_id,
+            "browser_session_id": getattr(task, "browser_session_id", None) if task else None,
+        }
 
 
 def verify_fields(url: str, answers: dict, browser_session_id: str = "",

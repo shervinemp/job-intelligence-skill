@@ -191,6 +191,25 @@ def _detect_submit_button(page) -> str | None:
     return None
 
 
+def _build_ans_dict(profile: dict, answers_override: dict = None) -> dict:
+    """Build the full answer dict from profile + --answers override.
+    Includes both static answers dict and ephemeral derivations."""
+    result = {}
+    if isinstance(profile, dict):
+        result.update(profile.get("answers", {}))
+    if answers_override:
+        result.update(answers_override)
+    # Ephemeral derivations (name, location, contact info)
+    for key in ("first_name", "last_name", "email", "phone", "full_name",
+                "city", "state", "country", "linkedin_url", "github_url",
+                "website", "headline"):
+        if key not in result:
+            val = profile.get(key) or profile.get(key.upper()) or profile.get(key.title())
+            if val:
+                result[key.replace("_", " ").title()] = val
+    return result
+
+
 def cmd_fill(jid, answers: dict = None, verify: bool = True):
     """Hybrid fill: Playwright-first, Skyvern-fallback, ask_api verify."""
     db_row = get_conn().execute(
@@ -210,98 +229,104 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True):
         emit_error("no external_url in state — run 'apply navigate <jid>' first")
         return 1
 
-    # Load profile + resolve answers
+    # Build the full answer dict
     profile = _load_profile()
-    if answers is None:
-        answers = {}
-    resolved = resolve(profile, answers, jid, url)
-    if not resolved or not resolved.answers:
+    ans_dict = _build_ans_dict(profile, answers)
+    if not ans_dict:
         emit_error("no answers resolved — check profile or --answers")
         return 1
-    ans_dict = resolved.answers
 
-    # Start Chrome + Playwright
+    # Phase 1: Playwright deterministic fill
     b, ctx = _chrome()
     page = _page_for(ctx)
+    filled_playwright = []
 
     try:
-        # Navigate to the form
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(2)
 
-        # Check for CAPTCHA
         if handle_captcha(page, state):
             emit_status("captcha", "CAPTCHA still present after timeout")
             return 1
 
-        # Read DOM fields
         page_info = read_page(page)
         fields = page_info.get("fields", [])
         field_count = page_info.get("fieldCount", 0)
 
         if field_count == 0:
-            print(f"  No fields detected via DOM — falling through to Skyvern", file=sys.stderr)
+            print(f"  No fields detected via DOM", file=sys.stderr)
 
-        # Phase 1: Playwright deterministic fill
         filled_playwright, failed_playwright = _fill_with_playwright(page, fields, ans_dict)
 
         if filled_playwright:
             print(f"  Playwright filled: {', '.join(filled_playwright)}", file=sys.stderr)
         if failed_playwright:
-            print(f"  Playwright failed: {', '.join(failed_playwright)}", file=sys.stderr)
+            print(f"  Playwright failed/unknown: {len(failed_playwright)} fields", file=sys.stderr)
 
-        # Phase 2: Skyvern fills remaining fields
-        skyvern_result = None
-        unfilled = [f.get("label", "") for f in fields if f.get("label", "") not in filled_playwright]
-        if failed_playwright or (field_count == 0 and ans_dict):
-            print(f"  Handing off to Skyvern for remaining fields...", file=sys.stderr)
-            skyvern_result = fill_remaining(
-                url=page.url,
-                answers=ans_dict,
-                filled_fields=filled_playwright,
-                timeout=300,
-            )
-            status = skyvern_result.get("status", "unknown")
-            print(f"  Skyvern fill_remaining: {status}", file=sys.stderr)
-            if skyvern_result.get("browser_session_id"):
-                state["browser_session_id"] = skyvern_result["browser_session_id"]
-            if skyvern_result.get("run_id"):
-                state["fill_run_id"] = skyvern_result["run_id"]
-
-        # Phase 3: ask_api vision verification (before submit)
+        # Phase 1.5: ask_api verification (fast, one image)
         if verify and filled_playwright:
-            print(f"  Verifying fields via vision...", file=sys.stderr)
-            verify_result = _verify_with_ask_api(page, ans_dict)
-            if not verify_result.get("ok"):
-                mismatches = verify_result.get("mismatches", [])
-                if mismatches:
-                    print(f"  Vision found mismatches: {[m['field'] for m in mismatches]}", file=sys.stderr)
-
-        # Save state
-        state["filled_count"] = len(filled_playwright) + (1 if skyvern_result and skyvern_result.get("status") == "completed" else 0)
-        state["failed_fields"] = failed_playwright
-        save_state(state)
-
-        if field_count == 0 and not skyvern_result:
-            emit_status("unknown", "no fields found — try --inspect or run directly")
-            return 1
-
-        emit_status(
-            "filled",
-            f"Playwright: {len(filled_playwright)}/{len(ans_dict)} fields"
-            + (f" + Skyvern" if skyvern_result else ""),
-        )
-        emit_next("submit")
-        return 0
+            try:
+                verify_result = _verify_with_ask_api(page, ans_dict)
+                if not verify_result.get("ok"):
+                    mm = verify_result.get("mismatches", [])
+                    if mm:
+                        print(f"  Vision flag: {len(mm)} field(s) may need review", file=sys.stderr)
+            except Exception as ve:
+                print(f"  Vision verify skipped: {ve}", file=sys.stderr)
 
     except Exception as e:
-        emit_error(f"fill failed: {e}")
+        emit_error(f"Playwright fill failed: {e}")
         return 1
     finally:
         try:
             b.close()
         except Exception:
             pass
+
+    # Phase 2: Skyvern fills remaining (non-blocking — returns run_id for polling)
+    skyvern_result = None
+    needs_skyvern = failed_playwright or field_count == 0
+    if needs_skyvern:
+        print(f"  Handing off remaining fields to Skyvern (non-blocking)...", file=sys.stderr)
+        from apply.common.skyvern_bridge import fill_remaining as _fill_remaining
+        try:
+            skyvern_result = _fill_remaining(
+                url=url,
+                answers=ans_dict,
+                filled_fields=filled_playwright,
+                wait=False,  # don't block — poll via run_id
+                timeout=30,  # just need the initial response
+            )
+            status = skyvern_result.get("status", "unknown")
+            print(f"  Skyvern: {status}", file=sys.stderr)
+            if skyvern_result.get("browser_session_id"):
+                state["browser_session_id"] = skyvern_result["browser_session_id"]
+            if skyvern_result.get("run_id"):
+                state["fill_run_id"] = skyvern_result["run_id"]
+                print(f"  Skyvern run_id: {state['fill_run_id']}", file=sys.stderr)
+                print(f"  Check status later via 'apply verify {jid}'", file=sys.stderr)
+        except Exception as se:
+            print(f"  Skyvern fill failed: {se}", file=sys.stderr)
+
+    # Save state
+    state["filled_count"] = len(filled_playwright)
+    state["failed_fields"] = list(failed_playwright) if failed_playwright else []
+    save_state(state)
+
+    if field_count == 0 and not skyvern_result:
+        emit_status("unknown", "no fields found by Playwright or Skyvern")
+        return 1
+
+    total_ok = len(filled_playwright)
+    if skyvern_result and skyvern_result.get("status") == "completed":
+        total_ok += 1
+
+    msg = f"Playwright: {len(filled_playwright)} fields"
+    if skyvern_result:
+        msg += f" + Skyvern: {skyvern_result.get('status', 'unknown')}"
+    emit_status("filled", msg)
+    emit_next("submit")
+    return 0
 
 
 def cmd_next(jid):

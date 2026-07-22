@@ -174,6 +174,10 @@ def start():
     # Try reusing pipeline's Chrome from a previous process
     if os.path.exists(CHROME_CONFIG):
         cfg_port = _read_port()
+        if is_running():
+            CDP_PORT = cfg_port
+            CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
+            return True
         if cfg_port != CDP_PORT:
             old_url = f"http://127.0.0.1:{cfg_port}"
             try:
@@ -212,10 +216,6 @@ _AGENT_INJECTED = False
 
 def connect(timeout=15):
     """Get a (browser, context) pair connected to a healthy dedicated Chrome.
-    Injects the window.__opencode agent script into the browser context so
-    every page has framework detection, unified value setting, MutationObserver
-    field discovery, and XHR/fetch interception.
-
     Reuses a previously-started pipeline Chrome (from config file), or starts a new one.
     Never connects to the user's personal Chrome."""
     global CDP_PORT, CDP_URL, _AGENT_INJECTED
@@ -234,16 +234,6 @@ def connect(timeout=15):
                 b = pw.chromium.connect_over_cdp(CDP_URL)
                 ctx = b.contexts[0]
                 _ = ctx.pages
-                # Inject the __opencode agent once per context (persists across
-                # pages and SPA navigations via add_init_script)
-                if not _AGENT_INJECTED:
-                    _agent_js = _load_agent()
-                    if _agent_js:
-                        try:
-                            ctx.add_init_script(_agent_js)
-                            _AGENT_INJECTED = True
-                        except Exception:
-                            pass
                 return b, ctx
             except Exception as e:
                 err = str(e)
