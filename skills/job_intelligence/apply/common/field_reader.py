@@ -1,0 +1,412 @@
+"""field_reader.py ΓÇö Canonical DOM field reader. Single JS block, configurable scope and widgets.
+
+Usage:
+    fields = read_fields(page)
+    fields = read_fields(page, scope="dialog")
+    fields = read_fields(page, custom_widgets={"dropdown": "button[aria-haspopup='listbox']"})
+"""
+import sys
+
+_READER_JS = """(config) => {
+    const scope = config.scope || 'document';
+    const customWidgets = config.custom_widgets || {};
+    const root = scope === 'dialog'
+        ? (document.querySelector('[role="dialog"], dialog') || document)
+        : document;
+    const inputSel = 'input:not([type=hidden]):not([type=submit]), select, textarea, [contenteditable="true"]';
+
+    // ΓöÇΓöÇ helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
+    function resolveLabel(el, scopeRoot) {
+        let label = '';
+        if (el.getAttribute('aria-labelledby')) {
+            const ref = document.getElementById(el.getAttribute('aria-labelledby'));
+            if (ref) label = ref.textContent.trim();
+        }
+        if (!label && el.getAttribute('aria-label')) label = el.getAttribute('aria-label');
+        // AOM: Chrome 121+ computed accessible name ΓÇö bypasses obfuscated classes
+        if (!label && el.computedName) {
+            const cn = el.computedName.trim();
+            if (cn && cn.length > 0 && cn.length < 100) label = cn;
+        }
+        if (!label) {
+            const lbl = scopeRoot.querySelector('label[for="' + el.id + '"]');
+            if (lbl) label = lbl.textContent.trim();
+        }
+        if (!label) {
+            const parentLabel = el.closest('label');
+            if (parentLabel) label = parentLabel.textContent.trim();
+        }
+        if (!label && el.placeholder) label = el.placeholder;
+        if (!label) {
+            const parent = el.closest('div,fieldset,section,li,form');
+            const plbl = parent ? parent.querySelector('label, legend, strong, span') : null;
+            if (plbl) label = plbl.textContent.trim();
+        }
+        if (!label) {
+            const td = el.closest('td');
+            if (td) {
+                const firstCell = td.parentElement ? td.parentElement.querySelector('td:first-child, th:first-child') : null;
+                if (firstCell && firstCell !== td) label = firstCell.textContent.trim();
+            }
+        }
+        return (label || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+    }
+
+    function resolveOptionLabel(el, scopeRoot, label) {
+        if (el.type !== 'radio') return '';
+        let o = '';
+        const td = el.closest('td');
+        if (td) {
+            const colIdx = Array.from(td.parentNode.children).indexOf(td);
+            const tbl = td.closest('table');
+            if (tbl) {
+                const hr = tbl.querySelector('thead tr, tbody tr:first-child');
+                if (hr && hr.children[colIdx]) o = hr.children[colIdx].textContent.trim();
+            }
+        } else if (el.id) {
+            const lblFor = scopeRoot.querySelector('label[for="' + el.id + '"]');
+            if (lblFor) o = lblFor.textContent.trim();
+        }
+        if (!o) { const pl = el.closest('label'); if (pl) o = pl.textContent.trim(); }
+        if (!o) {
+            const tn = el.nextSibling;
+            if (tn && tn.nodeType === 3) o = tn.textContent.trim();
+            else if (el.parentElement) {
+                const pt = el.parentElement.textContent.trim();
+                if (label && pt.includes(label)) o = pt.replace(label, '').replace(/^[-:,\\s]+/, '').trim();
+            }
+        }
+        if (!o) o = el.value || '';
+        return o.slice(0, 40);
+    }
+
+    var PLACEHOLDER_VALUES = ['select an option', 'select one', 'select...', 'no selection', '- select -', 'choose'];
+    function isEmptyValue(v) {
+        return !v || PLACEHOLDER_VALUES.indexOf(v.trim().toLowerCase()) >= 0;
+    }
+
+    function fieldFromElement(el, scopeRoot) {
+        const label = resolveLabel(el, scopeRoot);
+        const opts = el.tagName === 'SELECT'
+            ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0, 15)
+            : [];
+        const rawVal = el.value || '';
+        return {
+            tag: el.tagName, type: el.getAttribute('type') || '',
+            id: el.id, name: el.getAttribute('name') || '',
+            label: label, option_label: resolveOptionLabel(el, scopeRoot, label),
+            placeholder: el.placeholder || '',
+            data_automation_id: el.getAttribute('data-automation-id') || '',
+            role: el.getAttribute('role') || '',
+            required: !!el.required || el.getAttribute('aria-required') === 'true',
+            value: rawVal, isEmpty: isEmptyValue(rawVal),
+            checked: el.type === 'radio' ? el.checked : null,
+            multiple: el.tagName === 'SELECT' && el.multiple || false, options: opts,
+            datepicker: el.type === 'date' ? 'native'
+                : el.classList.contains('flatpickr-input') || (el.closest && el.closest('.flatpickr')) ? 'flatpickr' : '',
+        };
+    }
+
+    function isVisible(el) {
+        if (el.type === 'file') return true;
+        const s = window.getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden') return false;
+        if (s.position === 'absolute' && parseInt(s.left) < -100) return false;
+        if (s.clip === 'rect(0px, 0px, 0px, 0px)' || s.clip === 'rect(0,0,0,0)') return false;
+        return true;
+    }
+
+    function makeDropdown(btn, sr) {
+        const parentSelector = customWidgets.parent || '[data-automation-id], [role="dialog"], dialog, form, fieldset';
+        const parent = btn.closest(parentSelector);
+        if (!parent) return null;
+        const labelEl = parent.querySelector('label, legend, span');
+        const lbl = labelEl ? labelEl.textContent.trim().replace(/\\s+/g, ' ').slice(0, 80) : '';
+        return {
+            tag: 'DROPDOWN', type: 'custom', id: btn.id,
+            name: btn.getAttribute('name') || '',
+            label: lbl || btn.getAttribute('aria-label') || '',
+            placeholder: '', data_automation_id: btn.getAttribute('data-automation-id') || '',
+            role: btn.getAttribute('role') || '',
+            required: (lbl || '').includes('*'),
+            value: (btn.textContent || '').trim().slice(0, 30), checked: null, options: [],
+        };
+    }
+
+    function walkShadow(host, fields) {
+        try {
+            if (!host.shadowRoot) return;
+            const sr = host.shadowRoot;
+            sr.querySelectorAll(inputSel).forEach(el => { if (isVisible(el)) fields.push(fieldFromElement(el, sr)); });
+            if (customWidgets.dropdown) {
+                sr.querySelectorAll(customWidgets.dropdown).forEach(btn => { const d = makeDropdown(btn, sr); if (d) fields.push(d); });
+            }
+            // Recurse nested shadow roots (use :defined to avoid iterating every element)
+            sr.querySelectorAll(':defined').forEach(el => { if (el.shadowRoot) walkShadow(el, fields); });
+        } catch(e) { /* skip inaccessible shadow root */ }
+    }
+
+    // ΓöÇΓöÇ collect fields ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
+    const fields = [];
+
+    // Standard DOM
+    root.querySelectorAll(inputSel).forEach(el => { if (isVisible(el)) fields.push(fieldFromElement(el, root)); });
+
+    // Shadow DOM (recursive)
+    root.querySelectorAll(':defined').forEach(el => { if (el.shadowRoot) walkShadow(el, fields); });
+
+    // Custom dropdown widgets (standard DOM)
+    if (customWidgets.dropdown) {
+        root.querySelectorAll(customWidgets.dropdown).forEach(btn => { const d = makeDropdown(btn, root); if (d) fields.push(d); });
+    }
+
+    // ΓöÇΓöÇ Radio button grouping ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // Group radios by name attribute, extract parent question as label.
+    // Individual radio -> "Yes" is useless; we need "Are you willing to relocate? ΓåÆ [Yes, No]"
+    const radioGroups = {};
+    const radioNames = new Set();
+    fields.forEach(f => { if (f.type === 'radio' && f.name) radioNames.add(f.name); });
+    radioNames.forEach(name => {
+        const radios = fields.filter(f => f.type === 'radio' && f.name === name);
+        if (radios.length < 2) return;
+        // Find parent question label from DOM structure.
+        // Typical HTML: <div class="row"><div class="col-4"><label>Question?</label></div><div class="col-8"><input type="radio" name="..."></div></div>
+        const firstEl = root.querySelector(`input[name="${CSS.escape(name)}"]`);
+        let question = radios[0].label || '';
+        if (firstEl) {
+            // Step 1: look at the previous sibling's label (most common pattern)
+            const myContainer = firstEl.closest('div,fieldset,section,li');
+            if (myContainer) {
+                const prevSibling = myContainer.previousElementSibling;
+                if (prevSibling) {
+                    const prevLabel = prevSibling.querySelector('label, legend, strong, b, span, p');
+                    if (prevLabel) {
+                        const txt = (prevLabel.textContent || '').trim();
+                        if (txt.length > 3 && txt.length < 200) question = txt;
+                    }
+                    if (question === radios[0].label) {
+                        const txt = (prevSibling.textContent || '').trim();
+                        if (txt.length > 3 && txt.length < 200) question = txt;
+                    }
+                }
+            }
+            // Step 2: walk up two levels and check previous sibling
+            if (question === radios[0].label) {
+                const level2 = firstEl.closest('.row, .form-group, fieldset, section');
+                if (level2) {
+                    const prev2 = level2.previousElementSibling;
+                    if (prev2) {
+                        const prevLabel2 = prev2.querySelector('label, legend, strong, b, span, p');
+                        if (prevLabel2) {
+                            const txt = (prevLabel2.textContent || '').trim();
+                            if (txt.length > 3 && txt.length < 200) question = txt;
+                        }
+                    }
+                }
+            }
+            // Step 3: fall back to container's direct text
+            if (question === radios[0].label && myContainer) {
+                const allText = myContainer.textContent || '';
+                const beforeRadio = allText.split(radios[0].label)[0] || '';
+                const clean = beforeRadio.replace(/[:*]\\s*$/, '').trim();
+                if (clean.length > 3 && clean.length < 200) question = clean;
+            }
+        }
+        // Options are the radio's value attribute (Yes/No), NOT the resolved
+        // label which is the parent question text. The visible text next to
+        // the radio is in the parent <label>'s textContent minus the input.
+        const optionLabels = radios.map(r => {
+            const val = r.value || r.name || '';
+            const el = root.querySelector(`input[name="${CSS.escape(name)}"][value="${CSS.escape(val)}"]`);
+            if (el) {
+                const parentLabel = el.closest('label');
+                if (parentLabel) {
+                    // Get the label's text excluding the input element's HTML
+                    const txt = (parentLabel.textContent || '').trim();
+                    // Remove child element text (div/span contents) to get just the option text
+                    const childText = Array.from(parentLabel.querySelectorAll('div,span'))
+                        .map(c => (c.textContent || '').trim()).join(' ');
+                    const clean = txt.replace(childText, '').replace(/\\s+/g, ' ').trim();
+                    if (clean.length > 0 && clean.length < 20) return clean;
+                }
+                // Fallback: the label might just have simple text
+                const simple = (parentLabel ? parentLabel.textContent.trim() : val);
+                if (simple.length < 20) return simple;
+            }
+            return val || 'Yes';
+        });
+        const uniqueOpts = [...new Set(optionLabels)].filter(Boolean);
+        // Remove individual radio entries, add one grouped entry
+        radioGroups[name] = {
+            tag: 'RADIO_GROUP', name: name, id: firstEl ? firstEl.id || '' : '',
+            label: question || name,
+            type: 'radio', options: uniqueOpts.length >= 2 ? uniqueOpts : (radios.length >= 2 ? ['Yes', 'No'] : optionLabels),
+            required: radios.some(r => r.required),
+            selector: `input[name="${CSS.escape(name)}"]`,
+            value: radios.find(r => r.checked) ? radios.find(r => r.checked).label : '',
+            placeholder: '', data_automation_id: '', role: 'radiogroup',
+        };
+    });
+    // Replace individual radios with grouped entries
+    const finalFields = [];
+    const groupedNames = new Set(Object.keys(radioGroups));
+    fields.forEach(f => {
+        if (f.type === 'radio' && f.name && groupedNames.has(f.name)) {
+            if (!finalFields.find(ff => ff.name === f.name && ff.tag === 'RADIO_GROUP')) {
+                finalFields.push(radioGroups[f.name]);
+            }
+        } else {
+            finalFields.push(f);
+        }
+    });
+
+    // File inputs for hasFileInput flag (standard + shadow)
+    let fileCount = root.querySelectorAll('input[type="file"]').length;
+    root.querySelectorAll(':defined').forEach(el => { if (el.shadowRoot) fileCount += el.shadowRoot.querySelectorAll('input[type="file"]').length; });
+
+    // Buttons (standard DOM + shadow DOM)
+    const buttons = [];
+    function collectButtons(root) {
+        root.querySelectorAll('button, a.btn, [role="button"]').forEach(b => {
+            if (b.offsetParent !== null) buttons.push(b);
+        });
+    }
+    collectButtons(root);
+    root.querySelectorAll(':defined').forEach(el => { if (el.shadowRoot) collectButtons(el.shadowRoot); });
+    const buttonData = buttons.map(b => ({
+        text: (b.textContent || '').trim().slice(0, 30),
+        disabled: b.disabled || false,
+        type: 'button',
+    }));
+
+    const text = (document.body.innerText || '').toLowerCase();
+    const hasFormWords = text.includes('submit') || text.includes('apply') || text.includes('application');
+    const hasPassword = document.querySelector('input[type="password"]') !== null;
+    const isShort = (document.body.innerText || '').length < 500;
+
+    let pageType = 'unknown';
+    if (fields.length > 0) pageType = 'form';
+    else if (hasPassword && (text.includes('sign in') || text.includes('log in'))) pageType = 'login_wall';
+    else if (isShort && text.includes('sign in') && !text.includes('apply')) pageType = 'login_wall';
+    else if (hasFormWords) pageType = 'maybe_form';
+
+    return {
+        fieldCount: finalFields.length,
+        fields: finalFields.slice(0, 35),
+        pageType: pageType,
+        hasFileInput: fileCount > 0,
+        hasRequiredFile: root.querySelectorAll('input[type="file"][required]').length > 0,
+        buttons: buttonData,
+        url: location.href,
+    };
+}"""
+
+
+def read_fields(page, scope="document", custom_widgets=None):
+    """Read all form fields from a page. Returns dict with fieldCount, fields, buttons, etc.
+
+    Args:
+        page: Playwright page object
+        scope: 'document' for full page, 'dialog' for modal only
+        custom_widgets: dict of widget type ΓåÆ CSS selector from registry config
+
+    Returns structured dict on success or empty dict on failure (dead tab, cross-origin, detached element).
+    """
+    try:
+        return page.evaluate(_READER_JS, {
+            "scope": scope,
+            "custom_widgets": custom_widgets or {},
+        })
+    except Exception as e:
+        print(f"FIELD_READ_ERROR: read_fields failed ΓÇö {e}", file=sys.stderr)
+        return {"fieldCount": 0, "fields": [], "buttons": [], "pageType": "error", "hasFileInput": False,
+                "hasRequiredFile": False, "url": ""}
+
+
+_ERROR_SCAN_JS = """() => {
+    const roots = [document.querySelector('[role="dialog"], dialog') || document];
+
+    // Collect shadow roots for scanning
+    document.querySelectorAll(':defined').forEach(el => {
+        if (el.shadowRoot && !roots.includes(el.shadowRoot)) roots.push(el.shadowRoot);
+    });
+
+    const errors = [];
+
+    function scanRoot(root) {
+        // 1. aria-invalid elements
+        root.querySelectorAll('[aria-invalid="true"]').forEach(el => {
+            const tag = el.tagName;
+            const id = el.id || '';
+            let label = '';
+            if (el.getAttribute('aria-labelledby')) {
+                const ref = root.getElementById(el.getAttribute('aria-labelledby'));
+                if (ref) label = ref.textContent.trim();
+            }
+            if (!label && el.getAttribute('aria-label')) label = el.getAttribute('aria-label');
+            if (!label && id) {
+                const lbl = root.querySelector('label[for="' + id + '"]');
+                if (lbl) label = lbl.textContent.trim();
+            }
+            if (!label) {
+                const parent = el.closest('div,fieldset,section');
+                if (parent) {
+                    const lbl = parent.querySelector('label, legend, [class*="label"]');
+                    if (lbl) label = lbl.textContent.trim();
+                }
+            }
+            let errorText = '';
+            const errId = el.getAttribute('aria-errormessage');
+            if (errId) {
+                const errEl = root.getElementById(errId);
+                if (errEl) errorText = errEl.textContent.trim();
+            }
+            if (!errorText) {
+                const next = el.parentElement ? el.parentElement.querySelector('.error, [class*="error"], [class*="validation"], [class*="feedback"], [class*="hint"]') : null;
+                if (next) errorText = next.textContent.trim();
+            }
+            if (!errorText) {
+                const sibling = el.nextElementSibling;
+                if (sibling) errorText = sibling.textContent.trim();
+            }
+            errors.push({label: label.slice(0, 80) || tag || '?', error_text: errorText.slice(0, 120)});
+        });
+
+        // 2. Visible error banners/alerts
+        root.querySelectorAll('[role="alert"], .alert-error, .error-message, [class*="form-error"], [data-error]').forEach(el => {
+            const text = el.textContent.trim();
+            if (text && text.length > 5 && text.length < 300) {
+                const lower = text.toLowerCase();
+                if (lower.includes('upload') || lower.includes('loading') || lower.includes('saving')) return;
+                // Skip stale banners: if the mentioned field has aria-invalid="false", it's no longer an error
+                const m = text.match(/^["*]?\\s*(.+?)\\s+(is required|is invalid|must be|required)/i);
+                if (m) {
+                const fn = m[1].replace(/[*\\s]/g, '').toLowerCase();
+                const inp = Array.from(document.querySelectorAll('input, select, textarea')).find(el => {
+                    const al = (el.getAttribute('aria-label') || '').toLowerCase().replace(/[*\\s]/g, '');
+                        return al.includes(fn) || al === fn;
+                    });
+                    if (inp && inp.getAttribute('aria-invalid') === 'false') return;
+                }
+                errors.push({label: '(form)', error_text: text.slice(0, 120)});
+            }
+        });
+    }
+
+    roots.forEach(scanRoot);
+    return errors;
+}"""
+
+
+def scan_errors(page):
+    """Scan page for field-level validation errors.
+    Returns list of {label, error_text} dicts.
+    Pure addition ΓÇö no side effects, safe to call any time.
+    """
+    try:
+        return page.evaluate(_ERROR_SCAN_JS)
+    except Exception as e:
+        print(f"FIELD_READ_ERROR: scan_errors failed ΓÇö {e}", file=sys.stderr)
+        return []

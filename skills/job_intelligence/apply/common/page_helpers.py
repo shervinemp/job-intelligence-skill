@@ -1,39 +1,37 @@
-"""apply/common/page_helpers.py — Shared page reading, state persistence, page finding."""
+"""apply/common/page_helpers.py — Shared page reading, state persistence, page finding,
+Playwright-first field reading, and success signal detection.
+
+Merged from master (DOM reading, verification) + skyvern-migration (state, CDP Chrome)."""
 import json, os, random, sys, time
 import webbrowser
 
 from lib.config import STATE_PATH
 
-# Aggregator domains — always trusted, no learning needed
 _SKIP_DOMAINS = {"linkedin.com", "linkedin.com/jobs", "indeed.com",
                  "ca.indeed.com", "indeed.ca", "glassdoor.com",
                  "monster.com", "ziprecruiter.com", "simplyhired.com"}
 
 
 def is_aggregator(domain):
-    """Check if a domain is a job aggregator (not an ATS to learn from)."""
     for skip in _SKIP_DOMAINS:
         if skip in domain:
             return True
     return False
 
 
-_PAGE_JID_MAP = {}  # page object id -> jid mapping (in-memory cache, not persistent)
+_PAGE_JID_MAP = {}
 _DOM_ATTR = "data-opencode-jid"
 
 
 def tag_page(page, jid):
-    """Persistently tag a page with a JID via DOM attribute (survives process restarts)."""
     try:
         page.evaluate(f"document.documentElement.setAttribute('{_DOM_ATTR}', {json.dumps(jid)})")
     except Exception:
         pass
-    _PAGE_JID_MAP[id(page)] = jid  # cache for current process
+    _PAGE_JID_MAP[id(page)] = jid
 
 
 def mark_applied(jid):
-    """Single writer for "this job is applied": DB stage + timestamps, crash-recovery
-    state cleanup, and mapping promotion. Every success path must go through here."""
     from lib.db import get_conn
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
     get_conn().execute(
@@ -45,18 +43,16 @@ def mark_applied(jid):
         _as_clear(jid)
     except Exception:
         pass
-    # Promote corrected-then-passed mappings (no-op unless policy.use_mappings).
     try:
         from apply.common import mappings
         n = mappings.promote(jid)
         if n:
             print(f"  MAPPINGS: promoted {n} confirmed mapping(s)", file=sys.stderr)
-    except Exception as e:
-        print(f"  MAPPINGS_SKIP: {e}", file=sys.stderr)
+    except Exception:
+        pass
 
 
 def check_applied_signal(page):
-    """Check page for successful application signals. Returns True if applied."""
     from apply.common.signals import has_success_text
     try:
         body = page.evaluate("() => document.body.innerText") or ""
@@ -79,20 +75,13 @@ def check_applied_signal(page):
 
 
 def read_page_tag(page):
-    """Read persistent JID tag from DOM."""
     try:
         return page.evaluate(f"document.documentElement.getAttribute('{_DOM_ATTR}') or ''")
     except Exception:
         return ""
 
-_CAPTCHA_SIGNALS = [
-    "challenge-platform", "cf-browser-verification",
-    "challenge-running", "challenge-stage",
-]
-
 
 def page_text(page):
-    """Return page text including content from shadow roots."""
     return page.evaluate("""() => {
         let t = document.body.innerText || '';
         document.querySelectorAll(':defined').forEach(el => {
@@ -103,9 +92,7 @@ def page_text(page):
 
 
 def page_html(page):
-    """Return page HTML including declarative shadow DOM."""
     return page.evaluate("""() => {
-        // Recursive serialization that captures shadow DOM
         function serialize(node) {
             if (node.nodeType === Node.TEXT_NODE) return node.textContent.replace(/[\\x00-\\x08\\x0B\\x0E-\\x1F]/g, '');
             if (node.nodeType !== Node.ELEMENT_NODE) return '';
@@ -129,18 +116,13 @@ def page_html(page):
 
 
 def check_captcha(page):
-    """Check if the current page has a CAPTCHA challenge. Returns True if detected.
-    Only flags CAPTCHA if the challenge is visible (has a visible iframe or widget),
-    not just because a keyword appears in a script tag."""
     try:
-        # Check for visible challenge widget first — most reliable
         has_widget = page.evaluate("""() => {
             const sel = 'iframe[src*="challenge"], [class*="cf-browser"], [id*="challenge"], [class*="challenge"], [class*="turnstile"]';
             return !!document.querySelector(sel);
         }""")
         if has_widget:
             return True
-        # Fallback: check body text for CAPTCHA keywords
         text = page_text(page).lower()
         for kw in ["verify you are human", "security check", "i'm not a robot", "complete the security check"]:
             if kw in text:
@@ -151,9 +133,6 @@ def check_captcha(page):
 
 
 def handle_captcha(page, state, wait_s=300, poll_s=3):
-    """If CAPTCHA detected, notify the user and poll until it is solved in the
-    browser (no keyboard interaction needed) or the timeout elapses.
-    Returns False when solved (caller proceeds), True when still blocked."""
     if not check_captcha(page):
         return False
     url = page.url[:120]
@@ -181,9 +160,6 @@ def handle_captcha(page, state, wait_s=300, poll_s=3):
 
 
 def handle_session_timeout(page):
-    """Dismiss session timeout dialogs.
-    Checks page title for timeout signals, then looks for the dismissal
-    button. Only returns True if the button was actually clicked."""
     title = page.evaluate("document.title") or ""
     has_signal = "session" in title.lower() and ("time out" in title.lower() or "timeout" in title.lower())
     if not has_signal:
@@ -210,6 +186,7 @@ def load_state():
     except (json.JSONDecodeError, OSError, FileNotFoundError):
         return {}
 
+
 def save_state(state):
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
     tmp = STATE_PATH + ".tmp"
@@ -217,14 +194,8 @@ def save_state(state):
         json.dump(state, f, indent=2)
     os.replace(tmp, STATE_PATH)
 
-def read_page(p, custom_widgets=None):
-    """Read page content including fields, buttons, page type hints.
-    Tries document scope first, falls back to dialog scope if no fields found.
-    If still no fields found, probes same-origin iframes for embedded forms.
 
-    If custom_widgets is not provided, auto-resolves from the page URL via
-    platform registry — works for Ashby, Workday, and other ATS without
-    callers needing to know about widget configs."""
+def read_page(p, custom_widgets=None):
     from apply.common.field_reader import read_fields as _rf
     from apply.common.inspector import probe_iframes
     if custom_widgets is None:
@@ -239,8 +210,6 @@ def read_page(p, custom_widgets=None):
                 custom_widgets = cw
         except Exception:
             pass
-    # If a dialog/modal is open, prefer dialog scope over document — document
-    # includes site chrome (nav, search, sidebar) that drowns out real fields.
     has_dialog = p.evaluate("() => !!document.querySelector('[role=dialog], dialog, [data-test-form-builder]')")
     if has_dialog:
         result = _rf(p, scope="dialog", custom_widgets=custom_widgets)
@@ -249,10 +218,6 @@ def read_page(p, custom_widgets=None):
         result = _rf(p, scope="document", custom_widgets=custom_widgets)
     if result["fieldCount"] == 0:
         result = _rf(p, scope="dialog", custom_widgets=custom_widgets)
-    # Iframe fallback: some ATS embed forms in same-origin iframes.
-    # Only merge if the iframe has MORE fields than the parent DOM — this prevents
-    # sidebar widgets or analytics iframes from polluting the field list.
-    # probe_iframes only accesses same-origin iframes; cross-origin ones are skipped.
     has_iframes = p.evaluate("() => !!document.querySelector('iframe')")
     if has_iframes:
         ifr = probe_iframes(p)
@@ -265,20 +230,16 @@ def read_page(p, custom_widgets=None):
             result["fieldCount"] = len(result["fields"])
     return result
 
+
 def find_page(ctx, state):
-    """Find the best matching page by JID mapping (DOM tag + cache), then URL score."""
     jid = state.get("jid", "")
     ext = state.get("external_url", "").rstrip("/")
-
-    # First pass: find by JID tag (DOM attribute survives process restarts)
     for p in ctx.pages:
         if read_page_tag(p) == jid:
             return p
     for p in ctx.pages:
         if _PAGE_JID_MAP.get(id(p)) == jid:
             return p
-
-    # Second pass: score by URL match quality
     if ext:
         best_score = -1
         best_page = None
@@ -296,8 +257,6 @@ def find_page(ctx, state):
                 best_page = p
         if best_page:
             return best_page
-
-    # Third pass: LinkedIn job ID match
     li_job_id = None
     if "linkedin.com/jobs/view" in ext:
         try:
@@ -308,42 +267,20 @@ def find_page(ctx, state):
         for p in ctx.pages:
             if li_job_id in p.url:
                 return p
-
     return None
 
 
 def read_and_save(p, state):
-    """Read page state, save to state file, return page dict."""
     ps = read_page(p)
     state["page"] = ps
     save_state(state)
     return ps
 
-def retry_with_backoff(fn, max_retries=2, base_delay=2, is_rate_limit=None):
-    """Retry fn on rate-limit/transient failure with exponential backoff + jitter."""
-    for attempt in range(max_retries + 1):
-        try:
-            result = fn()
-            if is_rate_limit and is_rate_limit(result):
-                if attempt < max_retries:
-                    delay = base_delay * (2 ** attempt) + random.random()
-                    print(f"  Rate limited, retrying in {delay:.1f}s...", file=sys.stderr)
-                    time.sleep(delay)
-                    continue
-            return result
-        except Exception:
-            if attempt < max_retries:
-                delay = base_delay * (2 ** attempt) + random.random()
-                time.sleep(delay)
-                continue
-            raise
-
 
 DEFAULT_EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse", "clear", "reset", "start over"}
 
+
 def scan_actions(page, keywords, exclude=None):
-    """Score all clickable elements (buttons + links) against keyword list.
-    Returns sorted list of candidates with scores."""
     exclude = exclude or DEFAULT_EXCLUDED_BUTTONS
     result = page.evaluate("""((args) => {
         const kws = args[0], excl = new Set(args[1].map(e => e.toLowerCase()));
@@ -355,8 +292,7 @@ def scan_actions(page, keywords, exclude=None):
             const text = (el.textContent || '').trim().toLowerCase();
             if (excl.has(text)) continue;
             const rawHref = (el.href || '').replace(/\\/$/, '');
-            const href = rawHref.toLowerCase();  // for scoring/comparison only
-            // Skip self-referencing links
+            const href = rawHref.toLowerCase();
             if (el.tagName === 'A' && href === currentUrl) continue;
             let score = 0;
             for (const kw of kws) {
@@ -368,7 +304,7 @@ def scan_actions(page, keywords, exclude=None):
             if (score > 0) {
                 candidates.push({
                     text: text.slice(0, 30), score: score, tag: el.tagName,
-                    href: rawHref,  // original case — hrefs get navigated to
+                    href: rawHref,
                     disabled: el.disabled || false
                 });
             }

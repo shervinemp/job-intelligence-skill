@@ -324,3 +324,234 @@ def close_session(browser_session_id: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def fill_remaining(url: str, answers: dict, filled_fields: list[str] = None,
+                   browser_session_id: str = "", timeout: int = 300) -> dict:
+    """Fill only fields that weren't already filled by Playwright.
+    Skyvern navigates to the URL (relying on ATS server-side persistence),
+    sees the already-filled fields, and fills only the remaining ones.
+
+    filled_fields: list of field labels already filled by Playwright.
+    """
+    skip = filled_fields or []
+    skip_hint = ""
+    if skip:
+        skip_hint = f"\n\nThe following fields are ALREADY filled — do NOT modify them: {', '.join(skip)}"
+
+    prompt = (
+        f"You are filling a job application form at {url}."
+        f"{skip_hint}"
+        f"\n\nValues to use for remaining fields:"
+        f"{_fmt_answers(answers)}"
+        f"\n\nInstructions:"
+        f"\n1. Fill ONLY fields that are currently empty or not listed as already-filled."
+        f"\n2. For dropdowns/comboboxes, click to open and select the matching option."
+        f"\n3. If no matching option exists, type the value directly."
+        f"\n4. Check required consent/checkbox fields."
+        f"\n5. If there is a Next/Continue button, click it and fill the next page too."
+        f"\n6. STOP before clicking Submit Application or Submit."
+    )
+
+    sk = _client()
+    cdp = _chrome_cdp_url()
+
+    async def run():
+        kwargs = dict(prompt=prompt, url=url, max_steps=30,
+                      wait_for_completion=True, timeout=timeout * 1000,
+                      model={"max_tokens": 4096},
+                      proxy_location="NONE")
+        if browser_session_id:
+            kwargs["browser_session_id"] = browser_session_id
+        if cdp:
+            kwargs["browser_address"] = cdp
+        return await sk.run_task(**kwargs)
+
+    task = _run_async(run(), timeout=timeout + 30)
+    if task is None:
+        return {"status": "timed_out", "details": f"Skyvern fill_remaining did not complete within {timeout}s"}
+    return {
+        "status": getattr(task, "status", "unknown"),
+        "details": getattr(task, "failure_reason", "") or str(task)[:300],
+        "browser_session_id": getattr(task, "browser_session_id", None),
+        "run_id": getattr(task, "run_id", None),
+    }
+
+
+def verify_fields(url: str, answers: dict, browser_session_id: str = "",
+                  timeout: int = 120) -> dict:
+    """Use Skyvern's data extraction to read back field values and compare
+    against expected answers. Returns field-level match results."""
+    schema = {
+        "type": "object",
+        "properties": {k: {"type": "string"} for k in answers},
+    }
+    prompt = (
+        f"Read every visible form field on this page and return its current value."
+        f"\n\nExpected fields (return empty string if a field is not visible or empty):"
+        f"\n{_fmt_answers(answers)}"
+    )
+
+    sk = _client()
+    cdp = _chrome_cdp_url()
+
+    async def run():
+        kwargs = dict(prompt=prompt, url=url, max_steps=10,
+                      wait_for_completion=True, timeout=timeout * 1000,
+                      data_extraction_schema=schema,
+                      model={"max_tokens": 4096},
+                      proxy_location="NONE")
+        if browser_session_id:
+            kwargs["browser_session_id"] = browser_session_id
+        if cdp:
+            kwargs["browser_address"] = cdp
+        return await sk.run_task(**kwargs)
+
+    task = _run_async(run(), timeout=timeout + 30)
+    if task is None:
+        return {"status": "timed_out"}
+    extracted = getattr(task, "extracted_information", {}) or {}
+    if isinstance(extracted, dict):
+        mismatches = {}
+        for field, expected in answers.items():
+            actual = extracted.get(field, "")
+            if str(actual).strip().lower() != str(expected).strip().lower():
+                mismatches[field] = {"expected": expected, "actual": actual}
+        return {
+            "status": getattr(task, "status", "unknown"),
+            "extracted": extracted,
+            "mismatches": mismatches,
+            "all_match": len(mismatches) == 0,
+            "run_id": getattr(task, "run_id", None),
+        }
+    return {
+        "status": getattr(task, "status", "unknown"),
+        "extracted": extracted,
+        "all_match": False,
+        "run_id": getattr(task, "run_id", None),
+    }
+
+
+def click_submit(url: str, browser_session_id: str = "", timeout: int = 120) -> dict:
+    """Use Skyvern to click the submit button on a form.
+    Reuses an existing browser session if provided."""
+    prompt = (
+        f"Click the Submit Application or Submit button on this job application form. "
+        f"If there is a Review step before Submit, click Review first, then Submit. "
+        f"Complete the submission process. Do NOT fill any new fields."
+    )
+    return _run_submit_action(url, prompt, browser_session_id, timeout)
+
+
+def click_next(url: str, browser_session_id: str = "", timeout: int = 120) -> dict:
+    """Use Skyvern to click Next/Continue on a multi-page form."""
+    prompt = (
+        f"Click the Next or Continue button on this job application form "
+        f"to proceed to the next page. Do NOT fill any fields."
+    )
+    return _run_submit_action(url, prompt, browser_session_id, timeout)
+
+
+def _run_submit_action(url: str, prompt: str, browser_session_id: str = "",
+                        timeout: int = 120) -> dict:
+    sk = _client()
+    cdp = _chrome_cdp_url()
+    async def run():
+        kwargs = dict(prompt=prompt, url=url, max_steps=15,
+                      wait_for_completion=True, timeout=timeout * 1000,
+                      model={"max_tokens": 4096},
+                      proxy_location="NONE")
+        if browser_session_id:
+            kwargs["browser_session_id"] = browser_session_id
+        if cdp:
+            kwargs["browser_address"] = cdp
+        return await sk.run_task(**kwargs)
+    task = _run_async(run(), timeout=timeout + 30)
+    if task is None:
+        return {"status": "timed_out"}
+    return {
+        "status": getattr(task, "status", "unknown"),
+        "details": getattr(task, "failure_reason", "") or str(task)[:300],
+        "run_id": getattr(task, "run_id", None),
+    }
+
+
+class SkyvernExtraction:
+    """Simple text extraction from the current page using Skyvern.
+    Used for verification and investigation — no form filling."""
+
+    def extract_text(self, url: str, prompt: str, timeout: int = 120) -> dict | None:
+        sk = _client()
+        cdp = _chrome_cdp_url()
+        async def run():
+            kwargs = dict(prompt=prompt, url=url, max_steps=5,
+                          wait_for_completion=True, timeout=timeout * 1000,
+                          model={"max_tokens": 4096},
+                          proxy_location="NONE")
+            if cdp:
+                kwargs["browser_address"] = cdp
+            return await sk.run_task(**kwargs)
+        task = _run_async(run(), timeout=timeout + 30)
+        if task is None:
+            return None
+        return {
+            "status": getattr(task, "status", "unknown"),
+            "extracted_text": str(getattr(task, "extracted_information", "") or ""),
+            "details": getattr(task, "failure_reason", "") or str(task)[:300],
+        }
+
+    def investigate_form(self, url: str, timeout: int = 180) -> dict | None:
+        """Analyze a job application form and return structured field info.
+        Used for the 'investigator mode' — understanding unknown platforms."""
+        prompt = (
+            f"Analyze this job application form. List every visible form field "
+            f"with its label, type (text/select/combobox/checkbox/file/datepicker), "
+            f"whether it's required, and any dropdown options. "
+            f"Also identify: is this a multi-page form? What buttons exist (Next, Submit, etc.)?"
+        )
+        schema = {
+            "type": "object",
+            "properties": {
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "type": {"type": "string"},
+                            "required": {"type": "boolean"},
+                            "options": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+                "multi_page": {"type": "boolean"},
+                "buttons": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+        }
+        sk = _client()
+        cdp = _chrome_cdp_url()
+        async def run():
+            kwargs = dict(
+                prompt=prompt, url=url, max_steps=10,
+                wait_for_completion=True, timeout=timeout * 1000,
+                data_extraction_schema=schema,
+                model={"max_tokens": 4096},
+                proxy_location="NONE",
+            )
+            if cdp:
+                kwargs["browser_address"] = cdp
+            return await sk.run_task(**kwargs)
+        task = _run_async(run(), timeout=timeout + 30)
+        if task is None:
+            return None
+        return {
+            "status": getattr(task, "status", "unknown"),
+            "fields": getattr(task, "extracted_information", {}),
+            "run_id": getattr(task, "run_id", None),
+        }
