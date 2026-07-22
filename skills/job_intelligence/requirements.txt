@@ -1,5 +1,2 @@
 playwright>=1.40
 pyyaml>=6.0
-fpdf2>=2.7
-Pillow>=10.0
-jsonschema>=4.0

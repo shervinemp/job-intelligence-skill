@@ -35,14 +35,7 @@ _DEFAULT_STYLE = {
 
 
 def _s(text):
-    # fpdf2 core fonts are latin-1 only. Map the common typographic chars to ASCII,
-    # then drop anything still outside latin-1 so the build can't crash on an
-    # unexpected glyph (bullet, emoji, accented name from a pasted JD, etc.).
-    text = (text.replace("\u2014", "-").replace("\u2013", "-")
-                .replace("\u2019", "'").replace("\u2018", "'")
-                .replace("\u201c", '"').replace("\u201d", '"')
-                .replace("\u2022", "-").replace("\u2026", "..."))
-    return text.encode("latin-1", "replace").decode("latin-1")
+    return text.replace("\u2014", "-").replace("\u2013", "-").replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
 
 
 class _ResumePDF(FPDF):

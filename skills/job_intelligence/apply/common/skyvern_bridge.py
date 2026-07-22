@@ -114,12 +114,9 @@ def _ensure_server():
     atexit.register(lambda: _kill_server())
     # Wait for startup
     for _ in range(30):
-        try:
-            req = urllib.request.Request("http://localhost:8000/v1/run/tasks", method="GET")
-            urllib.request.urlopen(req, timeout=2)
+        if _server_alive():
             return
-        except Exception:
-            time.sleep(1)
+        time.sleep(1)
     print("WARN: Skyvern server may not have started (port 8000 not responding after 30s)",
           file=sys.stderr)
 
@@ -187,11 +184,20 @@ def _find_chrome() -> str:
 
 
 def _start_chrome() -> str:
-    """Start Chrome with CDP, reuse if already running. Returns CDP URL."""
+    """Start Chrome with CDP using the configured profile. Returns CDP URL."""
     global _CHROME_PROC
+    # Kill any existing process on port 9222 so we start fresh with the right profile
     try:
         urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:9222/json/version"), timeout=2)
-        return "http://127.0.0.1:9222"
+        import subprocess as _sp
+        import socket as _sk
+        r = _sp.run(["netstat", "-ano", "|", "findstr", ":9222"], capture_output=True, text=True, shell=True, timeout=5)
+        for line in r.stdout.splitlines():
+            if "LISTENING" in line:
+                pid = line.strip().rsplit(" ", 1)[-1]
+                if pid.isdigit():
+                    _sp.run(["taskkill", "/f", "/pid", pid], capture_output=True, timeout=5)
+        time.sleep(2)
     except Exception:
         pass
     chrome_path = _find_chrome()
@@ -251,8 +257,6 @@ def fill_form(url: str, answers: dict, jid: str = "", timeout: int = 300) -> dic
         if cdp:
             kwargs["browser_address"] = cdp
         return await sk.run_task(**kwargs)
-
-    return _run_and_extract(run, timeout, sk)
 
     task = _run_async(run(), timeout=timeout + 30)
     if task is None:

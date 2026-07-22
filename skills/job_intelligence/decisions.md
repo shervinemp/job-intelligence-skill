@@ -14,55 +14,47 @@ Judge by profession and legal fit. Reject true non-fits. Don't reject for prefer
 
 **Don't self-reject.** Screening questions are meant to cull you. Answer to pass through, let company reject post-resume.
 
-Exception: legal blocks (e.g., Quebec on-site, security clearance). Not preference filters, not skill doubt — they decide.
+Only exception: legal blocks (e.g., Quebec on-site). Not "I prefer remote," not "I only have 4 years not 5" — they decide.
 
-Answer sourcing hierarchy:
-1. `--answers` JSON (explicit operator overrides)
-2. `common_answers` (reused values per key, e.g. EEO)
-3. `profile.json` (canonical data: years per skill group, authorization, availability, location)
-4. Resume inference (extrapolate from CV content)
+## Relocation
 
-**Investigate before skipping.** Optional unfilled fields should be deduced from available context (job source, resume, prior answers, vision) before giving up. Do not guess from word-similarity alone.
+| Q | A | Why |
+|---|----|-----|
+| Relocate Canada-wide? | Yes | This market — anywhere |
+| Relocate US? | Yes + visa | Need sponsorship but willing |
+ | Quebec / Montreal on-site/hybrid | No | Legal block — skip |
+ | Quebec / Montreal remote | Yes | Not physically in Quebec |
+| Remote vs hybrid vs on-site | Remote > hybrid > on-site | Preference, but all fine for Ontario |
 
-### Relocation strategy
+## Sponsorship
 
-| Q | Strategy | Why |
-|---|----------|-----|
-| Relocate Canada-wide? | Yes | Broad market — say yes |
-| Relocate US? | Yes + visa | Willing to sponsor, let them decide |
-| Quebec / Montreal on-site/hybrid | No | Legal block — skip |
-| Quebec / Montreal remote | Yes | Not physically there, no legal issue |
-| Remote vs hybrid vs on-site | Prefer remote, accept hybrid, flexible on Ontario on-site | Preference — answer per job to pass |
+| Q | A | Why |
+|---|----|-----|
+| Authorized Canada? | Yes | Current status valid |
+| Need Canada sponsorship? | Yes | Future need |
+| Need US sponsorship? | Yes | Future need |
 
-### Sponsorship (profile-sourced)
+## Experience
 
-| Q | Source | Strategy |
-|---|--------|----------|
-| Authorized to work in Canada? | profile | Truthful |
-| Need Canada sponsorship? | profile | Truthful |
-| Need US sponsorship? | profile | Truthful |
+Don't lie. But estimate generously from total years (5).
 
-### Experience (profile-sourced)
+| Q | A | Why |
+|---|----|-----|
+| Years core skill (Python/backend/web)? | 5 | Core skillset, matches total |
+| Years adjacent (AWS, Docker, CI/CD)? | 2-4 | Touched these, round up |
+| Specific framework unfamiliar? | No | Don't volunteer gaps |
+| "Done X specific task?" | Yes if adjacent | Generalize from similar work |
+| Previously employed by [Company]? | No | Always No — never worked for any |
 
-Don't lie. Estimate generously from total years in profile.
+## Logistics
 
-| Q | Source | Strategy |
-|---|--------|----------|
-| Years in core skill (e.g. Python, backend, web) | profile | Core skillset, round up |
-| Years in adjacent tech (AWS, Docker, CI/CD) | profile | Touched these, round up |
-| Specific framework unfamiliar? | — | Don't volunteer gaps. Answer "No" unless asked directly |
-| "Done X specific task?" | resume | Yes if adjacent. Generalize from similar work |
-| Previously employed by [Company]? | profile | Truthful |
+| Q | A | Why |
+|---|----|-----|
+| Available start? | Immediately / 2 weeks | Current job abusive, can leave fast |
+| OT / weekends? | Yes | Market conditions |
+| Criminal record? | No | Truthful |
 
-### Logistics (profile-sourced)
-
-| Q | Source | Strategy |
-|---|--------|----------|
-| Available start date? | profile | Truthful |
-| OT / weekends? | — | Yes — market conditions |
-| Criminal record? | profile | Truthful |
-
-### Location rules
+## Location admission
 
 | Location | Decision |
 |----------|----------|
@@ -73,3 +65,10 @@ Don't lie. Estimate generously from total years in profile.
 | Quebec / Montreal remote | Yes — not physically in Quebec |
 | US on-site only | No |
 | Unclear | Fetch description first, then decide |
+
+## How to decide
+
+1. **Non-fit?** (wrong profession, legal block) → Reject job
+2. **Preference filter?** (relo, commute, hours) → Answer to pass
+3. **Skill check?** → Estimate generously from total years
+4. **Specific past event?** → Truthful unless trivial

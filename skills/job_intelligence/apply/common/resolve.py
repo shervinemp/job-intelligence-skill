@@ -135,6 +135,16 @@ def resolve(
         if len(_key_words) >= 2 and _key_words.issubset(_norm_words):
             return Resolution(val, key, label, "ephemeral")
 
+    # Step 3b: suffix-stripped match — profile keys like linkedin_url / github_url
+    # end in _url, _path, _handle. The entity name (linkedin, github) appears in
+    # the field label ("LinkedIn Profile", "Github"). Strip suffix, check name match.
+    for key, (val, _source) in ephemeral.items():
+        for suffix in ("_url", "_path", "_handle", "_email", "_phone"):
+            if key.endswith(suffix):
+                name = key[:-len(suffix)]
+                if name in _norm_words:
+                    return Resolution(val, key, label, "ephemeral")
+
     return Resolution(None, None, label, "no_match")
 
 
