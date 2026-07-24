@@ -45,3 +45,15 @@ PROFILE_PATH = str(Path(__file__).resolve().parent.parent / "profile.json")
 REGISTRY_PATH = os.path.join(STATE_DIR, "page_registry.json")
 AUTH_WALLS_PATH = os.path.join(STATE_DIR, "needs_auth.json")
 CHROME_CONFIG = os.path.join(JI_HOME, "chrome-config.json")
+
+
+def atomic_write_json(path, obj, indent=2):
+    """Write JSON atomically (tmp + rename). Replaces 5 duplicated patterns."""
+    import json
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=indent)
+    os.replace(tmp, path)

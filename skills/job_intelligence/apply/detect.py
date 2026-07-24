@@ -23,15 +23,15 @@ def _classify(url: str, ext_url: str = "") -> tuple[str, str]:
     eul = (ext_url or "").lower()
     # LinkedIn job that has an external ATS URL = external redirect
     if "linkedin.com/jobs" in ul and eul:
-        return "external", eul
+        return "external", ext_url
     # LinkedIn with no external URL = Easy Apply modal
     if "linkedin.com/jobs" in ul and not eul:
         return "easy_apply", ""
     # Direct ATS URL
     if any(d in ul for d in ["greenhouse.io", "lever.co", "myworkdayjobs.com",
                               "ashbyhq.com", "icims.com", "jobvite.com"]):
-        return "ats_direct", ul
-    return "external", ul  # assume external if we have a URL
+        return "ats_direct", url
+    return "external", url  # assume external if we have a URL
 
 
 def run(jid):
@@ -45,6 +45,7 @@ def run(jid):
         sys.exit(1)
 
     url, title, company, stage, job_state = row["url"], row["title"], row["company"], row["stage"], row["state"]
+    ext_url = row["external_url"] or ""
     if job_state != "active":
         emit_error(f"job is in state '{job_state}', not active")
         sys.exit(1)
@@ -66,11 +67,13 @@ def run(jid):
         emit_type("ats_direct", emit_line)
         if plat_name:
             print(f"PLATFORM: {plat_name}", file=sys.stderr)
+            reg.emit_notes()
         emit_next("act --fill")
     elif job_type == "external":
         emit_type("external", emit_line)
         if plat_name:
             print(f"PLATFORM: {plat_name}", file=sys.stderr)
+            reg.emit_notes()
         emit_next("navigate")
     elif job_type == "easy_apply":
         emit_type("easy_apply")
@@ -84,7 +87,5 @@ def run(jid):
              "title": title or "", "company": company or ""}
     if plat_name:
         state["platform"] = plat_name
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    with open(STATE_PATH + ".tmp", "w") as f:
-        json.dump(state, f, indent=2)
-    os.replace(STATE_PATH + ".tmp", STATE_PATH)
+    from lib.config import atomic_write_json, STATE_PATH as _SP
+    atomic_write_json(_SP, state)

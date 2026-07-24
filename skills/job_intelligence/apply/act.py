@@ -21,9 +21,9 @@ from apply.common.output import emit_next, emit_status, emit_error
 from apply.common.page_helpers import (
     load_state, save_state, read_page, page_text, find_page,
     tag_page, check_applied_signal, check_captcha, handle_captcha,
-    scan_actions, mark_applied,
+    scan_actions, mark_applied, handle_session_timeout,
 )
-from apply.common.resolve import resolve
+from apply.common.resolve import resolve, learn_mapping
 from apply.common.signals import has_success_text
 
 RESULTS_DIR = os.path.join(JI_HOME, "results")
@@ -46,29 +46,329 @@ def _chrome():
     if not ctx:
         emit_error("could not connect to Chrome")
         sys.exit(1)
+    # ATSes gate submit behind window.confirm()/alert(). Auto-accept so the
+    # pipeline never hangs silently on a modal it can't see (CDP can't focus
+    # native dialogs). Mirrors Jobright's main-world alert suppressor.
+    try:
+        ctx.on("page", lambda pg: _wire_dialogs(pg))
+    except Exception:
+        pass
+    for pg in ctx.pages:
+        _wire_dialogs(pg)
     return b, ctx
 
 
-def _playwright():
-    from playwright.sync_api import sync_playwright
-    from lib.chrome_manager import CDP_URL
-    pw = sync_playwright().start()
-    b = pw.chromium.connect_over_cdp(CDP_URL)
-    ctx = b.contexts[0]
-    return pw, b, ctx
+def _wire_dialogs(page):
+    try:
+        page.on("dialog", lambda d: d.accept() if not d.type else
+                d.accept() if d.type == "confirm" else d.dismiss())
+    except Exception:
+        pass
 
 
-def _page_for(ctx):
-    """Find or create a page on the form URL in the Playwright context."""
+def _page_for(ctx, state=None):
+    """Find the page showing this job's form. Prefers an exact match via
+    find_page (jid tag / external_url) over the last non-blank tab."""
+    if state:
+        try:
+            p = find_page(ctx, state)
+            if p is not None:
+                return p
+        except Exception:
+            pass
     pages = [p for p in ctx.pages if "about:blank" not in p.url and "chrome-error" not in p.url]
     if pages:
         return pages[-1]
     return ctx.new_page()
 
 
-def _fill_with_playwright(page, fields, answers) -> tuple[list[str], list[str]]:
-    """Fill all detectable fields using Playwright's FieldFiller dispatch.
-    Returns (filled_labels, failed_labels)."""
+def _host(u):
+    from urllib.parse import urlparse
+    try:
+        return urlparse(u or "").netloc.lower().split(":")[0]
+    except Exception:
+        return ""
+
+
+_NEXT_KEYWORDS_JS = ["next", "continue", "continue to review", "review",
+                     "review application", "next step", "save and continue"]
+
+_ERROR_MARKERS = (
+    "upstream connect error", "bad gateway", "service unavailable",
+    "404 not found", "page not found", "access denied", "403 forbidden",
+    "this site can't", "err_connection", "err_ssl", "application error",
+)
+
+
+def _is_error_page(page):
+    """True when the landed page is a proxy/server error rather than a form."""
+    try:
+        text = (page_text(page) or "").strip().lower()
+    except Exception:
+        return False
+    if len(text) > 400:
+        return False
+    return any(m in text for m in _ERROR_MARKERS)
+
+
+def _url_fallbacks(url, state_url=""):
+    """Alternate canonical URLs when the primary landing page fails.
+    Platform knowledge lives in registry YAMLs (url_rewrites rules); the
+    engine only evaluates them. Rules are tried against both the current
+    and the original URL (redirects can move off the ATS domain)."""
+    from apply.common.registry import resolve as resolve_registry
+    out = []
+    for u in (url, state_url):
+        if not u:
+            continue
+        reg = resolve_registry(u)
+        if reg:
+            for alt in reg.rewrite_urls(u):
+                if alt not in out:
+                    out.append(alt)
+    return out
+
+
+def _wait_for_fields(page, timeout=8):
+    """Give SPA pages a moment to render inputs before probing."""
+    for _ in range(timeout):
+        try:
+            n = page.evaluate("""() => document.querySelectorAll(
+                'input:not([type=hidden]):not([type=submit]), select, textarea'
+            ).length""")
+            if n:
+                return True
+        except Exception:
+            return False
+        time.sleep(1)
+    return False
+
+
+def _find_next_button(page):
+    """Best visible form-pagination candidate, or None. Strict: short text,
+    exact/starts-with keyword match, and never nav/header/footer links."""
+    import json as _json
+    try:
+        cands = page.evaluate("""(kws) => {
+            const out = [];
+            const all = document.querySelectorAll('button, a, [role="button"], input[type=submit]');
+            for (const el of all) {
+                if (el.offsetParent === null || el.disabled) continue;
+                if (el.closest('nav, header, footer, [role=navigation], [role=banner], [role=contentinfo]')) continue;
+                const t = ((el.textContent || el.value || '')).trim().toLowerCase().replace(/\\s+/g, ' ');
+                if (!t || t.length > 30) continue;
+                let score = 0;
+                for (const kw of kws) {
+                    if (t === kw) score = Math.max(score, 4);
+                    else if (t.startsWith(kw)) score = Math.max(score, 3);
+                }
+                if (score >= 3) out.push({text: t.slice(0, 30), score});
+            }
+            out.sort((a, b) => b.score - a.score);
+            return out;
+        }""", _NEXT_KEYWORDS_JS)
+        return cands[0] if cands else None
+    except Exception:
+        return None
+
+
+_JUNK_TYPES = {"range", "search", "hidden", "submit", "button", "reset"}
+_JUNK_LABEL_KW = ("progress", "scrubber", "search", "subscribe", "newsletter",
+                  "volume", "playback", "password", "captcha")
+
+
+def _is_junk_field(f):
+    """Non-application inputs: media controls, site search, footer forms."""
+    t = (f.get("type") or "").lower()
+    if t in _JUNK_TYPES:
+        return True
+    lbl = (f.get("label") or "").lower()
+    return any(k in lbl for k in _JUNK_LABEL_KW)
+
+
+def _click_apply_button(page):
+    """Click an Apply-ish button to open the application form (broad match)."""
+    try:
+        return bool(page.evaluate("""() => {
+            const kws = ['apply for this job', 'apply now', 'start application',
+                         'apply to this', 'apply online', 'apply'];
+            const all = Array.from(document.querySelectorAll('button, a, [role="button"]'))
+                .filter(el => el.offsetParent !== null);
+            for (const kw of kws) {
+                for (const el of all) {
+                    const t = (el.textContent || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+                    if (t === kw || t.startsWith(kw)) { el.click(); return true; }
+                }
+            }
+            return false;
+        }"""))
+    except Exception:
+        return False
+
+
+def _probe_form(page, reg, jid, allow_vision=True):
+    """Probe for application-form fields with junk filtering. If nothing usable
+    is found, tries clicking an Apply-ish button once and re-probes.
+    When the form lives inside an iframe, navigates directly to the iframe URL
+    so all fills run in the main frame (keyboard/focus/upload all work there).
+    Vision probing (LLM screenshot) only runs when allow_vision — it costs
+    30-60s per call, so it's restricted to the first form page."""
+    from apply.common import inspector as _insp
+    orig = _insp._PROBE_STRATEGIES
+    if not allow_vision:
+        _insp._PROBE_STRATEGIES = [s for s in orig if s[0] != "vision"]
+    try:
+        pr = _insp.probe(page, registry_config=reg, jid=jid)
+        fields = [f for f in (pr.fields or []) if not _is_junk_field(f)]
+        if fields:
+            pr.fields = fields
+            if pr.strategy == "iframe":
+                srcs = getattr(pr, "iframe_srcs", []) or []
+                src = next((s for s in srcs if s and "http" in s), "")
+                if src:
+                    print(f"  Form lives in an iframe — navigating directly: {src[:90]}", file=sys.stderr)
+                    try:
+                        page.goto(src, wait_until="domcontentloaded", timeout=30000)
+                        time.sleep(2)
+                        pr = _insp.probe(page, registry_config=reg, jid=jid)
+                        pr.fields = [f for f in (pr.fields or []) if not _is_junk_field(f)]
+                    except Exception:
+                        pass
+            return pr
+        # Nothing usable — maybe the form hides behind an Apply button
+        if _click_apply_button(page):
+            time.sleep(2)
+            pr2 = _insp.probe(page, registry_config=reg, jid=jid)
+            pr2.fields = [f for f in (pr2.fields or []) if not _is_junk_field(f)]
+            return pr2
+        pr.fields = []
+        return pr
+    finally:
+        _insp._PROBE_STRATEGIES = orig
+
+
+def _set_files_any_frame(page, sel, path):
+    """set_input_files on the main frame, then any iframe (cross-origin frames
+    are reachable via Playwright's frame objects even when page-level fails)."""
+    try:
+        page.set_input_files(sel, path)
+        return True
+    except Exception:
+        pass
+    for fr in page.frames:
+        if fr == page.main_frame:
+            continue
+        try:
+            fr.set_input_files(sel, path)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _dismiss_confirm_modal(page):
+    """Dismiss custom (DOM-based) confirmation modals some ATSes show after
+    clicking Submit. page.on('dialog') only catches native confirm()/alert()."""
+    try:
+        page.evaluate("""() => {
+            const kws = ['yes', 'confirm', 'submit', 'ok', 'sure', 'continue'];
+            const modals = document.querySelectorAll('[role="dialog"], .modal, [class*="confirm"], [class*="popup"]');
+            for (const m of modals) {
+                if (m.offsetParent === null) continue;
+                for (const btn of m.querySelectorAll('button, a, [role="button"]')) {
+                    const t = (btn.textContent || '').trim().toLowerCase();
+                    if (kws.includes(t) || kws.some(k => t.startsWith(k))) {
+                        btn.click();
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }""")
+    except Exception:
+        pass
+
+
+def _get_validation_errors(page):
+    """Scan for validation error messages after a failed submit attempt."""
+    try:
+        return page.evaluate("""() => {
+            const sels = '[role="alert"], .field-error, .error-message, [class*="error"]:not([class*="error-icon"]), .form-error, .invalid-feedback';
+            const seen = new Set();
+            const out = [];
+            for (const el of document.querySelectorAll(sels)) {
+                if (el.offsetParent === null) continue;
+                const t = (el.textContent || '').trim();
+                if (!t || t.length > 200 || seen.has(t)) continue;
+                seen.add(t);
+                out.push(t);
+            }
+            return out.slice(0, 15);
+        }""") or []
+    except Exception:
+        return []
+
+
+def _empty_required(page):
+    try:
+        return int(page.evaluate("""() => {
+            let n = 0;
+            for (const el of document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea')) {
+                if (el.offsetParent === null) continue;
+                if (!(el.required || el.getAttribute('aria-required') === 'true')) continue;
+                if (el.type === 'checkbox') { if (!el.checked) n++; continue; }
+                if (el.getAttribute('role') === 'combobox') {
+                    const scope = el.closest('.select__control') || el.parentElement;
+                    if (scope && scope.querySelector('.select__single-value')) continue;
+                    const owns = el.getAttribute('aria-owns') || el.getAttribute('aria-controls');
+                    if (owns) {
+                        const lb = document.getElementById(owns);
+                        if (lb && lb.querySelector('[aria-selected="true"]')) continue;
+                    }
+                }
+                if (!el.value) n++;
+            }
+            return n;
+        }""") or 0)
+    except Exception:
+        return 0
+
+
+def _click_action(page, text):
+    """Click a button/link by visible text (exact, then contains)."""
+    try:
+        return bool(page.evaluate("""(t) => {
+            const all = document.querySelectorAll('button, a, [role="button"]');
+            const vis = Array.from(all).filter(el => el.offsetParent !== null && !el.disabled);
+            for (const el of vis) {
+                if ((el.textContent || '').trim().toLowerCase() === t) { el.click(); return true; }
+            }
+            for (const el of vis) {
+                if ((el.textContent || '').trim().toLowerCase().includes(t)) { el.click(); return true; }
+            }
+            return false;
+        }""", (text or "").strip().lower()))
+    except Exception:
+        return False
+
+
+def _field_key(f):
+    """Unique key for dedup — selector preferred, then (label, id, name) composite.
+    Labels like 'Attach' can appear on multiple fields (resume + cover); selectors
+    are unique per element."""
+    sel = f.get("_sel") or f.get("selector") or ""
+    if sel:
+        return sel
+    return (f.get("label", ""), f.get("id", ""), f.get("name", ""))
+
+
+def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list[dict], list[dict]]:
+    """Fill all detectable fields using resolve() for label→answer matching and
+    FieldFiller dispatch for the actual fill.
+    Returns (filled_records, failed_records) where each filled record is
+    {"label": ..., "key": ...} and each failed record is the field dict
+    plus _why: 'no_answer' (nothing in profile maps to it) or 'fill_failed'
+    (we have a value but the widget rejected it)."""
     from apply.strategies.dispatch import field_deterministic
 
     filled = []
@@ -95,43 +395,55 @@ def _fill_with_playwright(page, fields, answers) -> tuple[list[str], list[str]]:
         if not label:
             continue
 
-        # Match field label to answer key (case-insensitive prefix match)
-        ans = None
-        ans_key = None
-        for k, v in answers.items():
-            kl = k.lower().replace("*", "").strip()
-            ll = label.lower().replace("*", "").strip()
-            if kl == ll or ll.startswith(kl) or kl.startswith(ll):
-                ans = v
-                ans_key = k
-                break
-        if ans is None:
-            failed.append(label)
-            continue
-
-        # File upload — handle with Playwright directly
-        tag = f.get("tag", "").lower()
+        # File upload — handle with Playwright directly, no answer needed
+        tag = (f.get("tag") or "").lower()
+        ftype = (f.get("type") or "").lower()
         lc = label.lower()
-        if (tag == "input" and f.get("accept")) or "resume" in lc or "cv" in lc or "cover" in lc:
-            path = cover_path if "cover" in lc else resume_path
+        if (tag == "input" and (f.get("accept") or ftype == "file")) or "resume" in lc or "cv" in lc or "cover" in lc:
+            # Route by id/name too: Greenhouse labels both inputs "Attach"
+            ident = f"{lc} {(f.get('id') or '').lower()} {(f.get('name') or '').lower()}"
+            path = cover_path if "cover" in ident else resume_path
             if path and os.path.exists(path):
                 try:
-                    sel = f.get("selector") or f.get("_sel", "")
-                    if sel:
-                        page.set_input_files(sel, path)
-                        filled.append(label)
+                    sel = f.get("_sel") or f.get("selector") or ""
+                    if not sel:
+                        from apply.steps.probe import resolve_selector
+                        sel = resolve_selector(page, f) or ""
+                    if sel and _set_files_any_frame(page, sel, path):
+                        filled.append({"label": label, "key": _field_key(f)})
                         continue
-                except Exception as e:
-                    pass
+                    print(f"  UPLOAD_FAIL: {label}", file=sys.stderr)
+                except Exception as ue:
+                    print(f"  UPLOAD_FAIL: {label} — {str(ue)[:120]}", file=sys.stderr)
+            # No file on disk and no answer either → fails below if unresolvable
+
+        # Resolve label → answer value (deterministic, profile-driven)
+        res = resolve(label, profile, answers_override,
+                      autocomplete=f.get("autocomplete", ""),
+                      field_name=f.get("name", ""),
+                      field_id=f.get("id", ""))
+        ans = res.value
+        if ans is None:
+            # Consent/agreement checkboxes: only auto-check when explicitly
+            # enabled via JI_AUTO_CONSENT=1 (off by default to avoid
+            # circumventing ToS — user must opt in).
+            if tag == "input" and ftype == "checkbox" and os.environ.get("JI_AUTO_CONSENT") == "1":
+                ans = "true"
+            else:
+                failed.append({**f, "_why": "no_answer"})
+                continue
 
         # Use the standard field_deterministic dispatch from strategies
         try:
             if field_deterministic(page, f, ans):
-                filled.append(label)
+                filled.append({"label": label, "key": _field_key(f)})
+                if res.provenance == "answers_override":
+                    # User/orchestrator-supplied answer that worked → remember it
+                    learn_mapping(label, ans)
             else:
-                failed.append(label)
+                failed.append({**f, "_why": "fill_failed", "attempted": str(ans)[:50]})
         except Exception:
-            failed.append(label)
+            failed.append({**f, "_why": "fill_failed", "attempted": str(ans)[:50]})
 
     return filled, failed
 
@@ -210,8 +522,11 @@ def _build_ans_dict(profile: dict, answers_override: dict = None) -> dict:
     return result
 
 
-def cmd_fill(jid, answers: dict = None, verify: bool = True):
-    """Hybrid fill: Playwright-first, Skyvern-fallback, ask_api verify."""
+def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
+             quick: bool = False):
+    """Hybrid fill: Playwright-first with multi-page loop, Skyvern-fallback.
+    quick=True: deterministic-only pass, no vision verify, no Skyvern — fast
+    feedback on what's fillable and what's missing."""
     db_row = get_conn().execute(
         "SELECT stage, state FROM jobs WHERE id=?", (jid,)
     ).fetchone()
@@ -223,11 +538,13 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True):
     state = load_state()
     if state.get("jid") != jid:
         state = {"jid": jid}
+    state["jid"] = jid
 
-    url = state.get("external_url", "")
+    url = state.get("external_url") or state.get("url", "")
     if not url:
         emit_error("no external_url in state — run 'apply navigate <jid>' first")
         return 1
+    orig_url = url  # pre-redirect ATS URL — fallback rules may match it
 
     # Build the full answer dict
     profile = _load_profile()
@@ -236,12 +553,17 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True):
         emit_error("no answers resolved — check profile or --answers")
         return 1
 
-    # Phase 1: Playwright deterministic fill
+    from apply.common.registry import resolve as resolve_registry
+
+    # Phase 1: Playwright deterministic fill, looping through form pages
     b, ctx = _chrome()
-    page = _page_for(ctx)
-    filled_playwright = []
+    filled_all, failed_all = [], []
+    filled_keys = set()
+    field_total = 0
+    submit_visible = False
 
     try:
+        page = _page_for(ctx, state)
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(2)
 
@@ -249,22 +571,105 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True):
             emit_status("captcha", "CAPTCHA still present after timeout")
             return 1
 
-        page_info = read_page(page)
-        fields = page_info.get("fields", [])
-        field_count = page_info.get("fieldCount", 0)
+        # Redirect detection — ATS links often bounce to branded career sites
+        if _host(page.url) and _host(url) and _host(page.url) != _host(url):
+            print(f"  REDIRECT: {_host(url)} -> {_host(page.url)}", file=sys.stderr)
+            state["external_url"] = page.url
+            url = page.url
 
-        if field_count == 0:
-            print(f"  No fields detected via DOM", file=sys.stderr)
+        # Broken landing page recovery — try canonical fallback URLs
+        fallbacks = _url_fallbacks(url, orig_url)
+        if _is_error_page(page):
+            for alt in fallbacks:
+                print(f"  Landing page broken — trying fallback: {alt[:90]}", file=sys.stderr)
+                try:
+                    page.goto(alt, wait_until="domcontentloaded", timeout=30000)
+                    time.sleep(2)
+                except Exception:
+                    continue
+                if not _is_error_page(page):
+                    state["external_url"] = page.url
+                    url = page.url
+                    break
+            fallbacks = []
 
-        filled_playwright, failed_playwright = _fill_with_playwright(page, fields, ans_dict)
+        tag_page(page, jid)
+        reg = resolve_registry(page.url) or resolve_registry(orig_url)
+        if reg and reg.page_range:
+            try:
+                max_pages = min(max_pages, int(reg.page_range[-1]))
+            except Exception:
+                pass
+        _wait_for_fields(page, timeout=8)
 
-        if filled_playwright:
-            print(f"  Playwright filled: {', '.join(filled_playwright)}", file=sys.stderr)
-        if failed_playwright:
-            print(f"  Playwright failed/unknown: {len(failed_playwright)} fields", file=sys.stderr)
+        seen = set()
+        for page_num in range(1, max_pages + 1):
+            pr = _probe_form(page, reg, jid, allow_vision=(page_num == 1))
+            # Probing may navigate (iframe-direct, apply-button) — keep the
+            # handoff URL pointed at the page that actually shows the form
+            if page.url and page.url != url and "about:blank" not in page.url:
+                state["external_url"] = page.url
+                url = page.url
+            fields = pr.fields or []
+            field_total += len(fields)
+            if not fields:
+                print(f"  No fields detected (page {page_num}, strategy={pr.strategy})", file=sys.stderr)
+                if page_num == 1 and fallbacks:
+                    alt = fallbacks.pop(0)
+                    print(f"  Trying fallback URL: {alt[:90]}", file=sys.stderr)
+                    try:
+                        page.goto(alt, wait_until="domcontentloaded", timeout=30000)
+                        time.sleep(2)
+                        _wait_for_fields(page, timeout=8)
+                        state["external_url"] = page.url
+                        url = page.url
+                        reg = resolve_registry(page.url)
+                    except Exception:
+                        pass
+                    continue
 
-        # Phase 1.5: ask_api verification (fast, one image)
-        if verify and filled_playwright:
+            filled, failed = _fill_with_playwright(page, fields, profile, answers)
+            for rec in filled:
+                if rec["key"] not in filled_keys:
+                    filled_keys.add(rec["key"])
+                    filled_all.append(rec["label"])
+            for rec in failed:
+                k = _field_key(rec)
+                if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
+                    failed_all.append(rec)
+
+            if fields:
+                print(f"  Page {page_num}: filled {len(filled)}/{len(fields)}"
+                      + (f" — failed: {', '.join(r['label'] for r in failed[:5])}" if failed else ""), file=sys.stderr)
+
+            # Multi-page progression: click Next/Continue/Review, stop when gone
+            fp = (page.url, tuple(sorted(f.get("label", "") for f in fields)))
+            if fp in seen:
+                break
+            seen.add(fp)
+            nxt = _find_next_button(page)
+            if not nxt:
+                submit_visible = bool(_detect_submit_button(page))
+                break
+            # Don't advance with empty required fields — the ATS will bounce us
+            # back with validation errors (loop risk). Skyvern gets the rest.
+            empt = _empty_required(page)
+            if empt:
+                print(f"  {empt} required field(s) still empty — not advancing", file=sys.stderr)
+                break
+            print(f"  Multi-page: clicking '{nxt['text']}'", file=sys.stderr)
+            if not _click_action(page, nxt["text"]):
+                break
+            time.sleep(2)
+            if handle_captcha(page, state):
+                emit_status("captcha", "CAPTCHA during multi-page navigation")
+                return 1
+            handle_session_timeout(page)
+
+        # Phase 1.5: vision verify — only when Playwright covered everything
+        # (if Skyvern is taking over anyway, the extra LLM call buys nothing)
+        remaining_now = [r for r in failed_all if _field_key(r) not in filled_keys]
+        if verify and filled_all and not remaining_now and field_total > 0:
             try:
                 verify_result = _verify_with_ask_api(page, ans_dict)
                 if not verify_result.get("ok"):
@@ -283,19 +688,41 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True):
         except Exception:
             pass
 
-    # Phase 2: Skyvern fills remaining (non-blocking — returns run_id for polling)
+    # ─── Failure triage — Skyvern is the LAST resort ───
+    # fill_failed (we have the value, widget rejected it) → Skyvern can act.
+    # no_answer + required → Skyvern infers from the full answer dict.
+    # no_answer + optional → SKIPPED entirely: no LLM can invent profile data
+    # the user never provided, and optional fields don't block submission.
+    remaining = [r for r in failed_all if _field_key(r) not in filled_keys]
+    skyvern_fields = [r for r in remaining if r["_why"] == "fill_failed" or r.get("required")]
+    skipped = [r for r in remaining if r["_why"] == "no_answer" and not r.get("required")]
+
+    if remaining:
+        from apply.common.output import emit_fill_report
+        emit_fill_report(len(filled_all), remaining, 1, profile)
+    if skipped:
+        skip_labels = [r["label"] for r in skipped]
+        print(f"  SKIPPED (optional, no answer): {', '.join(skip_labels)}", file=sys.stderr)
+
+    # Phase 2: Skyvern fills remaining (non-blocking) — skipped in --quick mode
     skyvern_result = None
-    needs_skyvern = failed_playwright or field_count == 0
+    needs_skyvern = (bool(skyvern_fields) or field_total == 0) and not quick
     if needs_skyvern:
-        print(f"  Handing off remaining fields to Skyvern (non-blocking)...", file=sys.stderr)
+        # Cap the LLM budget: ~3 steps per field + navigation slack
+        n = len(skyvern_fields) if skyvern_fields else 8
+        budget = min(30, 6 + 3 * n)
+        print(f"  Handing off {n} field(s) to Skyvern (non-blocking, max_steps={budget})...", file=sys.stderr)
         from apply.common.skyvern_bridge import fill_remaining as _fill_remaining
         try:
             skyvern_result = _fill_remaining(
                 url=url,
                 answers=ans_dict,
-                filled_fields=filled_playwright,
+                # Skipped optional fields are listed as "already filled" so
+                # Skyvern leaves them alone
+                filled_fields=filled_all + [r["label"] for r in skipped],
                 wait=False,  # don't block — poll via run_id
                 timeout=30,  # just need the initial response
+                max_steps=budget,
             )
             status = skyvern_result.get("status", "unknown")
             print(f"  Skyvern: {status}", file=sys.stderr)
@@ -303,62 +730,62 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True):
                 state["browser_session_id"] = skyvern_result["browser_session_id"]
             if skyvern_result.get("run_id"):
                 state["fill_run_id"] = skyvern_result["run_id"]
+                state["fill_run_started"] = time.time()
                 print(f"  Skyvern run_id: {state['fill_run_id']}", file=sys.stderr)
                 print(f"  Check status later via 'apply verify {jid}'", file=sys.stderr)
         except Exception as se:
             print(f"  Skyvern fill failed: {se}", file=sys.stderr)
 
     # Save state
-    state["filled_count"] = len(filled_playwright)
-    state["failed_fields"] = list(failed_playwright) if failed_playwright else []
+    state["filled_count"] = len(filled_all)
+    state["failed_fields"] = [r["label"] for r in skyvern_fields]
+    state["skipped_fields"] = [r["label"] for r in skipped]
+    if not (skyvern_result and skyvern_result.get("run_id")):
+        state.pop("fill_run_id", None)
+        state.pop("fill_run_started", None)
     save_state(state)
 
-    if field_count == 0 and not skyvern_result:
+    if field_total == 0 and not skyvern_result:
         emit_status("unknown", "no fields found by Playwright or Skyvern")
         return 1
 
-    total_ok = len(filled_playwright)
-    if skyvern_result and skyvern_result.get("status") == "completed":
-        total_ok += 1
-
-    msg = f"Playwright: {len(filled_playwright)} fields"
+    msg = f"Playwright: {len(filled_all)} fields"
+    if skyvern_fields:
+        msg += f", to Skyvern: {len(skyvern_fields)}"
+    if skipped:
+        msg += f", skipped optional: {len(skipped)}"
     if skyvern_result:
         msg += f" + Skyvern: {skyvern_result.get('status', 'unknown')}"
     emit_status("filled", msg)
-    emit_next("submit")
+
+    if skyvern_result and skyvern_result.get("run_id"):
+        emit_next("verify", "poll Skyvern fill progress")
+    elif submit_visible or filled_all:
+        emit_next("submit")
+    else:
+        emit_next("act --inspect", "no fillable fields and no Skyvern run")
     return 0
 
 
 def cmd_next(jid):
     """Click Next/Continue on a multi-page form using Playwright."""
+    state = load_state()
     b, ctx = _chrome()
-    page = _page_for(ctx)
+    page = _page_for(ctx, state)
     try:
-        state = load_state()
-        url = state.get("external_url", "")
-        if url:
+        url = state.get("external_url") or state.get("url", "")
+        cur = page.url or ""
+        if url and (not cur or "about:blank" in cur or "chrome-error" in cur):
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             time.sleep(1)
 
         # Try Playwright first
-        buttons = page.evaluate("""() => {
-            const all = document.querySelectorAll('button, a');
-            return Array.from(all).filter(el => el.offsetParent !== null).map(el => ({
-                text: el.textContent.trim(),
-                tag: el.tagName,
-            }));
-        }""")
-        for btn in buttons:
-            t = btn["text"].lower()
-            if t in ("next", "continue", "next step", "continue to review"):
-                if btn["tag"] == "A":
-                    page.click(f'text="{btn["text"]}"')
-                else:
-                    page.click(f'button:text("{btn["text"]}")')
-                time.sleep(2)
-                emit_status("navigated", f"clicked '{btn['text']}'")
-                emit_next("fill")
-                return 0
+        nxt = _find_next_button(page)
+        if nxt and _click_action(page, nxt["text"]):
+            time.sleep(2)
+            emit_status("navigated", f"clicked '{nxt['text']}'")
+            emit_next("fill")
+            return 0
 
         # Fallback: Skyvern click_next
         print(f"  No Next button found via DOM — using Skyvern", file=sys.stderr)
@@ -378,6 +805,68 @@ def cmd_next(jid):
             pass
 
 
+def cmd_investigate(jid):
+    """Deep analysis of an unknown-platform form. Free probe cascade first;
+    if 0 fields, Skyvern's investigator (one blocking LLM task) describes the
+    form so a registry entry/handler can be written. Saves report to results."""
+    state = load_state()
+    if state.get("jid") != jid:
+        state = {"jid": jid}
+    url = state.get("external_url") or state.get("url", "")
+    if not url:
+        emit_error("no url in state — run 'apply navigate <jid>' first")
+        return 1
+
+    from apply.common.inspector import probe as probe_page
+    from apply.common.registry import resolve as resolve_registry
+
+    b, ctx = _chrome()
+    try:
+        page = _page_for(ctx, state)
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)
+        if handle_captcha(page, state):
+            emit_status("captcha", "CAPTCHA still present after timeout")
+            return 1
+        pr = probe_page(page, registry_config=resolve_registry(page.url), jid=jid)
+        if pr.field_count > 0:
+            print(f"  Probe found {pr.field_count} fields (strategy={pr.strategy}):", file=sys.stderr)
+            for f in pr.fields:
+                print(f"    [{f.get('type','?')}] {f.get('label','?')}", file=sys.stderr)
+            emit_status("investigated", f"{pr.field_count} fields via {pr.strategy} — no Skyvern needed")
+            emit_next("act --fill")
+            return 0
+    finally:
+        try:
+            b.close()
+        except Exception:
+            pass
+
+    # 0 fields from DOM — pay for one Skyvern investigation
+    print(f"  DOM probe found nothing — running Skyvern investigator (slow, one task)...", file=sys.stderr)
+    from apply.common.skyvern_bridge import SkyvernExtraction
+    report = SkyvernExtraction().investigate_form(url, timeout=300)
+    if not report:
+        emit_error("Skyvern investigation returned nothing")
+        return 1
+
+    rd = os.path.join(RESULTS_DIR, jid)
+    os.makedirs(rd, exist_ok=True)
+    rpt_path = os.path.join(rd, "investigate_report.json")
+    with open(rpt_path, "w", encoding="utf-8") as fh:
+        json.dump({"url": url, **report}, fh, indent=2)
+    state["investigate_report"] = rpt_path
+    save_state(state)
+
+    fields = (report.get("fields") or {})
+    n = len(fields.get("fields", [])) if isinstance(fields, dict) else 0
+    print(f"  Report saved: {rpt_path}", file=sys.stderr)
+    print(f"  Skyvern saw {n} fields, multi_page={fields.get('multi_page') if isinstance(fields, dict) else '?'}", file=sys.stderr)
+    emit_status("investigated", f"report at {rpt_path}")
+    emit_next("none", "write a registry YAML for this platform from the report")
+    return 0
+
+
 def cmd_submit(jid, confirm=False):
     """Submit the form: Playwright finds and clicks submit, Skyvern fallback."""
     db_row = get_conn().execute(
@@ -388,15 +877,17 @@ def cmd_submit(jid, confirm=False):
         return 1
     stage, job_state = db_row["stage"], db_row["state"]
 
-    if stage != "filled":
-        emit_status(f"stage={stage}", "expected 'filled' — skipping submit")
+    if stage == "applied":
+        emit_status("already applied")
+        emit_next("verify")
         return 0
 
     state = load_state()
     if state.get("jid") != jid:
         state = {"jid": jid}
+    state["jid"] = jid
 
-    url = state.get("external_url", "")
+    url = state.get("external_url") or state.get("url", "")
     if not url:
         emit_error("no external_url in state")
         return 1
@@ -405,11 +896,36 @@ def cmd_submit(jid, confirm=False):
 
     # Phase 1: Playwright tries to click submit
     b, ctx = _chrome()
-    page = _page_for(ctx)
+    page = _page_for(ctx, state)
 
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)
+        # Only navigate if the current tab isn't already on the form —
+        # reloading could wipe values filled by Playwright/Skyvern.
+        cur = page.url or ""
+        if not cur or "about:blank" in cur or "chrome-error" in cur:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(2)
+
+        if handle_captcha(page, state):
+            emit_status("captcha", "CAPTCHA still present after timeout")
+            return 1
+
+        # Deterministic re-fill: Skyvern runs navigate fresh, which wipes
+        # Playwright-filled values on ATSes without server-side persistence.
+        # A fast local pass restores them — idempotent and LLM-free.
+        try:
+            profile = _load_profile()
+            pr = _probe_form(page, resolve_registry(page.url), jid, allow_vision=False)
+            fields = pr.fields or []
+            if fields:
+                refilled, _ = _fill_with_playwright(page, fields, profile, None)
+                if refilled:
+                    print(f"  Re-fill: {len(refilled)} fields restored/confirmed", file=sys.stderr)
+            empt = _empty_required(page)
+            if empt:
+                print(f"  WARN: {empt} required field(s) still empty before submit", file=sys.stderr)
+        except Exception as re_:
+            print(f"  Re-fill skipped: {re_}", file=sys.stderr)
 
         submit_text = _detect_submit_button(page)
         if submit_text:
@@ -423,12 +939,28 @@ def cmd_submit(jid, confirm=False):
                     pass
             time.sleep(3)
 
+            # Dismiss custom (non-native) confirmation modals some ATSes show
+            _dismiss_confirm_modal(page)
+            time.sleep(1)
+
             # Check if submit succeeded
             if check_applied_signal(page) or has_success_text(page_text(page) or ""):
                 mark_applied(jid)
                 emit_status("submitted", "Playwright clicked submit")
                 emit_next("verify")
                 return 0
+
+            # Check for validation errors — submit was rejected
+            errors = _get_validation_errors(page)
+            if errors:
+                print(f"  VALIDATION_ERRORS: {len(errors)} field(s) blocked submit", file=sys.stderr)
+                for e in errors[:5]:
+                    print(f"    ! {e[:80]}", file=sys.stderr)
+                state["submit_errors"] = errors
+                save_state(state)
+                emit_status("validation_error", f"{len(errors)} field(s) need fixing")
+                emit_next("act --fill", "fix validation errors then resubmit")
+                return 1
 
             # Check for multi-page (Review step)
             next_btn = _detect_submit_button(page)
@@ -474,10 +1006,10 @@ def cmd_inspect(jid):
     from lib.chrome_manager import CDP_URL
 
     b, ctx = _chrome()
-    page = _page_for(ctx)
     state = load_state()
+    page = _page_for(ctx, state)
 
-    url = state.get("external_url", "")
+    url = state.get("external_url") or state.get("url", "")
     if url:
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -527,7 +1059,9 @@ def run(args):
                 emit_error(f"invalid --answers JSON: {raw}")
                 return 1
         verify = not args.get("--no-verify", False)
-        return cmd_fill(jid, answers, verify=verify)
+        return cmd_fill(jid, answers, verify=verify,
+                        max_pages=args.get("--max-pages", 4),
+                        quick=args.get("--quick", False))
 
     elif cmd == "next":
         return cmd_next(jid)
@@ -541,6 +1075,9 @@ def run(args):
 
     elif cmd == "inspect":
         return cmd_inspect(jid)
+
+    elif cmd == "investigate":
+        return cmd_investigate(jid)
 
     else:
         emit_error(f"unknown act command: {cmd}")

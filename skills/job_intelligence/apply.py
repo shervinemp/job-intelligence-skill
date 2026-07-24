@@ -4,10 +4,11 @@
 Usage:
   python3 apply.py detect [<jid>]
   python3 apply.py navigate <jid>
-  python3 apply.py act --fill <jid> [--answers '{}']
+  python3 apply.py act --fill <jid> [--answers '{}'] [--max-pages N]
   python3 apply.py act --next <jid>
   python3 apply.py act --submit <jid>
   python3 apply.py act --inspect <jid>
+  python3 apply.py act --investigate <jid>
   python3 apply.py verify <jid>
   python3 apply.py reject <jid>         Skip permanently
   python3 apply.py flag <jid>           Toggle auth wall
@@ -40,14 +41,17 @@ def main():
     nav_p = sub.add_parser("navigate", help="LinkedIn -> External ATS")
     nav_p.add_argument("jid", help="Job ID")
 
-    act_p = sub.add_parser("act", help="Fill / next / submit / inspect (hybrid Playwright+Skyvern)")
+    act_p = sub.add_parser("act", help="Fill / next / submit / inspect / investigate (hybrid Playwright+Skyvern)")
     act_p.add_argument("jid", help="Job ID")
     act_p.add_argument("--fill", action="store_true", help="Fill the application form")
     act_p.add_argument("--next", action="store_true", help="Next page on multi-step form")
     act_p.add_argument("--submit", action="store_true", help="Submit the application")
     act_p.add_argument("--inspect", action="store_true", help="Analyze the page (screenshot, fields, buttons)")
+    act_p.add_argument("--investigate", action="store_true", help="Deep-analyze unknown platform (Skyvern investigator)")
     act_p.add_argument("--answers", help="JSON field->value mapping for --fill")
     act_p.add_argument("--no-verify", action="store_true", help="Skip vision verification after fill")
+    act_p.add_argument("--quick", action="store_true", help="Deterministic-only pass: no vision, no Skyvern")
+    act_p.add_argument("--max-pages", type=int, default=4, help="Max form pages to fill in one --fill run")
 
     verify_p = sub.add_parser("verify", help="Check submission result")
     verify_p.add_argument("jid", help="Job ID")
@@ -80,12 +84,15 @@ def main():
     elif args.command == "act":
         from apply.act import run
         cmd = "fill" if args.fill else ("submit" if args.submit else
-              "next" if args.next else ("inspect" if args.inspect else ""))
+              "next" if args.next else ("inspect" if args.inspect else
+              "investigate" if args.investigate else ""))
         if not cmd:
-            print("ERROR: specify --fill, --next, --submit, or --inspect", file=sys.stderr)
+            print("ERROR: specify --fill, --next, --submit, --inspect, or --investigate", file=sys.stderr)
             sys.exit(1)
         run({"command": cmd, "jid": args.jid, "--answers": args.answers,
-             "--no-verify": args.no_verify, "--confirm": args.submit})
+             "--no-verify": args.no_verify, "--max-pages": args.max_pages,
+             "--quick": args.quick,
+             "--confirm": args.submit})
     elif args.command == "verify":
         from apply.verify import run
         run(args.jid)

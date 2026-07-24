@@ -1,6 +1,5 @@
 name: workday
 version: 2
-handler_class: apply.handlers.workday.WorkdayHandler
 notes: |
   Phone: strip +1 prefix when separate Country Phone Code field present.
   Skills autocomplete: type skill then press Enter.

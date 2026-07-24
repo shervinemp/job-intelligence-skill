@@ -37,9 +37,6 @@ class ProbeResult:
         self.iframe_srcs = iframe_srcs or []
         self.error = error
 
-    def success(self):
-        return self.field_count > 0 or self.error is None
-
     def to_dict(self):
         return {
             "fieldCount": self.field_count,
@@ -229,9 +226,6 @@ def _probe_iframe_navigate(page, prev_result=None):
             except Exception:
                 pass
     return ProbeResult(strategy="iframe_navigate", field_count=0, page_type="unknown", url=page.url)
-
-
-probe_iframe_navigate = _probe_iframe_navigate  # public alias for act.py
 
 
 def _probe_shadow_dom(page):

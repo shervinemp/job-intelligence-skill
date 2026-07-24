@@ -13,7 +13,11 @@ A filler that returns False causes the chain to fall through to the next.
 from abc import ABC, abstractmethod
 from apply.steps.probe import resolve_selector
 from apply.strategies import combobox, text, select, datepicker, contenteditable as ce
-from apply.common.value_reader import read_value
+
+
+def _is_combobox(f):
+    """Single source of truth for combobox detection."""
+    return f.get("role") == "combobox" or f.get("tag") == "DROPDOWN"
 
 
 class FieldFiller(ABC):
@@ -38,7 +42,9 @@ class CheckboxFiller(FieldFiller):
 
     def fill(self, page, f, ans):
         lbl = (f.get("label") or "").lower()
-        if not any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm", "understand"]):
+        if not any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm",
+                                        "understand", "authorize", "certify", "marketing",
+                                        "privacy", "notice", "future job", "updates"]):
             return False
         sel = f.get("_sel", "")
         try:
@@ -73,7 +79,7 @@ class ComboboxFiller(FieldFiller):
     name = "combobox"
 
     def can_handle(self, f):
-        return f.get("role") == "combobox" or f["tag"] == "DROPDOWN"
+        return _is_combobox(f)
 
     def fill(self, page, f, ans):
         return bool(combobox.fill(page, f, ans))
@@ -105,6 +111,10 @@ class TextFiller(FieldFiller):
     name = "text"
 
     def can_handle(self, f):
+        if _is_combobox(f):
+            return False
+        if (f.get("type") or "").lower() in ("checkbox", "radio", "file"):
+            return False
         return f["tag"] in ("INPUT", "TEXTAREA")
 
     def fill(self, page, f, ans):
@@ -132,6 +142,8 @@ class NativeSetterFallback(FieldFiller):
         el = page.query_selector(sel) if sel else None
         if not el:
             return False
+        if _is_combobox(f):
+            return False  # phantom: .value set on a combobox is never committed
         if f["tag"] in ("INPUT", "TEXTAREA"):
             return bool(_tx.native_setter(page, sel, ans))
         return False

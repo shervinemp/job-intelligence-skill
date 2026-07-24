@@ -97,6 +97,7 @@ _READER_JS = """(config) => {
             id: el.id, name: el.getAttribute('name') || '',
             label: label, option_label: resolveOptionLabel(el, scopeRoot, label),
             placeholder: el.placeholder || '',
+            autocomplete: el.getAttribute('autocomplete') || '',
             data_automation_id: el.getAttribute('data-automation-id') || '',
             role: el.getAttribute('role') || '',
             required: !!el.required || el.getAttribute('aria-required') === 'true',
@@ -398,15 +399,3 @@ _ERROR_SCAN_JS = """() => {
     roots.forEach(scanRoot);
     return errors;
 }"""
-
-
-def scan_errors(page):
-    """Scan page for field-level validation errors.
-    Returns list of {label, error_text} dicts.
-    Pure addition ΓÇö no side effects, safe to call any time.
-    """
-    try:
-        return page.evaluate(_ERROR_SCAN_JS)
-    except Exception as e:
-        print(f"FIELD_READ_ERROR: scan_errors failed ΓÇö {e}", file=sys.stderr)
-        return []

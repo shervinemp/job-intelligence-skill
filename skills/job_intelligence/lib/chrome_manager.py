@@ -1,19 +1,10 @@
 """chrome_manager.py — Shared Chrome lifecycle management for the pipeline.
 
-All components (fetch, tailor, apply, gemini.js) use this module instead of
-managing their own profile paths and CDP connections.
+All components (fetch, tailor, apply, gemini.js, skyvern_bridge) use this
+module instead of managing their own profile paths and CDP connections.
 
 On import, writes {JI_HOME}/chrome-config.json so Node.js tools (gemini.js)
 can read the same paths.
-
-On connect(), injects agent.js into every page. Agent provides:
-
-  - Framework auto-detection (React, Backbone, jQuery, Angular, Ember)
-  - Unified framework-aware value setter (survives Backbone re-renders)
-  - MutationObserver-based field discovery (no polling)
-  - Value change tracking (for DIAG diagnostics)
-  - XHR/fetch submission interception (detect submit success from network)
-  - Console error capture
 """
 
 import atexit
@@ -118,7 +109,8 @@ def _cleanup(signum=None, frame=None):
 atexit.register(_cleanup)
 if threading.current_thread() is threading.main_thread():
     signal.signal(signal.SIGINT, _cleanup)
-    signal.signal(signal.SIGTERM, _cleanup)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _cleanup)
 
 
 def is_running():
@@ -211,14 +203,11 @@ def start():
     return False
 
 
-_AGENT_INJECTED = False
-
-
 def connect(timeout=15):
     """Get a (browser, context) pair connected to a healthy dedicated Chrome.
     Reuses a previously-started pipeline Chrome (from config file), or starts a new one.
     Never connects to the user's personal Chrome."""
-    global CDP_PORT, CDP_URL, _AGENT_INJECTED
+    global CDP_PORT, CDP_URL
     for attempt in range(3):
         pw = _pw()
         port = _read_port()
@@ -242,48 +231,8 @@ def connect(timeout=15):
                 time.sleep(1)
         print(f"Chrome unresponsive (attempt {attempt+1}/3), restarting...", file=sys.stderr)
         close()
-        _AGENT_INJECTED = False
         time.sleep(2)
-    return None, None
-
-
-def _load_agent():
-    """Load the injected agent JS from disk."""
-    _agent_path = os.path.join(os.path.dirname(__file__), "..", "apply", "common", "agent.js")
-    try:
-        with open(_agent_path, encoding="utf-8") as f:
-            return f.read()
-    except Exception:
-        return ""
-
-
-def new_page(timeout=15):
-    """Convenience: connect, return a new page."""
-    b, ctx = connect(timeout)
-    if not ctx:
         return None, None
-    p = ctx.new_page()
-    return b, p
-
-
-def session_ok(url, check_text="Sign in", timeout=15):
-    """Check if a logged-in session is valid for the given URL.
-    Navigates to URL, checks that check_text is NOT present."""
-    b, p = new_page(timeout)
-    if not p:
-        return False
-    try:
-        p.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
-        time.sleep(2)
-        text = p.evaluate("document.body.innerText")
-        return check_text not in text and check_text not in text.lower()
-    except Exception:
-        return False
-    finally:
-        try:
-            b.close()
-        except Exception:
-            pass
 
 
 # On import, write initial config for Node tools (gemini.js) if not yet created

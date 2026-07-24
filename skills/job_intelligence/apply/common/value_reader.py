@@ -57,7 +57,7 @@ class AriaComboboxReader(FieldValueReader):
             v = (page.evaluate(f"""() => {{
                 const el = document.querySelector({json.dumps(sel)});
                 if (!el || el.getAttribute('role') !== 'combobox') return null;
-                const owns = el.getAttribute('aria-owns');
+                const owns = el.getAttribute('aria-owns') || el.getAttribute('aria-controls');
                 if (!owns) return null;
                 const lb = document.getElementById(owns);
                 if (!lb) return null;
@@ -74,7 +74,10 @@ class AriaComboboxReader(FieldValueReader):
 class ReactSelectReader(FieldValueReader):
     """React-Select: selected value rendered in sibling div.select__single-value.
     React-Select is used by thousands of sites (Greenhouse, many others).
-    The selected option text is rendered as a styled div, not in el.value."""
+    The selected option text is rendered as a styled div, not in el.value.
+    Lookup goes via the value-container/control ancestor — the single-value
+    div is a SIBLING of the input-container, not a child of the input.
+    Also handles legacy Select2 (.select2-chosen)."""
     name = "react_select"
 
     def read(self, page, sel, ans=None):
@@ -82,8 +85,18 @@ class ReactSelectReader(FieldValueReader):
             v = (page.evaluate(f"""() => {{
                 const el = document.querySelector({json.dumps(sel)});
                 if (!el) return null;
-                const sv = el.parentElement?.querySelector('.select__single-value');
-                return sv ? sv.textContent?.trim() || null : null;
+                const scope = el.closest('.select__value-container') || el.closest('.select__control');
+                if (scope) {{
+                    const sv = scope.querySelector('.select__single-value');
+                    if (sv) return sv.textContent?.trim() || null;
+                }}
+                // Legacy Select2
+                const s2 = el.closest('.select2-container');
+                if (s2) {{
+                    const chosen = s2.querySelector('.select2-chosen');
+                    if (chosen) return chosen.textContent?.trim() || null;
+                }}
+                return null;
             }}""") or "").strip() or None
             return v
         except Exception:
@@ -103,7 +116,7 @@ class FuzzyComboboxReader(FieldValueReader):
             v = (page.evaluate(f"""() => {{
                 const el = document.querySelector({json.dumps(sel)});
                 if (!el || el.getAttribute('role') !== 'combobox') return null;
-                const owns = el.getAttribute('aria-owns');
+                const owns = el.getAttribute('aria-owns') || el.getAttribute('aria-controls');
                 if (!owns) return null;
                 const lb = document.getElementById(owns);
                 if (!lb) return null;

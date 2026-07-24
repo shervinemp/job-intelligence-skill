@@ -143,6 +143,7 @@ def _create_v3_tables():
         "notes TEXT NOT NULL DEFAULT ''",
         "category TEXT",
         "auth_wall INTEGER NOT NULL DEFAULT 0",
+        "external_url TEXT NOT NULL DEFAULT ''",
     ]:
         try:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
@@ -193,7 +194,7 @@ _JOBS_COLS = (
     "salary_min, salary_max, salary_currency, remote_status,"
     "job_type, department, source, source_url, stage, state, fit_score,"
     "fit_summary, company_vibe, error, scripts, response_path,"
-    "notes, created_at, updated_at, applied_at, category"
+    "notes, created_at, updated_at, applied_at, category, external_url"
 )
 
 

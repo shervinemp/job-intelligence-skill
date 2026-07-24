@@ -28,22 +28,31 @@ def run(jid):
 
     print(f"JOB: {title or '?'} @ {company or '?'}", file=sys.stderr)
 
-    target_url = ext_url or url
+    # Prefer DB external_url; fall back to a prior state's external_url
+    # (e.g. manually supplied), then the job URL itself.
+    prior_ext = ""
+    try:
+        with open(STATE_PATH, encoding="utf-8") as f:
+            prior = json.load(f)
+        if prior.get("jid") == jid:
+            prior_ext = prior.get("external_url", "") or ""
+    except Exception:
+        pass
+    target_url = ext_url or prior_ext or url
     print(f"EXTERNAL_URL: {target_url}", file=sys.stderr)
 
     reg = resolve_registry(target_url)
     plat_name = reg.name if reg else ""
     if plat_name:
         print(f"PLATFORM: {plat_name}", file=sys.stderr)
+        reg.emit_notes()
     else:
         print(f"PLATFORM: unknown", file=sys.stderr)
 
     # Save state
     state = {"jid": jid, "external_url": target_url, "url": url,
              "title": title or "", "company": company or "", "platform": plat_name}
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    with open(STATE_PATH + ".tmp", "w") as f:
-        json.dump(state, f, indent=2)
-    os.replace(STATE_PATH + ".tmp", STATE_PATH)
+    from lib.config import atomic_write_json, STATE_PATH as _SP
+    atomic_write_json(_SP, state)
 
     emit_next("act --fill")

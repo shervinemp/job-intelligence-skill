@@ -7,7 +7,12 @@ detect:
     - boards.greenhouse.io
     - grnh.se
 
-handler_class: apply.handlers.greenhouse.GreenhouseHandler
+url_rewrites:
+  # boards.greenhouse.io/<co>/jobs/<id> redirects to branded SPA career pages
+  # that can break under automation; the embed endpoint is always server-rendered.
+  # Pattern must match the WHOLE URL (anchored) so replace yields a clean URL.
+  - pattern: '^https?://boards\.greenhouse\.io/([^/]+)/jobs/(\d+).*$'
+    replace: 'https://job-boards.greenhouse.io/embed/job_app?for=\1&token=\2'
 
 probe:
   best_strategy: standard

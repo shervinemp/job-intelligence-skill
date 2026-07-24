@@ -100,7 +100,11 @@ def _server_alive() -> bool:
 
 
 def _ensure_server():
-    """Start the local Skyvern server if not already running, with LLM config."""
+    """Start the local Skyvern server if not already running, with LLM config.
+
+    The server is deliberately NOT killed at exit: non-blocking fill tasks
+    (wait=False) keep running after the CLI process returns. A reused server
+    is idempotent — the next run detects it via _server_alive()."""
     global _SERVER_PROC
     if _server_alive():
         return
@@ -119,9 +123,6 @@ def _ensure_server():
         [sys.executable, "-m", "skyvern", "run", "server"],
         env=env, stdout=open(log, "w"), stderr=subprocess.STDOUT,
     )
-    # Register cleanup on normal interpreter exit
-    import atexit
-    atexit.register(lambda: _kill_server())
     # Wait for startup
     for _ in range(30):
         if _server_alive():
@@ -129,17 +130,6 @@ def _ensure_server():
         time.sleep(1)
     print("WARN: Skyvern server may not have started (port 8000 not responding after 30s)",
           file=sys.stderr)
-
-
-def _kill_server():
-    global _SERVER_PROC
-    if _SERVER_PROC is not None and _SERVER_PROC.poll() is None:
-        _SERVER_PROC.terminate()
-        try:
-            _SERVER_PROC.wait(timeout=5)
-        except Exception:
-            _SERVER_PROC.kill()
-        _SERVER_PROC = None
 
 
 def _api_key() -> str:
@@ -174,142 +164,20 @@ def _client():
     return Skyvern(base_url="http://localhost:8000", api_key=_api_key())
 
 
-_CHROME_PROC = None
-_CHROME_PROFILE = os.path.join(
-    os.environ.get("JI_HOME", os.path.join(os.path.expanduser("~"), ".ji")),
-    "chrome-profile",
-)
-
-
-def _find_chrome() -> str:
-    candidates = [
-        os.environ.get("CHROME_PATH", ""),
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    ]
-    for c in candidates:
-        if c and os.path.exists(c):
-            return c
-    return "chrome"
-
-
-def _start_chrome() -> str:
-    """Start Chrome with CDP using the configured profile. Returns CDP URL."""
-    global _CHROME_PROC
-    # Kill any existing process on port 9222 so we start fresh with the right profile
+def _chrome_cdp_url() -> str:
+    """Reuse the pipeline's shared Chrome (via chrome_manager). Never kills or
+    restarts Chrome — Playwright-filled form state must survive the handoff."""
     try:
-        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:9222/json/version"), timeout=2)
-        import subprocess as _sp
-        import socket as _sk
-        r = _sp.run(["netstat", "-ano", "|", "findstr", ":9222"], capture_output=True, text=True, shell=True, timeout=5)
-        for line in r.stdout.splitlines():
-            if "LISTENING" in line:
-                pid = line.strip().rsplit(" ", 1)[-1]
-                if pid.isdigit():
-                    _sp.run(["taskkill", "/f", "/pid", pid], capture_output=True, timeout=5)
-        time.sleep(2)
-    except Exception:
-        pass
-    chrome_path = _find_chrome()
-    os.makedirs(_CHROME_PROFILE, exist_ok=True)
-    stealth = [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-infobars", "--no-default-browser-check",
-        "--disable-component-update", "--disable-background-timer-throttling",
-    ]
-    _CHROME_PROC = subprocess.Popen(
-        [chrome_path,
-         f"--user-data-dir={_CHROME_PROFILE}",
-         "--remote-debugging-port=9222",
-         "--no-first-run", "--disable-session-crashed-bubble",
-         "--disable-restore-session-state"] + stealth,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    import atexit
-    atexit.register(_kill_chrome)
-    for _ in range(30):
-        try:
-            urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:9222/json/version"), timeout=2)
-            return "http://127.0.0.1:9222"
-        except Exception:
-            time.sleep(1)
-    print("WARN: Chrome didn't start on port 9222", file=sys.stderr)
+        from lib import chrome_manager
+        if chrome_manager.start():
+            return chrome_manager.CDP_URL
+    except Exception as e:
+        print(f"WARN: chrome_manager start failed: {e}", file=sys.stderr)
     return ""
 
 
-def _kill_chrome():
-    global _CHROME_PROC
-    if _CHROME_PROC is not None and _CHROME_PROC.poll() is None:
-        _CHROME_PROC.terminate()
-        try:
-            _CHROME_PROC.wait(timeout=5)
-        except Exception:
-            _CHROME_PROC.kill()
-        _CHROME_PROC = None
-
-
-def _chrome_cdp_url() -> str:
-    """Auto-start Chrome with CDP, return the CDP address."""
-    return _start_chrome()
-
-
-def fill_form(url: str, answers: dict, jid: str = "", timeout: int = 300) -> dict:
-    """Fill a job application form. Returns task result with browser_session_id."""
-    prompt = _build_prompt(url, answers, jid=jid)
-    sk = _client()
-    cdp = _chrome_cdp_url()
-
-    async def run():
-        kwargs = dict(prompt=prompt, url=url, max_steps=50,
-                      wait_for_completion=True, timeout=timeout * 1000,
-                      model={"max_tokens": 4096},
-                      proxy_location="NONE")
-        if cdp:
-            kwargs["browser_address"] = cdp
-        return await sk.run_task(**kwargs)
-
-    task = _run_async(run(), timeout=timeout + 30)
-    if task is None:
-        return {"status": "timed_out", "details": f"Skyvern did not complete within {timeout}s"}
-    return {
-        "status": getattr(task, "status", "unknown"),
-        "details": getattr(task, "failure_reason", "") or str(task)[:300],
-        "browser_session_id": getattr(task, "browser_session_id", None),
-        "run_id": getattr(task, "run_id", None),
-        "screenshot_urls": getattr(task, "screenshot_urls", []),
-        "errors": getattr(task, "errors", []),
-    }
-
-
-def submit_form(url: str, browser_session_id: str = "", timeout: int = 120) -> dict:
-    """Click Submit on a job application form. Reuses browser_session_id."""
-    prompt = _build_prompt(url, {}, submit=True)
-    sk = _client()
-    cdp = _chrome_cdp_url()
-
-    async def run():
-        kwargs = dict(prompt=prompt, url=url, max_steps=20,
-                      wait_for_completion=True, timeout=timeout * 1000,
-                      model={"max_tokens": 4096},
-                      proxy_location="NONE")
-        if browser_session_id:
-            kwargs["browser_session_id"] = browser_session_id
-        if cdp:
-            kwargs["browser_address"] = cdp
-        return await sk.run_task(**kwargs)
-
-    task = _run_async(run(), timeout=timeout + 30)
-    if task is None:
-        return {"status": "timed_out", "details": f"Submit did not complete within {timeout}s"}
-    return {
-        "status": getattr(task, "status", "unknown"),
-        "details": getattr(task, "failure_reason", "") or str(task)[:300],
-        "run_id": getattr(task, "run_id", None),
-    }
-
-
 def get_task(run_id: str) -> dict:
-    """Get task result by run_id (for state recovery)."""
+    """Get task result by run_id (for state recovery / polling)."""
     sk = _client()
     async def run():
         return await sk.get_run(run_id)
@@ -322,25 +190,12 @@ def get_task(run_id: str) -> dict:
     }
 
 
-def close_session(browser_session_id: str) -> bool:
-    """Close a Skyvern browser session, releasing resources."""
-    if not browser_session_id:
-        return False
-    sk = _client()
-    try:
-        async def run():
-            return await sk.close_browser_session(browser_session_id)
-        _run_async(run(), timeout=10)
-        return True
-    except Exception:
-        return False
-
-
 def fill_remaining(url: str, answers: dict, filled_fields: list[str] = None,
                    browser_session_id: str = "", timeout: int = 300,
-                   wait: bool = True) -> dict:
+                   wait: bool = True, max_steps: int = 30) -> dict:
     """Fill only fields that weren't already filled by Playwright.
-    If wait=False, returns immediately with the run_id for polling."""
+    If wait=False, returns immediately with the run_id for polling.
+    max_steps caps the LLM-call budget (each step = 1+ slow LLM calls)."""
     skip = filled_fields or []
     skip_hint = ""
     if skip:
@@ -364,7 +219,7 @@ def fill_remaining(url: str, answers: dict, filled_fields: list[str] = None,
     cdp = _chrome_cdp_url()
 
     async def run():
-        kwargs = dict(prompt=prompt, url=url, max_steps=30,
+        kwargs = dict(prompt=prompt, url=url, max_steps=max_steps,
                       wait_for_completion=wait,
                       model={"max_tokens": 4096},
                       proxy_location="NONE")

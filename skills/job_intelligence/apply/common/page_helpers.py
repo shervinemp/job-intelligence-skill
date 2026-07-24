@@ -1,26 +1,34 @@
 """apply/common/page_helpers.py — Shared page reading, state persistence, page finding,
-Playwright-first field reading, and success signal detection.
-
-Merged from master (DOM reading, verification) + skyvern-migration (state, CDP Chrome)."""
-import json, os, random, sys, time
+Playwright-first field reading, and success signal detection."""
+import json, os, sys, time
 import webbrowser
 
 from lib.config import STATE_PATH
 
-_SKIP_DOMAINS = {"linkedin.com", "linkedin.com/jobs", "indeed.com",
-                 "ca.indeed.com", "indeed.ca", "glassdoor.com",
-                 "monster.com", "ziprecruiter.com", "simplyhired.com"}
-
-
-def is_aggregator(domain):
-    for skip in _SKIP_DOMAINS:
-        if skip in domain:
-            return True
-    return False
-
 
 _PAGE_JID_MAP = {}
 _DOM_ATTR = "data-opencode-jid"
+
+
+def handle_session_timeout(page):
+    """Dismiss Workday-style 'Your session is about to time out' popups."""
+    try:
+        title = page.evaluate("document.title") or ""
+    except Exception:
+        return False
+    if "session" not in title.lower() or ("time out" not in title.lower() and "timeout" not in title.lower()):
+        return False
+    clicked = page.evaluate("""() => {
+        for (const el of document.querySelectorAll('button')) {
+            const t = (el.textContent || '').trim();
+            if (t === 'Keep Working' || t === 'Continue Session') { el.click(); return true; }
+        }
+        return false;
+    }""")
+    if clicked:
+        time.sleep(2)
+        return True
+    return False
 
 
 def tag_page(page, jid):
@@ -41,13 +49,6 @@ def mark_applied(jid):
     try:
         from apply.common.apply_state import clear as _as_clear
         _as_clear(jid)
-    except Exception:
-        pass
-    try:
-        from apply.common import mappings
-        n = mappings.promote(jid)
-        if n:
-            print(f"  MAPPINGS: promoted {n} confirmed mapping(s)", file=sys.stderr)
     except Exception:
         pass
 
@@ -91,30 +92,6 @@ def page_text(page):
     }""") or ""
 
 
-def page_html(page):
-    return page.evaluate("""() => {
-        function serialize(node) {
-            if (node.nodeType === Node.TEXT_NODE) return node.textContent.replace(/[\\x00-\\x08\\x0B\\x0E-\\x1F]/g, '');
-            if (node.nodeType !== Node.ELEMENT_NODE) return '';
-            let s = '<' + node.tagName.toLowerCase();
-            for (const a of node.attributes) s += ' ' + a.name + '="' + a.value.replace(/"/g, '&quot;') + '"';
-            s += '>';
-            if (node.shadowRoot) {
-                s += '<template shadowrootmode="' + node.shadowRoot.mode + '">';
-                for (const c of node.shadowRoot.childNodes) s += serialize(c);
-                s += '</template>';
-            }
-            for (const c of node.childNodes) {
-                if (c.nodeType === Node.ELEMENT_NODE && c.tagName === 'SLOT') continue;
-                s += serialize(c);
-            }
-            s += '</' + node.tagName.toLowerCase() + '>';
-            return s;
-        }
-        return serialize(document.documentElement);
-    }""") or ""
-
-
 def check_captcha(page):
     try:
         has_widget = page.evaluate("""() => {
@@ -132,9 +109,44 @@ def check_captcha(page):
         return False
 
 
+def is_cloudflare_challenge(page):
+    """Cloudflare managed challenge — auto-resolves in 10-30s, no user action.
+    Distinct from a real CAPTCHA (which needs human interaction)."""
+    try:
+        return bool(page.evaluate("""() => {
+            const sel = '#challenge-stage, #cf-challenge-running, .cf-browser-verification, '
+                + '#cf-please-wait, .cf-turnstile, iframe[src*="challenges.cloudflare.com"]';
+            if (document.querySelector(sel)) return true;
+            const t = (document.title || '').toLowerCase();
+            if (t.includes('just a moment') || t.includes('attention required')) return true;
+            return false;
+        }"""))
+    except Exception:
+        return False
+
+
+def wait_cloudflare(page, timeout=30):
+    """Wait for a Cloudflare managed challenge to auto-resolve."""
+    import time as _t
+    waited = 0
+    while waited < timeout:
+        if not is_cloudflare_challenge(page):
+            return True
+        _t.sleep(2)
+        waited += 2
+    return not is_cloudflare_challenge(page)
+
+
 def handle_captcha(page, state, wait_s=300, poll_s=3):
     if not check_captcha(page):
         return False
+    # Cloudflare managed challenge auto-resolves — wait silently, don't alert
+    if is_cloudflare_challenge(page):
+        print(f"  Cloudflare challenge detected — waiting for auto-resolution...", file=sys.stderr)
+        if wait_cloudflare(page, timeout=30):
+            print(f"  Cloudflare resolved.", file=sys.stderr)
+            return False
+        print(f"  Cloudflare didn't resolve in 30s — escalating to user.", file=sys.stderr)
     url = page.url[:120]
     print(f"\n*** CAPTCHA DETECTED ***", file=sys.stderr)
     print(f"  URL: {url}", file=sys.stderr)
@@ -159,26 +171,6 @@ def handle_captcha(page, state, wait_s=300, poll_s=3):
     return True
 
 
-def handle_session_timeout(page):
-    title = page.evaluate("document.title") or ""
-    has_signal = "session" in title.lower() and ("time out" in title.lower() or "timeout" in title.lower())
-    if not has_signal:
-        return False
-    clicked = page.evaluate("""() => {
-        for (const el of document.querySelectorAll('button')) {
-            const t = (el.textContent || '').trim();
-            if (t === 'Keep Working' || t === 'Continue Session') {
-                el.click(); return true;
-            }
-        }
-        return false;
-    }""")
-    if clicked:
-        time.sleep(2)
-        return True
-    return False
-
-
 def load_state():
     try:
         with open(STATE_PATH, encoding="utf-8") as f:
@@ -188,11 +180,8 @@ def load_state():
 
 
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    tmp = STATE_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
-    os.replace(tmp, STATE_PATH)
+    from lib.config import atomic_write_json
+    atomic_write_json(STATE_PATH, state)
 
 
 def read_page(p, custom_widgets=None):
@@ -268,13 +257,6 @@ def find_page(ctx, state):
             if li_job_id in p.url:
                 return p
     return None
-
-
-def read_and_save(p, state):
-    ps = read_page(p)
-    state["page"] = ps
-    save_state(state)
-    return ps
 
 
 DEFAULT_EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse", "clear", "reset", "start over"}

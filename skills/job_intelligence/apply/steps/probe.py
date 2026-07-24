@@ -1,5 +1,4 @@
 """Pass 1 probe: enrich fields with selectors and structural info."""
-import re
 
 
 def resolve_selector(page, f):
@@ -33,54 +32,3 @@ def resolve_selector(page, f):
         except Exception:
             pass
     return ""
-
-
-def normalize_label(lbl):
-    return re.sub(r"[^a-z0-9+#]+", " ", lbl.lower()).strip()
-
-
-def run(page, fields):
-    """Pass 1: resolve selectors + capture available options for comboboxes.
-    Read-only, no side effects — options read from hidden listboxes / aria-owns."""
-    for field in fields:
-        sel = resolve_selector(page, field)
-        if sel:
-            field["_sel"] = sel
-
-        # Capture options for comboboxes without clicking (read-only DOM query)
-        if field.get("role") == "combobox" and not field.get("options"):
-            try:
-                opts = page.evaluate(f"""() => {{
-                    const el = document.querySelector('{sel}');
-                    if (!el) return [];
-                    // Read options from aria-owns listbox
-                    const owns = el.getAttribute('aria-owns');
-                    if (owns) {{
-                        const list = document.getElementById(owns);
-                        if (list) {{
-                            const items = Array.from(list.querySelectorAll('[role="option"], li, [role="menuitem"]'))
-                                .map(o => o.textContent.trim())
-                                .filter(Boolean)
-                                .slice(0, 30);
-                            if (items.length) return items;
-                        }}
-                    }}
-                    // Read options from <datalist>
-                    const listId = el.getAttribute('list');
-                    if (listId) {{
-                        const dl = document.getElementById(listId);
-                        if (dl) {{
-                            const items = Array.from(dl.querySelectorAll('option'))
-                                .map(o => o.textContent.trim())
-                                .filter(Boolean)
-                                .slice(0, 30);
-                            if (items.length) return items;
-                        }}
-                    }}
-                    return [];
-                }}""")
-                if opts:
-                    field["options"] = opts
-            except Exception:
-                pass
-    return fields

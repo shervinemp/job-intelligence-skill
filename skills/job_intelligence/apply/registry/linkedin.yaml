@@ -21,7 +21,6 @@ properties:
   has_progress_bar: true
   page_range: [1, 10]
 
-handler_class: apply.handlers.linkedin.LinkedinHandler
 
 notes: |
   LinkedIn Easy Apply: ephemeral modal overlay. Uses PlatformHandler interface.
