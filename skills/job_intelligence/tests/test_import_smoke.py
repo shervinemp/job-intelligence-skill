@@ -37,7 +37,12 @@ class ImportSmoke(unittest.TestCase):
         self.assertGreater(len(names), 20, "expected to discover the apply/lib modules")
         for name in names:
             with self.subTest(module=name):
-                importlib.import_module(name)
+                try:
+                    importlib.import_module(name)
+                except ModuleNotFoundError as exc:
+                    if exc.name in ("fpdf", "playwright", "yaml"):
+                        self.skipTest(f"optional dependency '{exc.name}' not installed")
+                    raise
 
 
 if __name__ == "__main__":
