@@ -3,11 +3,10 @@
 All components (fetch, tailor, apply, gemini.js, skyvern_bridge) use this
 module instead of managing their own profile paths and CDP connections.
 
-On import, writes {JI_HOME}/chrome-config.json so Node.js tools (gemini.js)
-can read the same paths.
+Import-time side effects are deliberately avoided: call init() explicitly
+before first use, or rely on start()/connect() which call it automatically.
 """
 
-import atexit
 import json
 import os
 import shutil
@@ -22,46 +21,6 @@ from pathlib import Path
 from .config import JI_HOME, CHROME_PROFILE, CHROME_CONFIG
 
 _LOCK_PATH = Path(JI_HOME) / "pipeline.lock"
-
-
-def _acquire_lock():
-    """Prevent concurrent pipeline processes from corrupting shared state."""
-    _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if _LOCK_PATH.exists():
-        try:
-            pid = int(_LOCK_PATH.read_text().strip())
-            if os.name == "nt":
-                # Windows: check if process exists via tasklist. CSV + exact column
-                # compare — substring matching would let PID 123 match PID 1234.
-                # (Do NOT use os.kill(pid, 0) here: on Windows it terminates the target.)
-                import csv, io, subprocess as sp
-                r = sp.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                          capture_output=True, timeout=5)
-                rows = csv.reader(io.StringIO(r.stdout.decode(errors="replace")))
-                alive = any(len(row) > 1 and row[1] == str(pid) for row in rows)
-            else:
-                os.kill(pid, 0)
-                alive = True
-            if alive:
-                print(f"ERROR: pipeline already running (PID {pid})", file=sys.stderr)
-                print(f"  Lockfile: {_LOCK_PATH}", file=sys.stderr)
-                print(f"  If stuck, delete the lockfile and retry.", file=sys.stderr)
-                sys.exit(1)
-        except (ValueError, OSError, subprocess.TimeoutExpired):
-            pass  # stale lockfile — overwrite
-    _LOCK_PATH.write_text(str(os.getpid()))
-    atexit.register(_release_lock)
-
-
-def _release_lock():
-    try:
-        if _LOCK_PATH.exists() and _LOCK_PATH.read_text().strip() == str(os.getpid()):
-            _LOCK_PATH.unlink()
-    except Exception:
-        pass
-
-
-_acquire_lock()
 
 CHROME_PATH = os.environ.get("CHROME_PATH") or (
     shutil.which("google-chrome") or shutil.which("chromium-browser")
@@ -79,6 +38,70 @@ _STEALTH_ARGS = [
 ]
 _PW = None
 _PW_PID = None
+_initialized = False
+
+
+def _acquire_lock():
+    """Prevent concurrent pipeline processes from corrupting shared state.
+    Raises RuntimeError if another pipeline process holds the lock."""
+    _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if _LOCK_PATH.exists():
+        try:
+            pid = int(_LOCK_PATH.read_text().strip())
+            if os.name == "nt":
+                import csv, io, subprocess as sp
+                r = sp.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                          capture_output=True, timeout=5)
+                rows = csv.reader(io.StringIO(r.stdout.decode(errors="replace")))
+                alive = any(len(row) > 1 and row[1] == str(pid) for row in rows)
+            else:
+                os.kill(pid, 0)
+                alive = True
+            if alive:
+                raise RuntimeError(
+                    f"pipeline already running (PID {pid}). "
+                    f"Lockfile: {_LOCK_PATH}. If stuck, delete the lockfile and retry."
+                )
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            pass
+    _LOCK_PATH.write_text(str(os.getpid()))
+
+
+def _release_lock():
+    try:
+        if _LOCK_PATH.exists() and _LOCK_PATH.read_text().strip() == str(os.getpid()):
+            _LOCK_PATH.unlink()
+    except Exception:
+        pass
+
+
+def init():
+    """Explicit initialization: acquire lock, register cleanup handlers,
+    write initial config for Node tools. Safe to call multiple times.
+    Raises RuntimeError if another pipeline process is already running."""
+    global _initialized
+    if _initialized:
+        return
+    _acquire_lock()
+    import atexit
+    atexit.register(_release_lock)
+    atexit.register(_cleanup)
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, _cleanup)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, _cleanup)
+    if not os.path.exists(CHROME_CONFIG):
+        try:
+            with open(CHROME_CONFIG, "w") as f:
+                json.dump({
+                    "CHROME_PATH": CHROME_PATH,
+                    "CHROME_PROFILE": CHROME_PROFILE,
+                    "CDP_PORT": CDP_PORT,
+                    "CDP_URL": CDP_URL,
+                }, f, indent=2)
+        except Exception:
+            pass
+    _initialized = True
 
 
 def _pw():
@@ -102,19 +125,13 @@ def close():
 
 def _cleanup(signum=None, frame=None):
     close()
+    _release_lock()
     if signum is not None:
         sys.exit(1)
 
 
-atexit.register(_cleanup)
-if threading.current_thread() is threading.main_thread():
-    signal.signal(signal.SIGINT, _cleanup)
-    if hasattr(signal, "SIGTERM"):
-        signal.signal(signal.SIGTERM, _cleanup)
-
-
 def is_running():
-    """Lightweight CDP liveness check via socket — avoids full Playwright connect."""
+    """Lightweight CDP liveness check via socket."""
     try:
         s = socket.create_connection(("127.0.0.1", CDP_PORT), timeout=2)
         s.close()
@@ -136,7 +153,6 @@ def _find_free_port():
 
 
 def _read_port():
-    """Read persisted port from config file (written by start())."""
     try:
         with open(CHROME_CONFIG) as f:
             return json.load(f).get("CDP_PORT", CDP_PORT)
@@ -145,7 +161,6 @@ def _read_port():
 
 
 def _write_port():
-    """Update config file with the current CDP_PORT so next process reuses it."""
     global CDP_PORT, CDP_URL
     try:
         with open(CHROME_CONFIG, "w") as f:
@@ -161,9 +176,10 @@ def _write_port():
 
 def start():
     """Start a DEDICATED pipeline Chrome instance. Reuses a previously-started
-    pipeline Chrome (from config) if still alive. Never connects to user's Chrome."""
+    pipeline Chrome (from config) if still alive. Never connects to user's Chrome.
+    Calls init() on first use."""
     global CDP_PORT, CDP_URL
-    # Try reusing pipeline's Chrome from a previous process
+    init()
     if os.path.exists(CHROME_CONFIG):
         cfg_port = _read_port()
         if is_running():
@@ -181,8 +197,7 @@ def start():
                 b.close()
                 return True
             except Exception:
-                pass  # stale — start fresh
-    # Find a free port that is NOT the user's Chrome port
+                pass
     port = _find_free_port()
     CDP_PORT = port
     CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
@@ -205,9 +220,9 @@ def start():
 
 def connect(timeout=15):
     """Get a (browser, context) pair connected to a healthy dedicated Chrome.
-    Reuses a previously-started pipeline Chrome (from config file), or starts a new one.
-    Never connects to the user's personal Chrome."""
+    Calls init() on first use. Returns (None, None) on failure."""
     global CDP_PORT, CDP_URL
+    init()
     for attempt in range(3):
         pw = _pw()
         port = _read_port()
@@ -233,18 +248,3 @@ def connect(timeout=15):
         close()
         time.sleep(2)
         return None, None
-
-
-# On import, write initial config for Node tools (gemini.js) if not yet created
-# start() will update the port once Chrome is actually running
-if not os.path.exists(CHROME_CONFIG):
-    try:
-        with open(CHROME_CONFIG, "w") as f:
-            json.dump({
-                "CHROME_PATH": CHROME_PATH,
-                "CHROME_PROFILE": CHROME_PROFILE,
-                "CDP_PORT": CDP_PORT,
-                "CDP_URL": CDP_URL,
-            }, f, indent=2)
-    except Exception:
-        pass

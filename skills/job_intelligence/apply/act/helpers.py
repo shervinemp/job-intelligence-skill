@@ -5,6 +5,7 @@ fill dispatch, file upload, validation scanning, submit detection,
 profile loading, answer dict construction, vision verification.
 """
 import json, os, sys, time
+from contextlib import contextmanager
 
 from lib.config import PROFILE_PATH, JI_HOME
 from apply.common.output import emit_next, emit_status, emit_error
@@ -29,10 +30,14 @@ def _load_profile():
 
 def _chrome():
     from lib.chrome_manager import connect, start
-    if not start():
-        emit_error("could not start Chrome")
+    try:
+        if not start():
+            emit_error("could not start Chrome")
+            sys.exit(1)
+        b, ctx = connect()
+    except RuntimeError as e:
+        emit_error(str(e))
         sys.exit(1)
-    b, ctx = connect()
     if not ctx:
         emit_error("could not connect to Chrome")
         sys.exit(1)
@@ -43,6 +48,21 @@ def _chrome():
     for pg in ctx.pages:
         _wire_dialogs(pg)
     return b, ctx
+
+
+@contextmanager
+def chrome_session(state=None):
+    """Context manager for Chrome lifecycle: starts Chrome, yields (page, ctx),
+    closes browser on exit. Replaces 5 duplicated b,ctx=_chrome(); try;finally;close() patterns."""
+    b, ctx = _chrome()
+    try:
+        page = _page_for(ctx, state)
+        yield page, ctx
+    finally:
+        try:
+            b.close()
+        except Exception:
+            pass
 
 
 def _wire_dialogs(page):

@@ -3,7 +3,7 @@ import json, os, sys, time
 
 from apply.common.output import emit_next, emit_status, emit_error
 from apply.common.page_helpers import load_state, save_state, handle_captcha
-from apply.act.helpers import _chrome, _page_for, RESULTS_DIR
+from apply.act.helpers import chrome_session, RESULTS_DIR
 
 
 def cmd_investigate(jid):
@@ -18,9 +18,7 @@ def cmd_investigate(jid):
     from apply.common.inspector import probe as probe_page
     from apply.common.registry import resolve as resolve_registry
 
-    b, ctx = _chrome()
-    try:
-        page = _page_for(ctx, state)
+    with chrome_session(state) as (page, ctx):
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(2)
         if handle_captcha(page, state):
@@ -34,11 +32,6 @@ def cmd_investigate(jid):
             emit_status("investigated", f"{pr.field_count} fields via {pr.strategy} — no Skyvern needed")
             emit_next("act --fill")
             return 0
-    finally:
-        try:
-            b.close()
-        except Exception:
-            pass
 
     from lib.ask_api import available as _vision_available
     if _vision_available():

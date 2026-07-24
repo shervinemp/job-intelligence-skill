@@ -5,7 +5,7 @@ from lib.db import get_conn
 from apply.common.output import emit_next, emit_status, emit_error, emit_fill_report
 from apply.common.page_helpers import load_state, save_state, handle_captcha, handle_session_timeout, tag_page
 from apply.act.helpers import (
-    _load_profile, _chrome, _page_for, _host, _is_error_page, _url_fallbacks,
+    _load_profile, chrome_session, _host, _is_error_page, _url_fallbacks,
     _wait_for_fields, _probe_form, _fill_with_playwright, _find_next_button,
     _empty_required, _click_action, _verify_with_ask_api, _detect_submit_button,
     _field_key, _build_ans_dict,
@@ -41,128 +41,122 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
     from apply.common.registry import resolve as resolve_registry
 
-    b, ctx = _chrome()
     filled_all, failed_all = [], []
     filled_keys = set()
     field_total = 0
     submit_visible = False
 
     try:
-        page = _page_for(ctx, state)
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)
+        with chrome_session(state) as (page, ctx):
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(2)
 
-        if handle_captcha(page, state):
-            emit_status("captcha", "CAPTCHA still present after timeout")
-            return 1
+            if handle_captcha(page, state):
+                emit_status("captcha", "CAPTCHA still present after timeout")
+                return 1
 
-        if _host(page.url) and _host(url) and _host(page.url) != _host(url):
-            print(f"  REDIRECT: {_host(url)} -> {_host(page.url)}", file=sys.stderr)
-            state["external_url"] = page.url
-            url = page.url
-
-        fallbacks = _url_fallbacks(url, orig_url)
-        if _is_error_page(page):
-            for alt in fallbacks:
-                print(f"  Landing page broken — trying fallback: {alt[:90]}", file=sys.stderr)
-                try:
-                    page.goto(alt, wait_until="domcontentloaded", timeout=30000)
-                    time.sleep(2)
-                except Exception:
-                    continue
-                if not _is_error_page(page):
-                    state["external_url"] = page.url
-                    url = page.url
-                    break
-            fallbacks = []
-
-        tag_page(page, jid)
-        reg = resolve_registry(page.url) or resolve_registry(orig_url)
-        if reg and reg.page_range:
-            try:
-                max_pages = min(max_pages, int(reg.page_range[-1]))
-            except Exception:
-                pass
-        _wait_for_fields(page, timeout=8)
-
-        seen = set()
-        for page_num in range(1, max_pages + 1):
-            pr = _probe_form(page, reg, jid, allow_vision=(page_num == 1))
-            if page.url and page.url != url and "about:blank" not in page.url:
+            if _host(page.url) and _host(url) and _host(page.url) != _host(url):
+                print(f"  REDIRECT: {_host(url)} -> {_host(page.url)}", file=sys.stderr)
                 state["external_url"] = page.url
                 url = page.url
-            fields = pr.fields or []
-            field_total += len(fields)
-            if not fields:
-                print(f"  No fields detected (page {page_num}, strategy={pr.strategy})", file=sys.stderr)
-                if page_num == 1 and fallbacks:
-                    alt = fallbacks.pop(0)
-                    print(f"  Trying fallback URL: {alt[:90]}", file=sys.stderr)
+
+            fallbacks = _url_fallbacks(url, orig_url)
+            if _is_error_page(page):
+                for alt in fallbacks:
+                    print(f"  Landing page broken — trying fallback: {alt[:90]}", file=sys.stderr)
                     try:
                         page.goto(alt, wait_until="domcontentloaded", timeout=30000)
                         time.sleep(2)
-                        _wait_for_fields(page, timeout=8)
+                    except Exception:
+                        continue
+                    if not _is_error_page(page):
                         state["external_url"] = page.url
                         url = page.url
-                        reg = resolve_registry(page.url)
-                    except Exception:
-                        pass
-                    continue
+                        break
+                fallbacks = []
 
-            filled, failed = _fill_with_playwright(page, fields, profile, answers)
-            for rec in filled:
-                if rec["key"] not in filled_keys:
-                    filled_keys.add(rec["key"])
-                    filled_all.append(rec["label"])
-            for rec in failed:
-                k = _field_key(rec)
-                if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
-                    failed_all.append(rec)
+            tag_page(page, jid)
+            reg = resolve_registry(page.url) or resolve_registry(orig_url)
+            if reg and reg.page_range:
+                try:
+                    max_pages = min(max_pages, int(reg.page_range[-1]))
+                except Exception:
+                    pass
+            _wait_for_fields(page, timeout=8)
 
-            if fields:
-                print(f"  Page {page_num}: filled {len(filled)}/{len(fields)}"
-                      + (f" — failed: {', '.join(r['label'] for r in failed[:5])}" if failed else ""), file=sys.stderr)
+            seen = set()
+            for page_num in range(1, max_pages + 1):
+                pr = _probe_form(page, reg, jid, allow_vision=(page_num == 1))
+                if page.url and page.url != url and "about:blank" not in page.url:
+                    state["external_url"] = page.url
+                    url = page.url
+                fields = pr.fields or []
+                field_total += len(fields)
+                if not fields:
+                    print(f"  No fields detected (page {page_num}, strategy={pr.strategy})", file=sys.stderr)
+                    if page_num == 1 and fallbacks:
+                        alt = fallbacks.pop(0)
+                        print(f"  Trying fallback URL: {alt[:90]}", file=sys.stderr)
+                        try:
+                            page.goto(alt, wait_until="domcontentloaded", timeout=30000)
+                            time.sleep(2)
+                            _wait_for_fields(page, timeout=8)
+                            state["external_url"] = page.url
+                            url = page.url
+                            reg = resolve_registry(page.url)
+                        except Exception:
+                            pass
+                        continue
 
-            fp = (page.url, tuple(sorted(f.get("label", "") for f in fields)))
-            if fp in seen:
-                break
-            seen.add(fp)
-            nxt = _find_next_button(page)
-            if not nxt:
-                submit_visible = bool(_detect_submit_button(page))
-                break
-            empt = _empty_required(page)
-            if empt:
-                print(f"  {empt} required field(s) still empty — not advancing", file=sys.stderr)
-                break
-            print(f"  Multi-page: clicking '{nxt['text']}'", file=sys.stderr)
-            if not _click_action(page, nxt["text"]):
-                break
-            time.sleep(2)
-            if handle_captcha(page, state):
-                emit_status("captcha", "CAPTCHA during multi-page navigation")
-                return 1
-            handle_session_timeout(page)
+                filled, failed = _fill_with_playwright(page, fields, profile, answers)
+                for rec in filled:
+                    if rec["key"] not in filled_keys:
+                        filled_keys.add(rec["key"])
+                        filled_all.append(rec["label"])
+                for rec in failed:
+                    k = _field_key(rec)
+                    if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
+                        failed_all.append(rec)
 
-        remaining_now = [r for r in failed_all if _field_key(r) not in filled_keys]
-        if verify and filled_all and not remaining_now and field_total > 0:
-            try:
-                verify_result = _verify_with_ask_api(page, ans_dict)
-                if not verify_result.get("ok"):
-                    mm = verify_result.get("mismatches", [])
-                    if mm:
-                        print(f"  Vision flag: {len(mm)} field(s) may need review", file=sys.stderr)
-            except Exception as ve:
-                print(f"  Vision verify skipped: {ve}", file=sys.stderr)
+                if fields:
+                    print(f"  Page {page_num}: filled {len(filled)}/{len(fields)}"
+                          + (f" — failed: {', '.join(r['label'] for r in failed[:5])}" if failed else ""), file=sys.stderr)
+
+                fp = (page.url, tuple(sorted(f.get("label", "") for f in fields)))
+                if fp in seen:
+                    break
+                seen.add(fp)
+                nxt = _find_next_button(page)
+                if not nxt:
+                    submit_visible = bool(_detect_submit_button(page))
+                    break
+                empt = _empty_required(page)
+                if empt:
+                    print(f"  {empt} required field(s) still empty — not advancing", file=sys.stderr)
+                    break
+                print(f"  Multi-page: clicking '{nxt['text']}'", file=sys.stderr)
+                if not _click_action(page, nxt["text"]):
+                    break
+                time.sleep(2)
+                if handle_captcha(page, state):
+                    emit_status("captcha", "CAPTCHA during multi-page navigation")
+                    return 1
+                handle_session_timeout(page)
+
+            remaining_now = [r for r in failed_all if _field_key(r) not in filled_keys]
+            if verify and filled_all and not remaining_now and field_total > 0:
+                try:
+                    verify_result = _verify_with_ask_api(page, ans_dict)
+                    if not verify_result.get("ok"):
+                        mm = verify_result.get("mismatches", [])
+                        if mm:
+                            print(f"  Vision flag: {len(mm)} field(s) may need review", file=sys.stderr)
+                except Exception as ve:
+                    print(f"  Vision verify skipped: {ve}", file=sys.stderr)
 
     except Exception as e:
         emit_error(f"Playwright fill failed: {e}")
         return 1
-    finally:
-        try:
-            b.close()
-        except Exception:
-            pass
 
     remaining = [r for r in failed_all if _field_key(r) not in filled_keys]
     skyvern_fields = [r for r in remaining if r["_why"] == "fill_failed" or r.get("required")]
