@@ -13,18 +13,15 @@ import os
 import sys
 import time
 
+from lib.config import RESULTS_DIR
+
 _DECLINE = ("prefer not", "decline", "not say", "rather not")
 _SALARY = ("salary", "compensation", "ctc", "expected pay", "pay rate", "desired pay")
 _LEGAL = ("authorize", "sponsor", "eligible to work", "right to work", "legally", "certify", "visa")
 
 
-def _results_dir():
-    base = os.environ.get("JI_HOME", os.path.expanduser("~/.ji"))
-    return os.path.join(base, "results")
-
-
 def _path(jid):
-    d = os.path.join(_results_dir(), str(jid))
+    d = os.path.join(RESULTS_DIR, str(jid))
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, "apply_audit.jsonl")
 

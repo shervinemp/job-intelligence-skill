@@ -20,9 +20,6 @@ FIELD_TYPE_HINTS = {
 }
 
 
-_PROFILE_ANSWER_CACHE = {}
-
-
 def field_format_hint(f, profile=None):
     hints = []
     ftype = (f.get("type") or "").lower()

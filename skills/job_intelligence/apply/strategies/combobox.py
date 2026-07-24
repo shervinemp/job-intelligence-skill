@@ -23,7 +23,7 @@ def _select_option(page, sel, ans, max_polls=10):
         time.sleep(0.3)
         result = page.evaluate(f"""() => {{
             const a = {json.dumps(ans)};
-            const input = document.querySelector('{sel}');
+            const input = document.querySelector({json.dumps(sel)});
             if (!input) return null;
             // Find the listbox: aria-owns → aria-controls → aria-describedby
             // (react-select v5) → whole document (portal-rendered typeaheads)
@@ -138,7 +138,7 @@ def fill(page, f, ans):
             kb.keyboard.type(type_text, delay=50)
             # Dispatch input event for typeaheads that listen for onChange
             page.evaluate(f"""() => {{
-                const el = document.querySelector('{sel}');
+                const el = document.querySelector({json.dumps(sel)});
                 if (el) el.dispatchEvent(new Event('input', {{bubbles: true}}));
             }}""")
         # Poll for visible options and click the best match
@@ -150,7 +150,7 @@ def fill(page, f, ans):
     # Clear leftover typed text on failure (not in finally — would wipe
     # a successful selection's input on some widgets)
     try:
-        page.evaluate(f"document.querySelector('{sel}')?.value = ''")
+        page.evaluate(f"document.querySelector({json.dumps(sel)})?.value = ''")
     except Exception:
         pass
 

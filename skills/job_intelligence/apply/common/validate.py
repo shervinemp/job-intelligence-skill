@@ -10,14 +10,11 @@ fill time (escalate on invalid) is a deliberate later step, gated on shadow-run
 data showing it doesn't break working fills.
 """
 import re
+from apply.common.resolve import normalize as _norm
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _URL = re.compile(r"^https?://", re.I)
 _NUM = re.compile(r"^-?\d+(\.\d+)?$")
-
-
-def _norm(s):
-    return re.sub(r"[^a-z0-9+#]+", " ", (s or "").lower()).strip()
 
 
 def value_matches_option(value, options):

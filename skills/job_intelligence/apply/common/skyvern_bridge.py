@@ -5,15 +5,12 @@ pointing to the local proxy on port 9000. The pipeline never launches
 a browser — Skyvern handles everything in its own Playwright instance.
 
 Usage:
-    from apply.common.skyvern_bridge import fill_form, submit_form, close_session
-    result = fill_form(url, answers)  # fills form, returns browser_session_id
-    result = submit_form(url, browser_session_id)
-    close_session(browser_session_id)
+    from apply.common.skyvern_bridge import fill_remaining, click_submit
+    result = fill_remaining(url, answers, filled_fields=[...])
+    result = click_submit(url, browser_session_id)
 """
 
 import asyncio
-import glob
-import json
 import os
 import subprocess
 import sys
@@ -21,8 +18,7 @@ import time
 import urllib.request
 import urllib.error
 
-RESULTS_DIR = os.environ.get("JI_HOME", os.path.join(os.path.expanduser("~"), ".ji"))
-RESULTS_DIR = os.path.join(RESULTS_DIR, "results")
+from lib.config import RESULTS_DIR
 
 
 def _fmt_answers(answers: dict) -> str:
@@ -33,37 +29,6 @@ def _fmt_answers(answers: dict) -> str:
             v = ", ".join(str(x) for x in v)
         lines.append(f"  - {k}: {v}")
     return "\n".join(lines)
-
-
-def _build_prompt(url: str, answers: dict, jid: str = "", submit: bool = False) -> str:
-    if submit:
-        return (
-            "Click the Submit Application or Submit button on this job application form. "
-            "If there is a Review step before Submit, click Review first, then Submit. "
-            "Complete the submission process. Do NOT fill any new fields."
-        )
-    parts = [
-        f"You are filling out a job application form at {url}.\n",
-        "Fields to fill (use ONLY these values, do not make up answers):",
-        _fmt_answers(answers),
-        "",
-        "Instructions:",
-        "1. Fill EVERY field listed above. For dropdown/combobox, click to open and select the matching option.",
-        "2. If the exact label isn't found, match by meaning (e.g. 'Country*' = country dropdown).",
-        "3. If no matching option exists in a dropdown, type the value directly.",
-        "4. Check required consent/checkbox fields.",
-        "5. If there is a Next/Continue button, click it and fill the next page too.",
-        "6. STOP before clicking Submit Application or Submit. Do NOT submit.",
-    ]
-    if jid:
-        rd = os.path.join(RESULTS_DIR, jid)
-        resumes = glob.glob(os.path.join(rd, "*Resume*.pdf"))
-        covers = glob.glob(os.path.join(rd, "*Cover*.pdf"))
-        if resumes:
-            parts.append(f"\nUpload resume from {resumes[0]} to the Resume/CV file input.")
-        if covers:
-            parts.append(f"Upload cover letter from {covers[0]} to the cover letter file input.")
-    return "\n".join(parts)
 
 
 def _run_async(coro, timeout=300):
@@ -92,11 +57,11 @@ def _server_alive() -> bool:
     try:
         req = urllib.request.Request("http://localhost:8000/openapi.json", method="GET")
         urllib.request.urlopen(req, timeout=2)
-        return True  # 200 OK
+        return True
     except urllib.error.HTTPError:
-        return True  # any HTTP response means the server is up
+        return True
     except Exception:
-        return False  # connection refused / timeout = not up
+        return False
 
 
 def _ensure_server():
@@ -108,7 +73,6 @@ def _ensure_server():
     global _SERVER_PROC
     if _server_alive():
         return
-    # Set LLM env vars so litellm routes OpenAI models to our local proxy
     env = os.environ.copy()
     env.setdefault("OPENAI_API_BASE", "http://localhost:9000/v1")
     env.setdefault("OPENAI_API_KEY", "sk-dummy")
@@ -123,7 +87,6 @@ def _ensure_server():
         [sys.executable, "-m", "skyvern", "run", "server"],
         env=env, stdout=open(log, "w"), stderr=subprocess.STDOUT,
     )
-    # Wait for startup
     for _ in range(30):
         if _server_alive():
             return
@@ -137,13 +100,12 @@ def _api_key() -> str:
     key = os.environ.get("SKYVERN_API_TOKEN", "")
     if key:
         return key
-    # Walk up from __file__ to find .env files
-    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../apply
     import re
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for env_path in [
-        os.path.join(_root, "..", "..", ".env"),           # skill root (parent of job_intelligence)
-        os.path.join(_root, "..", "job_intelligence", ".env"),  # nested package
-        os.path.join(_root, "..", ".env"),                  # skill root from apply dir
+        os.path.join(_root, "..", "..", ".env"),
+        os.path.join(_root, "..", "job_intelligence", ".env"),
+        os.path.join(_root, "..", ".env"),
     ]:
         env_path = os.path.normpath(env_path)
         if not os.path.exists(env_path):
@@ -174,6 +136,37 @@ def _chrome_cdp_url() -> str:
     except Exception as e:
         print(f"WARN: chrome_manager start failed: {e}", file=sys.stderr)
     return ""
+
+
+def _task_to_dict(task) -> dict:
+    """Extract common fields from a Skyvern task object."""
+    if task is None:
+        return {}
+    return {
+        "status": getattr(task, "status", "unknown"),
+        "details": getattr(task, "failure_reason", "") or str(task)[:300],
+        "run_id": getattr(task, "run_id", None),
+        "browser_session_id": getattr(task, "browser_session_id", None),
+    }
+
+
+async def _run_task(sk, *, prompt, url, max_steps=15, wait_for_completion=True,
+                    timeout=120000, data_extraction_schema=None,
+                    browser_session_id="", browser_address=""):
+    """Single entry point for all Skyvern task execution.
+    Replaces 5 duplicated async kwargs-building blocks."""
+    kwargs = dict(
+        prompt=prompt, url=url, max_steps=max_steps,
+        wait_for_completion=wait_for_completion, timeout=timeout,
+        model={"max_tokens": 4096}, proxy_location="NONE",
+    )
+    if data_extraction_schema:
+        kwargs["data_extraction_schema"] = data_extraction_schema
+    if browser_session_id:
+        kwargs["browser_session_id"] = browser_session_id
+    if browser_address:
+        kwargs["browser_address"] = browser_address
+    return await sk.run_task(**kwargs)
 
 
 def get_task(run_id: str) -> dict:
@@ -218,90 +211,18 @@ def fill_remaining(url: str, answers: dict, filled_fields: list[str] = None,
     sk = _client()
     cdp = _chrome_cdp_url()
 
-    async def run():
-        kwargs = dict(prompt=prompt, url=url, max_steps=max_steps,
-                      wait_for_completion=wait,
-                      model={"max_tokens": 4096},
-                      proxy_location="NONE")
-        if browser_session_id:
-            kwargs["browser_session_id"] = browser_session_id
-        if cdp:
-            kwargs["browser_address"] = cdp
-        return await sk.run_task(**kwargs)
-
-    if wait:
-        task = _run_async(run(), timeout=timeout + 30)
-        if task is None:
-            return {"status": "timed_out", "details": f"Skyvern fill_remaining did not complete within {timeout}s"}
-        return {
-            "status": getattr(task, "status", "unknown"),
-            "details": getattr(task, "failure_reason", "") or str(task)[:300],
-            "browser_session_id": getattr(task, "browser_session_id", None),
-            "run_id": getattr(task, "run_id", None),
-        }
-    else:
-        # Fire-and-forget: return run_id immediately for polling
-        task = _run_async(run(), timeout=timeout + 30)
-        run_id = getattr(task, "run_id", None) if task else None
-        return {
-            "status": "started",
-            "run_id": run_id,
-            "browser_session_id": getattr(task, "browser_session_id", None) if task else None,
-        }
-
-
-def verify_fields(url: str, answers: dict, browser_session_id: str = "",
-                  timeout: int = 120) -> dict:
-    """Use Skyvern's data extraction to read back field values and compare
-    against expected answers. Returns field-level match results."""
-    schema = {
-        "type": "object",
-        "properties": {k: {"type": "string"} for k in answers},
-    }
-    prompt = (
-        f"Read every visible form field on this page and return its current value."
-        f"\n\nExpected fields (return empty string if a field is not visible or empty):"
-        f"\n{_fmt_answers(answers)}"
+    task = _run_async(
+        _run_task(sk, prompt=prompt, url=url, max_steps=max_steps,
+                  wait_for_completion=wait, timeout=timeout * 1000,
+                  browser_session_id=browser_session_id, browser_address=cdp),
+        timeout=timeout + 30,
     )
-
-    sk = _client()
-    cdp = _chrome_cdp_url()
-
-    async def run():
-        kwargs = dict(prompt=prompt, url=url, max_steps=10,
-                      wait_for_completion=True, timeout=timeout * 1000,
-                      data_extraction_schema=schema,
-                      model={"max_tokens": 4096},
-                      proxy_location="NONE")
-        if browser_session_id:
-            kwargs["browser_session_id"] = browser_session_id
-        if cdp:
-            kwargs["browser_address"] = cdp
-        return await sk.run_task(**kwargs)
-
-    task = _run_async(run(), timeout=timeout + 30)
     if task is None:
-        return {"status": "timed_out"}
-    extracted = getattr(task, "extracted_information", {}) or {}
-    if isinstance(extracted, dict):
-        mismatches = {}
-        for field, expected in answers.items():
-            actual = extracted.get(field, "")
-            if str(actual).strip().lower() != str(expected).strip().lower():
-                mismatches[field] = {"expected": expected, "actual": actual}
-        return {
-            "status": getattr(task, "status", "unknown"),
-            "extracted": extracted,
-            "mismatches": mismatches,
-            "all_match": len(mismatches) == 0,
-            "run_id": getattr(task, "run_id", None),
-        }
-    return {
-        "status": getattr(task, "status", "unknown"),
-        "extracted": extracted,
-        "all_match": False,
-        "run_id": getattr(task, "run_id", None),
-    }
+        return {"status": "timed_out", "details": f"Skyvern fill_remaining did not complete within {timeout}s"}
+    d = _task_to_dict(task)
+    if not wait:
+        d["status"] = "started"
+    return d
 
 
 def click_submit(url: str, browser_session_id: str = "", timeout: int = 120) -> dict:
@@ -328,24 +249,15 @@ def _run_submit_action(url: str, prompt: str, browser_session_id: str = "",
                         timeout: int = 120) -> dict:
     sk = _client()
     cdp = _chrome_cdp_url()
-    async def run():
-        kwargs = dict(prompt=prompt, url=url, max_steps=15,
-                      wait_for_completion=True, timeout=timeout * 1000,
-                      model={"max_tokens": 4096},
-                      proxy_location="NONE")
-        if browser_session_id:
-            kwargs["browser_session_id"] = browser_session_id
-        if cdp:
-            kwargs["browser_address"] = cdp
-        return await sk.run_task(**kwargs)
-    task = _run_async(run(), timeout=timeout + 30)
+    task = _run_async(
+        _run_task(sk, prompt=prompt, url=url, max_steps=15,
+                  wait_for_completion=True, timeout=timeout * 1000,
+                  browser_session_id=browser_session_id, browser_address=cdp),
+        timeout=timeout + 30,
+    )
     if task is None:
         return {"status": "timed_out"}
-    return {
-        "status": getattr(task, "status", "unknown"),
-        "details": getattr(task, "failure_reason", "") or str(task)[:300],
-        "run_id": getattr(task, "run_id", None),
-    }
+    return _task_to_dict(task)
 
 
 class SkyvernExtraction:
@@ -355,22 +267,17 @@ class SkyvernExtraction:
     def extract_text(self, url: str, prompt: str, timeout: int = 120) -> dict | None:
         sk = _client()
         cdp = _chrome_cdp_url()
-        async def run():
-            kwargs = dict(prompt=prompt, url=url, max_steps=5,
-                          wait_for_completion=True, timeout=timeout * 1000,
-                          model={"max_tokens": 4096},
-                          proxy_location="NONE")
-            if cdp:
-                kwargs["browser_address"] = cdp
-            return await sk.run_task(**kwargs)
-        task = _run_async(run(), timeout=timeout + 30)
+        task = _run_async(
+            _run_task(sk, prompt=prompt, url=url, max_steps=5,
+                      wait_for_completion=True, timeout=timeout * 1000,
+                      browser_address=cdp),
+            timeout=timeout + 30,
+        )
         if task is None:
             return None
-        return {
-            "status": getattr(task, "status", "unknown"),
-            "extracted_text": str(getattr(task, "extracted_information", "") or ""),
-            "details": getattr(task, "failure_reason", "") or str(task)[:300],
-        }
+        d = _task_to_dict(task)
+        d["extracted_text"] = str(getattr(task, "extracted_information", "") or "")
+        return d
 
     def investigate_form(self, url: str, timeout: int = 180) -> dict | None:
         """Analyze a job application form and return structured field info.
@@ -408,22 +315,14 @@ class SkyvernExtraction:
         }
         sk = _client()
         cdp = _chrome_cdp_url()
-        async def run():
-            kwargs = dict(
-                prompt=prompt, url=url, max_steps=10,
-                wait_for_completion=True, timeout=timeout * 1000,
-                data_extraction_schema=schema,
-                model={"max_tokens": 4096},
-                proxy_location="NONE",
-            )
-            if cdp:
-                kwargs["browser_address"] = cdp
-            return await sk.run_task(**kwargs)
-        task = _run_async(run(), timeout=timeout + 30)
+        task = _run_async(
+            _run_task(sk, prompt=prompt, url=url, max_steps=10,
+                      wait_for_completion=True, timeout=timeout * 1000,
+                      data_extraction_schema=schema, browser_address=cdp),
+            timeout=timeout + 30,
+        )
         if task is None:
             return None
-        return {
-            "status": getattr(task, "status", "unknown"),
-            "fields": getattr(task, "extracted_information", {}),
-            "run_id": getattr(task, "run_id", None),
-        }
+        d = _task_to_dict(task)
+        d["fields"] = getattr(task, "extracted_information", {})
+        return d

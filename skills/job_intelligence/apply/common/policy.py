@@ -24,16 +24,16 @@ _DEFAULTS = {
     "auto_submit_min_confidence": 0.9,
     "never_auto": ["freetext"],
     "ttl_days": 90,
-    "paused": False,            # ADR-001 Phase 4: kill-switch — block all submits
-    "use_mappings": False,      # ADR-001 Phase 3: enable the field→meaning mapping store
-    "enforce_validation": False,  # ADR-001 Phase 4: escalate values failing validate_value at fill
-    "gate_submit": False,       # ADR-001 Phase 4: hold submit when the job has invalid fields
+    "paused": False,
+    "use_mappings": False,
+    "enforce_validation": False,
+    "gate_submit": False,
 }
 
 
 def _policy_path():
-    base = os.environ.get("JI_HOME", os.path.expanduser("~/.ji"))
-    return os.path.join(base, "apply_policy.json")
+    from lib.config import JI_HOME
+    return os.path.join(os.environ.get("JI_HOME") or JI_HOME, "apply_policy.json")
 
 
 def load_policy():

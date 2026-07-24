@@ -30,7 +30,7 @@ from .db import (
     desc_get, app_list, app_get,
     setting_get,
 )
-from .config import STATE_PATH, REGISTRY_PATH
+from .config import STATE_PATH, REGISTRY_PATH, atomic_write_json
 
 
 def cmd_shell():
@@ -252,16 +252,10 @@ def cmd_archive():
         except (FileNotFoundError, json.JSONDecodeError):
             pass
         archive.update(stale)
-        tmp = archive_path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(archive, f)
-        os.replace(tmp, archive_path)
+        atomic_write_json(archive_path, archive)
         for jid in stale:
             del data[jid]
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f)
-        os.replace(tmp, path)
+        atomic_write_json(path, data)
         print(f"  {label}: archived {len(stale)} entries ({len(data)} remain)", file=sys.stderr)
         total += len(stale)
     if total:

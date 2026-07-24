@@ -5,7 +5,7 @@ Uses persistent DOM attribute (data-opencode-jid) for cross-process page identit
 import json, os, time
 from urllib.parse import urlparse
 
-from lib.config import REGISTRY_PATH
+from lib.config import REGISTRY_PATH, atomic_write_json
 from apply.common.page_helpers import tag_page, read_page_tag
 
 
@@ -18,11 +18,7 @@ def _load():
 
 
 def _save(r):
-    os.makedirs(os.path.dirname(REGISTRY_PATH), exist_ok=True)
-    tmp = REGISTRY_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(r, f, indent=2)
-    os.replace(tmp, REGISTRY_PATH)
+    atomic_write_json(REGISTRY_PATH, r)
 
 
 def _fingerprint(page):

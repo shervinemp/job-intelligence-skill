@@ -18,6 +18,8 @@ import os
 import re
 from typing import Optional
 
+from lib.config import STATE_DIR
+
 
 # ─── Resolution result ───────────────────────────────────────────────
 
@@ -39,11 +41,9 @@ def normalize(label: str) -> str:
 
 # ─── Ephemeral answer builder ───────────────────────────────────────
 
-# String-valued profile facts resolved by exact (normalized) label match. Kept in
-# sync with act.py's _KNOWN_PROFILE_KEYS (the typo-detection set), minus the
-# boolean/parameterized facts (authorized_to_work, requires_sponsorship) that need
-# yes/no + country transforms — those are deferred to the mapping layer (ADR-001
-# Phase 3), not resolved here.
+# String-valued profile facts resolved by exact (normalized) label match.
+# Boolean/parameterized facts (authorized_to_work, requires_sponsorship) need
+# yes/no + country transforms — those use the static answers map below.
 _PROFILE_KEYS = {
     "first_name", "last_name", "email", "phone",
     "linkedin_url", "github_url", "portfolio_url", "website",
@@ -126,6 +126,18 @@ _AUTOCOMPLETE_MAP = {
     "url": "website",
 }
 
+_ATTR_MAP = {
+    "first_name": "first_name", "firstname": "first_name",
+    "last_name": "last_name", "lastname": "last_name", "surname": "last_name",
+    "email": "email", "phone": "phone", "tel": "phone",
+    "country": "country", "city": "city", "state": "state",
+    "location": "location", "address": "address", "zip": "zip",
+    "postalcode": "zip", "postal_code": "zip",
+    "linkedin": "linkedin_url", "github": "github_url",
+    "website": "website", "portfolio": "portfolio_url",
+    "resume": "resume_path",
+}
+
 
 def _autocomplete_key(token: str) -> Optional[str]:
     """'section-blue shipping tel' → 'tel' → 'phone'."""
@@ -174,17 +186,6 @@ def resolve(
     # Step 1.6: name/id attribute semantics — ATS vendors use consistent
     # attribute names (first_name, last_name, email, phone, country, etc.)
     # that are more reliable than visible labels. Mirrors Jobright's pattern.
-    _ATTR_MAP = {
-        "first_name": "first_name", "firstname": "first_name",
-        "last_name": "last_name", "lastname": "last_name", "surname": "last_name",
-        "email": "email", "phone": "phone", "tel": "phone",
-        "country": "country", "city": "city", "state": "state",
-        "location": "location", "address": "address", "zip": "zip",
-        "postalcode": "zip", "postal_code": "zip",
-        "linkedin": "linkedin_url", "github": "github_url",
-        "website": "website", "portfolio": "portfolio_url",
-        "resume": "resume_path",
-    }
     for attr_val in (field_name, field_id):
         if not attr_val:
             continue
@@ -302,10 +303,7 @@ _DEFAULT_ANSWERS = [
 
 # ─── Learned label→value mappings (lean successor of mappings.py) ─────
 
-_LEARNED_PATH = os.path.join(
-    os.environ.get("JI_HOME", os.path.join(os.path.expanduser("~"), ".ji")),
-    "state", "field_mappings.json",
-)
+_LEARNED_PATH = os.path.join(STATE_DIR, "field_mappings.json")
 _learned_cache = None
 
 

@@ -1,0 +1,478 @@
+"""act/helpers.py — Shared helpers for all act commands.
+
+Chrome lifecycle, DOM interaction (JS evaluation), field probing,
+fill dispatch, file upload, validation scanning, submit detection,
+profile loading, answer dict construction, vision verification.
+"""
+import json, os, sys, time
+
+from lib.config import PROFILE_PATH, JI_HOME
+from apply.common.output import emit_next, emit_status, emit_error
+from apply.common.page_helpers import (
+    load_state, save_state, read_page, page_text, find_page,
+    tag_page, check_applied_signal, check_captcha, handle_captcha,
+    scan_actions, mark_applied, handle_session_timeout,
+)
+from apply.common.resolve import resolve, learn_mapping
+from apply.common.signals import has_success_text
+
+RESULTS_DIR = os.path.join(JI_HOME, "results")
+
+
+def _load_profile():
+    try:
+        with open(PROFILE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _chrome():
+    from lib.chrome_manager import connect, start
+    if not start():
+        emit_error("could not start Chrome")
+        sys.exit(1)
+    b, ctx = connect()
+    if not ctx:
+        emit_error("could not connect to Chrome")
+        sys.exit(1)
+    try:
+        ctx.on("page", lambda pg: _wire_dialogs(pg))
+    except Exception:
+        pass
+    for pg in ctx.pages:
+        _wire_dialogs(pg)
+    return b, ctx
+
+
+def _wire_dialogs(page):
+    try:
+        page.on("dialog", lambda d: d.accept() if not d.type else
+                d.accept() if d.type == "confirm" else d.dismiss())
+    except Exception:
+        pass
+
+
+def _page_for(ctx, state=None):
+    if state:
+        try:
+            p = find_page(ctx, state)
+            if p is not None:
+                return p
+        except Exception:
+            pass
+    pages = [p for p in ctx.pages if "about:blank" not in p.url and "chrome-error" not in p.url]
+    if pages:
+        return pages[-1]
+    return ctx.new_page()
+
+
+def _host(u):
+    from urllib.parse import urlparse
+    try:
+        return urlparse(u or "").netloc.lower().split(":")[0]
+    except Exception:
+        return ""
+
+
+_NEXT_KEYWORDS_JS = ["next", "continue", "continue to review", "review",
+                     "review application", "next step", "save and continue"]
+
+_ERROR_MARKERS = (
+    "upstream connect error", "bad gateway", "service unavailable",
+    "404 not found", "page not found", "access denied", "403 forbidden",
+    "this site can't", "err_connection", "err_ssl", "application error",
+)
+
+
+def _is_error_page(page):
+    try:
+        text = (page_text(page) or "").strip().lower()
+    except Exception:
+        return False
+    if len(text) > 400:
+        return False
+    return any(m in text for m in _ERROR_MARKERS)
+
+
+def _url_fallbacks(url, state_url=""):
+    from apply.common.registry import resolve as resolve_registry
+    out = []
+    for u in (url, state_url):
+        if not u:
+            continue
+        reg = resolve_registry(u)
+        if reg:
+            for alt in reg.rewrite_urls(u):
+                if alt not in out:
+                    out.append(alt)
+    return out
+
+
+def _wait_for_fields(page, timeout=8):
+    for _ in range(timeout):
+        try:
+            n = page.evaluate("""() => document.querySelectorAll(
+                'input:not([type=hidden]):not([type=submit]), select, textarea'
+            ).length""")
+            if n:
+                return True
+        except Exception:
+            return False
+        time.sleep(1)
+    return False
+
+
+def _find_next_button(page):
+    import json as _json
+    try:
+        cands = page.evaluate("""(kws) => {
+            const out = [];
+            const all = document.querySelectorAll('button, a, [role="button"], input[type=submit]');
+            for (const el of all) {
+                if (el.offsetParent === null || el.disabled) continue;
+                if (el.closest('nav, header, footer, [role=navigation], [role=banner], [role=contentinfo]')) continue;
+                const t = ((el.textContent || el.value || '')).trim().toLowerCase().replace(/\\s+/g, ' ');
+                if (!t || t.length > 30) continue;
+                let score = 0;
+                for (const kw of kws) {
+                    if (t === kw) score = Math.max(score, 4);
+                    else if (t.startsWith(kw)) score = Math.max(score, 3);
+                }
+                if (score >= 3) out.push({text: t.slice(0, 30), score});
+            }
+            out.sort((a, b) => b.score - a.score);
+            return out;
+        }""", _NEXT_KEYWORDS_JS)
+        return cands[0] if cands else None
+    except Exception:
+        return None
+
+
+_JUNK_TYPES = {"range", "search", "hidden", "submit", "button", "reset"}
+_JUNK_LABEL_KW = ("progress", "scrubber", "search", "subscribe", "newsletter",
+                  "volume", "playback", "password", "captcha")
+
+
+def _is_junk_field(f):
+    t = (f.get("type") or "").lower()
+    if t in _JUNK_TYPES:
+        return True
+    lbl = (f.get("label") or "").lower()
+    return any(k in lbl for k in _JUNK_LABEL_KW)
+
+
+def _click_apply_button(page):
+    try:
+        return bool(page.evaluate("""() => {
+            const kws = ['apply for this job', 'apply now', 'start application',
+                         'apply to this', 'apply online', 'apply'];
+            const all = Array.from(document.querySelectorAll('button, a, [role="button"]'))
+                .filter(el => el.offsetParent !== null);
+            for (const kw of kws) {
+                for (const el of all) {
+                    const t = (el.textContent || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+                    if (t === kw || t.startsWith(kw)) { el.click(); return true; }
+                }
+            }
+            return false;
+        }"""))
+    except Exception:
+        return False
+
+
+def _probe_form(page, reg, jid, allow_vision=True):
+    from apply.common import inspector as _insp
+    orig = _insp._PROBE_STRATEGIES
+    if not allow_vision:
+        _insp._PROBE_STRATEGIES = [s for s in orig if s[0] != "vision"]
+    try:
+        pr = _insp.probe(page, registry_config=reg, jid=jid)
+        fields = [f for f in (pr.fields or []) if not _is_junk_field(f)]
+        if fields:
+            pr.fields = fields
+            if pr.strategy == "iframe":
+                srcs = getattr(pr, "iframe_srcs", []) or []
+                src = next((s for s in srcs if s and "http" in s), "")
+                if src:
+                    print(f"  Form lives in an iframe — navigating directly: {src[:90]}", file=sys.stderr)
+                    try:
+                        page.goto(src, wait_until="domcontentloaded", timeout=30000)
+                        time.sleep(2)
+                        pr = _insp.probe(page, registry_config=reg, jid=jid)
+                        pr.fields = [f for f in (pr.fields or []) if not _is_junk_field(f)]
+                    except Exception:
+                        pass
+            return pr
+        if _click_apply_button(page):
+            time.sleep(2)
+            pr2 = _insp.probe(page, registry_config=reg, jid=jid)
+            pr2.fields = [f for f in (pr2.fields or []) if not _is_junk_field(f)]
+            return pr2
+        pr.fields = []
+        return pr
+    finally:
+        _insp._PROBE_STRATEGIES = orig
+
+
+def _set_files_any_frame(page, sel, path):
+    try:
+        page.set_input_files(sel, path)
+        return True
+    except Exception:
+        pass
+    for fr in page.frames:
+        if fr == page.main_frame:
+            continue
+        try:
+            fr.set_input_files(sel, path)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _dismiss_confirm_modal(page):
+    try:
+        page.evaluate("""() => {
+            const kws = ['yes', 'confirm', 'submit', 'ok', 'sure', 'continue'];
+            const modals = document.querySelectorAll('[role="dialog"], .modal, [class*="confirm"], [class*="popup"]');
+            for (const m of modals) {
+                if (m.offsetParent === null) continue;
+                for (const btn of m.querySelectorAll('button, a, [role="button"]')) {
+                    const t = (btn.textContent || '').trim().toLowerCase();
+                    if (kws.includes(t) || kws.some(k => t.startsWith(k))) {
+                        btn.click();
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }""")
+    except Exception:
+        pass
+
+
+def _get_validation_errors(page):
+    try:
+        return page.evaluate("""() => {
+            const sels = '[role="alert"], .field-error, .error-message, [class*="error"]:not([class*="error-icon"]), .form-error, .invalid-feedback';
+            const seen = new Set();
+            const out = [];
+            for (const el of document.querySelectorAll(sels)) {
+                if (el.offsetParent === null) continue;
+                const t = (el.textContent || '').trim();
+                if (!t || t.length > 200 || seen.has(t)) continue;
+                seen.add(t);
+                out.push(t);
+            }
+            return out.slice(0, 15);
+        }""") or []
+    except Exception:
+        return []
+
+
+def _empty_required(page):
+    try:
+        return int(page.evaluate("""() => {
+            let n = 0;
+            for (const el of document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea')) {
+                if (el.offsetParent === null) continue;
+                if (!(el.required || el.getAttribute('aria-required') === 'true')) continue;
+                if (el.type === 'checkbox') { if (!el.checked) n++; continue; }
+                if (el.getAttribute('role') === 'combobox') {
+                    const scope = el.closest('.select__control') || el.parentElement;
+                    if (scope && scope.querySelector('.select__single-value')) continue;
+                    const owns = el.getAttribute('aria-owns') || el.getAttribute('aria-controls');
+                    if (owns) {
+                        const lb = document.getElementById(owns);
+                        if (lb && lb.querySelector('[aria-selected="true"]')) continue;
+                    }
+                }
+                if (!el.value) n++;
+            }
+            return n;
+        }""") or 0)
+    except Exception:
+        return 0
+
+
+def _check_submit_success(ctx, page, pages_before_ids):
+    if check_applied_signal(page) or has_success_text(page_text(page) or ""):
+        return True, page
+    new_pages = [p for p in ctx.pages if id(p) not in pages_before_ids
+                 and "about:blank" not in p.url]
+    for p in new_pages:
+        try:
+            if check_applied_signal(p) or has_success_text(page_text(p) or ""):
+                return True, p
+        except Exception:
+            continue
+    return False, None
+
+
+def _click_action(page, text):
+    try:
+        return bool(page.evaluate("""(t) => {
+            const all = document.querySelectorAll('button, a, [role="button"]');
+            const vis = Array.from(all).filter(el => el.offsetParent !== null && !el.disabled);
+            for (const el of vis) {
+                if ((el.textContent || '').trim().toLowerCase() === t) { el.click(); return true; }
+            }
+            for (const el of vis) {
+                if ((el.textContent || '').trim().toLowerCase().includes(t)) { el.click(); return true; }
+            }
+            return false;
+        }""", (text or "").strip().lower()))
+    except Exception:
+        return False
+
+
+def _field_key(f):
+    sel = f.get("_sel") or f.get("selector") or ""
+    if sel:
+        return sel
+    return (f.get("label", ""), f.get("id", ""), f.get("name", ""))
+
+
+def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list[dict], list[dict]]:
+    from apply.strategies.dispatch import field_deterministic
+
+    filled = []
+    failed = []
+
+    state = load_state()
+    jid = state.get("jid", "")
+
+    resume_path = None
+    cover_path = None
+    if jid:
+        rd = os.path.join(RESULTS_DIR, jid)
+        import glob
+        resumes = glob.glob(os.path.join(rd, "*Resume*.pdf"))
+        covers = glob.glob(os.path.join(rd, "*Cover*.pdf"))
+        if resumes:
+            resume_path = resumes[0]
+        if covers:
+            cover_path = covers[0]
+
+    for f in fields:
+        label = f.get("label", "").strip()
+        if not label:
+            continue
+
+        tag = (f.get("tag") or "").lower()
+        ftype = (f.get("type") or "").lower()
+        lc = label.lower()
+        if (tag == "input" and (f.get("accept") or ftype == "file")) or "resume" in lc or "cv" in lc or "cover" in lc:
+            ident = f"{lc} {(f.get('id') or '').lower()} {(f.get('name') or '').lower()}"
+            path = cover_path if "cover" in ident else resume_path
+            if path and os.path.exists(path):
+                try:
+                    sel = f.get("_sel") or f.get("selector") or ""
+                    if not sel:
+                        from apply.steps.probe import resolve_selector
+                        sel = resolve_selector(page, f) or ""
+                    if sel and _set_files_any_frame(page, sel, path):
+                        filled.append({"label": label, "key": _field_key(f)})
+                        continue
+                    print(f"  UPLOAD_FAIL: {label}", file=sys.stderr)
+                except Exception as ue:
+                    print(f"  UPLOAD_FAIL: {label} — {str(ue)[:120]}", file=sys.stderr)
+
+        res = resolve(label, profile, answers_override,
+                      autocomplete=f.get("autocomplete", ""),
+                      field_name=f.get("name", ""),
+                      field_id=f.get("id", ""))
+        ans = res.value
+        if ans is None:
+            if tag == "input" and ftype == "checkbox" and os.environ.get("JI_AUTO_CONSENT") == "1":
+                ans = "true"
+            else:
+                failed.append({**f, "_why": "no_answer"})
+                continue
+
+        try:
+            if field_deterministic(page, f, ans):
+                filled.append({"label": label, "key": _field_key(f)})
+                if res.provenance == "answers_override":
+                    learn_mapping(label, ans)
+                if jid:
+                    from apply.common.audit import log_field
+                    log_field(jid, label, str(ans), res.provenance, filled=True)
+            else:
+                failed.append({**f, "_why": "fill_failed", "attempted": str(ans)[:50]})
+                if jid:
+                    from apply.common.audit import log_field
+                    log_field(jid, label, str(ans), res.provenance, filled=False, reason="fill_failed")
+        except Exception:
+            failed.append({**f, "_why": "fill_failed", "attempted": str(ans)[:50]})
+
+    return filled, failed
+
+
+def _verify_with_ask_api(page, answers: dict) -> dict:
+    try:
+        from lib.ask_api import available, ask_bytes
+        from apply.common.inspect_lib import form_jpeg
+        if not available():
+            return {"ok": False, "reason": "ask_api not available"}
+
+        img_bytes = form_jpeg(page)
+        prompt_lines = ["List every visible form field and its current value. Return as 'label: value' lines."]
+        for k in answers:
+            prompt_lines.append(f"  {k}: <expected: {answers[k]}>")
+        prompt = "\n".join(prompt_lines)
+
+        reply, err = ask_bytes(img_bytes, prompt)
+        if err:
+            return {"ok": False, "reason": str(err)}
+        text = str(reply or "")
+        mismatches = []
+        for k, expected in answers.items():
+            if k.lower() in text.lower():
+                pass
+            else:
+                mismatches.append({"field": k, "expected": expected})
+        return {
+            "ok": len(mismatches) == 0,
+            "mismatches": mismatches,
+            "vision_text": text[:200],
+        }
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
+def _detect_submit_button(page) -> str | None:
+    candidates = scan_actions(page, ["submit", "submit application", "send application", "apply"])
+    if candidates:
+        for c in candidates:
+            if not c.get("disabled"):
+                return c.get("text", "")
+    try:
+        buttons = page.evaluate("""() => {
+            const all = document.querySelectorAll('button');
+            return Array.from(all).filter(b => b.offsetParent !== null).map(b => b.textContent.trim().toLowerCase());
+        }""")
+        for b in buttons:
+            if b in ("submit", "submit application", "send", "send application"):
+                return b
+    except Exception:
+        pass
+    return None
+
+
+def _build_ans_dict(profile: dict, answers_override: dict = None) -> dict:
+    result = {}
+    if isinstance(profile, dict):
+        result.update(profile.get("answers", {}))
+    if answers_override:
+        result.update(answers_override)
+    for key in ("first_name", "last_name", "email", "phone", "full_name",
+                "city", "state", "country", "linkedin_url", "github_url",
+                "website", "headline"):
+        if key not in result:
+            val = profile.get(key) or profile.get(key.upper()) or profile.get(key.title())
+            if val:
+                result[key.replace("_", " ").title()] = val
+    return result

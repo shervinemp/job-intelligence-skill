@@ -21,8 +21,6 @@ SUCCESS_STRICT = (
     "thank you for applying",
 )
 
-SUCCESS_BROAD = SUCCESS_STRICT + ("thank you for",)
-
 
 def has_success_text(text, signals=SUCCESS_STRICT):
     """True if any signal phrase appears in the (case-folded) text."""

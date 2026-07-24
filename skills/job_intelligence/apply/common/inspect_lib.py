@@ -12,9 +12,6 @@ import os, sys
 from urllib.parse import urlparse
 
 from lib.config import JI_HOME
-from apply.common.inspector import probe as probe_page, probe_all
-from apply.common.registry import resolve as resolve_registry
-from apply.common.page_helpers import read_page
 
 
 def domain(url):
