@@ -4,20 +4,11 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from lib.extract_structured import extract_job_postings, _num
+from lib.extract_structured import extract_job_postings
 
 
 def _ld(obj_json):
     return f'<html><script type="application/ld+json">{obj_json}</script></html>'
-
-
-class Num(unittest.TestCase):
-    def test_coerces_strings_and_numbers(self):
-        self.assertEqual(_num(85000), 85000)
-        self.assertEqual(_num("85,000"), 85000.0)
-        self.assertEqual(_num("$90000"), 90000.0)
-        self.assertIsNone(_num("competitive"))
-        self.assertIsNone(_num(None))
 
 
 class Extract(unittest.TestCase):

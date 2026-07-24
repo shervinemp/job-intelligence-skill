@@ -15,8 +15,13 @@ def extract_job_postings(html):
             data = json.loads(m.group(1).strip())
         except (json.JSONDecodeError, AttributeError):
             continue
-        # Handle @graph wrapper
-        items = data if isinstance(data, list) else [data]
+        # Handle @graph wrapper: {"@context":..., "@graph":[...]}
+        if isinstance(data, dict) and "@graph" in data:
+            items = data["@graph"] if isinstance(data["@graph"], list) else [data["@graph"]]
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = [data]
         for item in items:
             if isinstance(item, dict) and item.get("@type") == "JobPosting":
                 result = {}
@@ -43,8 +48,16 @@ def extract_job_postings(html):
                         max_v = val.get("maxValue")
                         currency = val.get("currency", salary.get("currency", ""))
                         if min_v:
+                            try:
+                                min_v = int(min_v) if not isinstance(min_v, float) else min_v
+                            except (ValueError, TypeError):
+                                pass
                             result["salary"] = f"${min_v:,}"
                             if max_v:
+                                try:
+                                    max_v = int(max_v) if not isinstance(max_v, float) else max_v
+                                except (ValueError, TypeError):
+                                    pass
                                 result["salary"] += f" - ${max_v:,}"
                             if currency:
                                 result["salary"] += f" {currency}"

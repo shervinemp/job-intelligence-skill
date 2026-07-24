@@ -34,8 +34,24 @@ def _path(jid, ext, prefix=""):
 def page_jpeg(page, full=True):
     """Capture page screenshot as JPEG bytes. No file I/O.
     full=True captures the entire scrollable page (for inspect/debug).
-    full=False captures only the viewport (for vision checks ΓÇö avoids API downscaling)."""
+    full=False captures only the viewport (for vision checks — avoids API downscaling)."""
     return page.screenshot(type="jpeg", quality=80, full_page=full)
+
+
+def form_jpeg(page):
+    """Capture form-scoped screenshot as JPEG bytes. Smaller than full-page —
+    avoids API downscaling and focuses vision on field values.
+    Tries <form> element first, falls back to viewport to preserve context
+    (success messages may appear outside or replace the form)."""
+    try:
+        form = page.query_selector("form")
+        if form:
+            box = form.bounding_box()
+            if box and box["height"] > 0 and box["width"] > 0:
+                return form.screenshot(type="jpeg", quality=80)
+    except Exception:
+        pass
+    return page.screenshot(type="jpeg", quality=80, full_page=False)
 
 
 def page_html(page):

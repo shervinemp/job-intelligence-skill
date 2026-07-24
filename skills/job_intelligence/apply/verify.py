@@ -257,7 +257,7 @@ def run(jid):
     except Exception as e:
         print(f"  CHROME_VERIFY_SKIP: {e}", file=sys.stderr)
 
-    # Fallback: Skyvern verify
+    # Fallback: Skyvern verify (only if ask_api vision already failed above)
     try:
         if _skyvern_confirms(None, jid, state):
             mark_applied(jid)

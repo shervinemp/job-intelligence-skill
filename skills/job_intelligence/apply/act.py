@@ -334,6 +334,23 @@ def _empty_required(page):
         return 0
 
 
+def _check_submit_success(ctx, page, pages_before_ids):
+    """Check for submit success across all pages — the current page AND any
+    new tabs that opened (target='_blank' confirmations). Returns
+    (success: bool, page_with_signal or None)."""
+    if check_applied_signal(page) or has_success_text(page_text(page) or ""):
+        return True, page
+    new_pages = [p for p in ctx.pages if id(p) not in pages_before_ids
+                 and "about:blank" not in p.url]
+    for p in new_pages:
+        try:
+            if check_applied_signal(p) or has_success_text(page_text(p) or ""):
+                return True, p
+        except Exception:
+            continue
+    return False, None
+
+
 def _click_action(page, text):
     """Click a button/link by visible text (exact, then contains)."""
     try:
@@ -453,11 +470,11 @@ def _verify_with_ask_api(page, answers: dict) -> dict:
     Returns {ok: bool, mismatches: list}."""
     try:
         from lib.ask_api import available, ask_bytes
-        from apply.common.inspect_lib import page_jpeg
+        from apply.common.inspect_lib import form_jpeg
         if not available():
             return {"ok": False, "reason": "ask_api not available"}
 
-        img_bytes = page_jpeg(page, full=False)
+        img_bytes = form_jpeg(page)
         prompt_lines = ["List every visible form field and its current value. Return as 'label: value' lines."]
         for k in answers:
             prompt_lines.append(f"  {k}: <expected: {answers[k]}>")
@@ -842,8 +859,43 @@ def cmd_investigate(jid):
         except Exception:
             pass
 
-    # 0 fields from DOM — pay for one Skyvern investigation
-    print(f"  DOM probe found nothing — running Skyvern investigator (slow, one task)...", file=sys.stderr)
+    # 0 fields from DOM — try ask_api vision first (1 LLM call vs Skyvern's
+    # 10-step agent loop). Screenshot + structured extraction prompt.
+    from lib.ask_api import available as _vision_available
+    if _vision_available():
+        from lib.ask_api import ask_bytes
+        from apply.common.inspect_lib import page_jpeg, form_jpeg
+        print(f"  DOM probe found nothing — analyzing with vision (1 LLM call)...", file=sys.stderr)
+        try:
+            img = form_jpeg(page)
+            reply, err = ask_bytes(
+                img,
+                "Analyze this job application form. List every visible form field "
+                "as 'LABEL | TYPE | REQUIRED | OPTIONS' lines. "
+                "Also state: is this multi-page? What buttons exist (Next, Submit, etc.)?",
+                max_tokens=2048,
+            )
+            if not err and reply:
+                rd = os.path.join(RESULTS_DIR, jid)
+                os.makedirs(rd, exist_ok=True)
+                rpt_path = os.path.join(rd, "investigate_report.json")
+                import json as _json
+                with open(rpt_path, "w", encoding="utf-8") as fh:
+                    _json.dump({"url": url, "method": "ask_api", "analysis": reply}, fh, indent=2)
+                state["investigate_report"] = rpt_path
+                save_state(state)
+                print(f"  Report saved: {rpt_path}", file=sys.stderr)
+                print(f"  Vision analysis:\n{reply[:500]}", file=sys.stderr)
+                emit_status("investigated", f"report at {rpt_path}")
+                emit_next("act --fill")
+                return 0
+            if err:
+                print(f"  VISION_FAIL: {err} — falling back to Skyvern", file=sys.stderr)
+        except Exception as ve:
+            print(f"  VISION_FAIL: {ve} — falling back to Skyvern", file=sys.stderr)
+
+    # Vision unavailable or failed — Skyvern investigator as last resort
+    print(f"  Running Skyvern investigator (slow, 10-step agent)...", file=sys.stderr)
     from apply.common.skyvern_bridge import SkyvernExtraction
     report = SkyvernExtraction().investigate_form(url, timeout=300)
     if not report:
@@ -914,6 +966,7 @@ def cmd_submit(jid, confirm=False):
         # Playwright-filled values on ATSes without server-side persistence.
         # A fast local pass restores them — idempotent and LLM-free.
         try:
+            from apply.common.registry import resolve as resolve_registry
             profile = _load_profile()
             pr = _probe_form(page, resolve_registry(page.url), jid, allow_vision=False)
             fields = pr.fields or []
@@ -928,23 +981,40 @@ def cmd_submit(jid, confirm=False):
             print(f"  Re-fill skipped: {re_}", file=sys.stderr)
 
         submit_text = _detect_submit_button(page)
+        clicked = False
         if submit_text:
             print(f"  Found submit button: '{submit_text}'", file=sys.stderr)
             try:
                 page.click(f'button:text("{submit_text}")')
+                clicked = True
             except Exception:
                 try:
                     page.click(f'text="{submit_text}"')
+                    clicked = True
                 except Exception:
-                    pass
-            time.sleep(3)
+                    print(f"  Could not click submit button via Playwright", file=sys.stderr)
+
+        if clicked:
+            # Wait for page response — not a fixed sleep. domcontentloaded
+            # catches same-tab navigation; networkidle catches async updates.
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+            try:
+                page.wait_for_load_state("networkidle", timeout=3000)
+            except Exception:
+                pass
 
             # Dismiss custom (non-native) confirmation modals some ATSes show
             _dismiss_confirm_modal(page)
             time.sleep(1)
 
-            # Check if submit succeeded
-            if check_applied_signal(page) or has_success_text(page_text(page) or ""):
+            # Check if submit succeeded — current page AND new tabs
+            # (target=_blank confirmations open in a new tab we'd otherwise miss)
+            pages_before = {id(p) for p in ctx.pages}
+            success, success_page = _check_submit_success(ctx, page, pages_before)
+            if success:
                 mark_applied(jid)
                 emit_status("submitted", "Playwright clicked submit")
                 emit_next("verify")
@@ -970,22 +1040,53 @@ def cmd_submit(jid, confirm=False):
                     page.click(f'button:text("{next_btn}")')
                 except Exception:
                     pass
-                time.sleep(3)
-                if check_applied_signal(page) or has_success_text(page_text(page) or ""):
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=10000)
+                except Exception:
+                    pass
+                success, _ = _check_submit_success(ctx, page, pages_before)
+                if success:
                     mark_applied(jid)
                     emit_status("submitted", "Playwright review->submit")
                     emit_next("verify")
                     return 0
 
-        # Phase 2: Skyvern click submit
-        print(f"  Playwright could not confirm submit — using Skyvern", file=sys.stderr)
-        from apply.common.skyvern_bridge import click_submit
-        result = click_submit(url=page.url, browser_session_id=browser_session_id, timeout=180)
-        if result.get("status") == "completed":
-            mark_applied(jid)
-            emit_status("submitted", "Skyvern clicked submit")
-            emit_next("verify")
-            return 0
+            # DOM signals inconclusive — try ask_api vision (1 LLM call)
+            # before falling back to Skyvern (15-step agent loop)
+            try:
+                from lib.ask_api import available, ask_bytes
+                if available():
+                    from apply.common.inspect_lib import page_jpeg
+                    img = page_jpeg(page, full=False)
+                    reply, err = ask_bytes(
+                        img,
+                        "Did this job application submit successfully? "
+                        "Look for: confirmation message, thank you text, "
+                        "application ID, success indicator. "
+                        "Answer only YES or NO.",
+                    )
+                    if not err and (reply or "").strip().lower().startswith("yes"):
+                        mark_applied(jid)
+                        emit_status("submitted", "vision confirmed via ask_api")
+                        emit_next("verify")
+                        return 0
+                    if err:
+                        print(f"  VISION_SKIP: {err}", file=sys.stderr)
+            except Exception as ve:
+                print(f"  VISION_SKIP: {ve}", file=sys.stderr)
+
+        # Phase 2: Skyvern click submit — only when Playwright couldn't click
+        # (button not found or click failed), NOT when it clicked but we
+        # couldn't confirm. That's a verification gap, not a click failure.
+        if not clicked:
+            print(f"  Playwright could not click submit — using Skyvern", file=sys.stderr)
+            from apply.common.skyvern_bridge import click_submit
+            result = click_submit(url=page.url, browser_session_id=browser_session_id, timeout=180)
+            if result.get("status") == "completed":
+                mark_applied(jid)
+                emit_status("submitted", "Skyvern clicked submit")
+                emit_next("verify")
+                return 0
 
         emit_status("unknown", "submit attempts inconclusive — check manually")
         emit_next("verify")
@@ -1018,7 +1119,7 @@ def cmd_inspect(jid):
             print(f"  GOTO_ERR: {e}", file=sys.stderr)
 
     from apply.common.inspect_lib import capture, page_jpeg
-    from apply.common.page_helpers import page_html, read_page, scan_actions
+    from apply.common.page_helpers import read_page, scan_actions
 
     jid = state.get("jid", jid)
     img_path = capture(page, jid, prefix="inspect")

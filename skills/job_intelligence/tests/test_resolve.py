@@ -8,7 +8,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from apply.common.resolve import normalize, resolution_for_fill, _build_ephemeral
+from apply.common.resolve import normalize, resolve, _build_ephemeral
 
 
 PROFILE = {
@@ -49,7 +49,7 @@ class Ephemeral(unittest.TestCase):
 
 class ProfileFactMatch(unittest.TestCase):
     def _val(self, label, override=None):
-        return resolution_for_fill(label, PROFILE, answers_override=override or {}).value
+        return resolve(label, PROFILE, answers_override=override or {}).value
 
     def test_email(self):
         self.assertEqual(self._val("Email"), "b@x.com")
@@ -65,10 +65,11 @@ class ProfileFactMatch(unittest.TestCase):
         # The static-answer key must match the normalized label exactly.
         self.assertEqual(self._val("Authorized to work in Canada"), "Yes")
 
-    def test_unmatched_real_question_is_none(self):
-        # Documents finding #5: long ATS question text does NOT match the short
-        # static key — it correctly falls through to no_match (→ --answers).
-        self.assertIsNone(self._val("Are you legally authorized to work in Canada?"))
+    def test_long_ats_question_matches_static_answer(self):
+        # Previously finding #5: long ATS question text did NOT match the short
+        # static key. The improved resolver now matches it via alias/fuzzy
+        # channels — this is the desired behavior (less NEEDS_ANSWER escalation).
+        self.assertEqual(self._val("Are you legally authorized to work in Canada?"), "Yes")
 
     def test_empty_label(self):
         self.assertIsNone(self._val(""))
@@ -76,17 +77,17 @@ class ProfileFactMatch(unittest.TestCase):
     def test_expanded_string_fact_key(self):
         # Phase 2 widened the resolvable set to string-valued facts.
         prof = dict(PROFILE, expected_salary=95000)  # numeric on purpose
-        r = resolution_for_fill("Expected salary", prof)
+        r = resolve("Expected salary", prof)
         self.assertEqual(r.value, "95000")  # coerced to str
 
     def test_explicit_city_wins_over_derived(self):
         prof = dict(PROFILE, city="Kanata")  # location says Ottawa
-        self.assertEqual(resolution_for_fill("City", prof).value, "Kanata")
+        self.assertEqual(resolve("City", prof).value, "Kanata")
 
 
 class AnswersOverride(unittest.TestCase):
     def _res(self, label, override):
-        return resolution_for_fill(label, PROFILE, answers_override=override)
+        return resolve(label, PROFILE, answers_override=override)
 
     def test_exact_override_wins(self):
         r = self._res("Expected salary", {"expected salary": "95000"})
