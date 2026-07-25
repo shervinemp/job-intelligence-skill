@@ -260,7 +260,7 @@ def cmd_admit(*job_ids, pdf_path=None):
         entry = state["jobs"][job_id]
         if entry.get("state") != "active":
             print(f"  {job_id}: admitted with state '{entry.get('state')}' -> active", file=sys.stderr)
-        advance(entry, "tailored", state="active", applied_at=datetime.now().isoformat())
+        advance(entry, "tailored", state="active")
         job_url = state["jobs"][job_id].get("url", "")
         if job_url and sys.platform == "win32":
             url_path = os.path.join(RESULTS_DIR, job_id, f"{job_id}.url")

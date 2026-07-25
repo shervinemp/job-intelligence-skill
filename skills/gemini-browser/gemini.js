@@ -199,23 +199,12 @@ async function ensureMode(page) {
   }
   await wait(1500);
 
-  // 2. Expand thinking level and set to Extended
+  // 2. Enable Extended thinking (new UI: toggle item directly in menu, after divider)
   await page.evaluate(() => {
     const items = document.querySelectorAll('gem-menu-item');
     for (const item of items) {
-      if ((item.textContent || '').includes('Thinking level') && !(item.textContent || '').includes('Extended')) {
-        item.click();
-        return;
-      }
-    }
-  });
-  await wait(1500);
-
-  await page.evaluate(() => {
-    const items = document.querySelectorAll('gem-menu-item');
-    for (const item of items) {
-      if ((item.textContent || '').includes('Extended')) {
-        item.click();
+      if ((item.textContent || '').includes('Extended thinking')) {
+        if (item.getAttribute('data-active') !== 'true') item.click();
         return;
       }
     }
@@ -234,16 +223,29 @@ async function checkMode(page) {
   if (count === 0) return { activeTier: 'Unknown', thinkingLevel: 'Unknown' };
 
   const text = await modeBtn().textContent();
-  const isExtended = await page.evaluate(() => {
-    const btn = document.querySelector('[data-test-id="bard-mode-menu-button"]');
-    if (!btn) return false;
-    return (btn.textContent || '').includes('Extended');
-  });
 
   let activeTier = 'Flash';
   if (text.includes('Pro')) activeTier = 'Pro';
   else if (text.includes('Lite')) activeTier = 'Flash-Lite';
   else if (text.includes('Flash')) activeTier = 'Flash';
+
+  let isExtended = (text || '').includes('Extended');
+  if (!isExtended) {
+    try {
+      await modeBtn().click();
+      await wait(1500);
+      isExtended = await page.evaluate(() => {
+        const items = document.querySelectorAll('gem-menu-item');
+        for (const item of items) {
+          if ((item.textContent || '').includes('Extended thinking'))
+            return item.getAttribute('data-active') === 'true';
+        }
+        return false;
+      });
+      await page.keyboard.press('Escape');
+      await wait(500);
+    } catch (e) {}
+  }
 
   return { activeTier, thinkingLevel: isExtended ? 'Extended' : 'Standard' };
 }
@@ -547,7 +549,7 @@ async function dump(page) {
     if (modeSet.status !== 'ok') {
       die('Could not set Flash + Extended mode.');
     }
-    log('3.5 Flash + Extended thinking');
+    log('Flash + Extended thinking');
 
     let resp = null;
     for (let attempt = 0; attempt < 2; attempt++) {
