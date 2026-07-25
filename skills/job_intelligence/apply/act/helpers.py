@@ -207,23 +207,35 @@ def _probe_form(page, reg, jid, allow_vision=True):
     if not allow_vision:
         _insp._PROBE_STRATEGIES = [s for s in orig if s[0] != "vision"]
     try:
+        orig_url = page.url
         pr = _insp.probe(page, registry_config=reg, jid=jid)
         fields = [f for f in (pr.fields or []) if not _is_junk_field(f)]
         if fields:
             pr.fields = fields
             if pr.strategy == "iframe":
-                srcs = getattr(pr, "iframe_srcs", []) or []
-                src = next((s for s in srcs if s and "http" in s), "")
-                if src:
-                    print(f"  Form lives in an iframe — navigating directly: {src[:90]}", file=sys.stderr)
-                    try:
-                        page.goto(src, wait_until="domcontentloaded", timeout=30000)
-                        time.sleep(2)
-                        pr = _insp.probe(page, registry_config=reg, jid=jid)
-                        pr.fields = [f for f in (pr.fields or []) if not _is_junk_field(f)]
-                    except Exception:
-                        pass
+                print(f"  Form in iframe ({len(fields)} fields) — using frame API", file=sys.stderr)
             return pr
+        if pr.strategy != "iframe":
+            iframe_pr = _insp._probe_iframes(page)
+            iframe_fields = [f for f in (iframe_pr.fields or []) if not _is_junk_field(f)]
+            if iframe_fields:
+                iframe_pr.fields = iframe_fields
+                print(f"  Form in iframe ({len(iframe_fields)} fields) — using frame API", file=sys.stderr)
+                return iframe_pr
+            srcs = getattr(iframe_pr, "iframe_srcs", []) or []
+            src = next((s for s in srcs if s and "http" in s), "")
+            if src:
+                print(f"  Form lives in cross-origin iframe — navigating directly: {src[:90]}", file=sys.stderr)
+                try:
+                    page.goto(src, wait_until="domcontentloaded", timeout=30000)
+                    time.sleep(3)
+                    pr2 = _insp.probe(page, registry_config=reg, jid=jid)
+                    pr2.fields = [f for f in (pr2.fields or []) if not _is_junk_field(f)]
+                    if pr2.fields:
+                        return pr2
+                    page.goto(orig_url, wait_until="domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
         if _click_apply_button(page):
             time.sleep(2)
             pr2 = _insp.probe(page, registry_config=reg, jid=jid)

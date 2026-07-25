@@ -8,7 +8,7 @@ from apply.act.helpers import (
     _load_profile, chrome_session, _host, _is_error_page, _url_fallbacks,
     _wait_for_fields, _probe_form, _fill_with_playwright, _find_next_button,
     _empty_required, _click_action, _verify_with_ask_api, _detect_submit_button,
-    _field_key, _build_ans_dict, _resolve_linkedin_apply,
+    _field_key, _build_ans_dict, _resolve_linkedin_apply, _wire_dialogs,
 )
 
 
@@ -86,17 +86,46 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             if "linkedin.com/jobs" in (page.url or "").lower():
                 resolved = _resolve_linkedin_apply(page)
                 if resolved:
-                    print(f"  LINKEDIN: Apply -> {resolved[:80]}", file=sys.stderr)
-                    get_conn().execute(
-                        "UPDATE jobs SET external_url=? WHERE id=?", (resolved, jid)
-                    ).connection.commit()
-                    state["external_url"] = resolved
-                    url = resolved
-                    page.goto(resolved, wait_until="domcontentloaded", timeout=30000)
-                    time.sleep(2)
-                    if _host(page.url) and _host(resolved) and _host(page.url) != _host(resolved):
-                        state["external_url"] = page.url
-                        url = page.url
+                    apply_link = page.locator('a:has-text("Apply")').first
+                    clicked = False
+                    if apply_link.count() > 0:
+                        try:
+                            with ctx.expect_page(timeout=15000) as new_page_info:
+                                apply_link.click()
+                            new_page = new_page_info.value
+                            new_page.wait_for_load_state("domcontentloaded", timeout=30000)
+                            time.sleep(2)
+                            try:
+                                new_page.wait_for_selector('iframe', timeout=15000)
+                                time.sleep(3)
+                            except Exception:
+                                pass
+                            real_url = new_page.url
+                            print(f"  LINKEDIN: Apply -> {real_url[:80]}", file=sys.stderr)
+                            get_conn().execute(
+                                "UPDATE jobs SET external_url=? WHERE id=?", (real_url, jid)
+                            ).connection.commit()
+                            state["external_url"] = real_url
+                            url = real_url
+                            page.close()
+                            page = new_page
+                            _wire_dialogs(page)
+                            tag_page(page, jid)
+                            clicked = True
+                        except Exception:
+                            pass
+                    if not clicked:
+                        print(f"  LINKEDIN: Apply (direct) -> {resolved[:80]}", file=sys.stderr)
+                        get_conn().execute(
+                            "UPDATE jobs SET external_url=? WHERE id=?", (resolved, jid)
+                        ).connection.commit()
+                        state["external_url"] = resolved
+                        url = resolved
+                        page.goto(resolved, wait_until="domcontentloaded", timeout=30000)
+                        time.sleep(2)
+                        if _host(page.url) and _host(resolved) and _host(page.url) != _host(resolved):
+                            state["external_url"] = page.url
+                            url = page.url
                 else:
                     ea_btn = page.locator('button:has-text("Easy Apply")').first
                     if ea_btn.count() > 0:
