@@ -65,6 +65,12 @@ def _check_delta(before, after, ans, label):
         ans = ", ".join(str(v) for v in ans)
     elif ans is not None:
         ans = str(ans)
+    # File inputs: browser reports C:\fakepath\filename instead of full path
+    if after and ans and ans.lower().endswith((".pdf", ".doc", ".docx", ".txt", ".rtf")):
+        after_lower = after.lower()
+        ans_lower = ans.lower()
+        if os.path.basename(ans_lower) in after_lower or after_lower in ans_lower:
+            return True
     if after and after != before and after != ans:
         return True
     if after and ans and (after == ans or ans in after or after in ans):

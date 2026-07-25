@@ -171,8 +171,10 @@ def resolve(
         nk = normalize(k)
         if nk == norm:
             return Resolution(v, "answers_override", label, "user_typed")
-        # Prefix match for field_reader's 60-char label truncation
-        if len(nk) >= 10 and norm.startswith(nk):
+        # Prefix match for field_reader's 60-char label truncation.
+        # Bidirectional: field label may be truncated (nk longer than norm)
+        # or answer key may be truncated (norm longer than nk).
+        if len(nk) >= 10 and (norm.startswith(nk) or nk.startswith(norm)):
             return Resolution(v, "answers_override", label, "user_typed")
 
     # Step 1.5a: phone country code — extract from phone before generic matching

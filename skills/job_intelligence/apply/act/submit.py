@@ -149,10 +149,28 @@ def cmd_submit(jid, confirm=False):
                     emit_next("act --fill", "fix validation errors then resubmit")
                     return 1
 
-                next_btn = _detect_submit_button(page)
+                # Multi-step: look for Next/Review/Continue (NOT submit — we already clicked that)
+                next_btn = None
+                try:
+                    nav_cands = page.evaluate("""() => {
+                        const kws = ['next', 'review', 'continue'];
+                        const all = document.querySelectorAll('button, [role="button"]');
+                        for (const el of all) {
+                            if (el.offsetParent === null || el.disabled) continue;
+                            if (!el.closest('dialog') && el.closest('nav, header, footer')) continue;
+                            const t = (el.textContent || '').trim().toLowerCase();
+                            if (kws.includes(t)) return t;
+                        }
+                        return null;
+                    }""")
+                    next_btn = nav_cands
+                except Exception:
+                    pass
+                last_btn = None
                 for _ in range(5):
-                    if not next_btn:
+                    if not next_btn or next_btn == last_btn:
                         break
+                    last_btn = next_btn
                     print(f"  Review step — clicking '{next_btn}'", file=sys.stderr)
                     try:
                         page.click(f'button:text("{next_btn}")', timeout=5000)
@@ -177,7 +195,40 @@ def cmd_submit(jid, confirm=False):
                         emit_status("submitted", "Playwright multi-step submit")
                         emit_next("verify")
                         return 0
-                    next_btn = _detect_submit_button(page)
+                    # Check for submit button on the new page
+                    submit_now = _detect_submit_button(page)
+                    if submit_now:
+                        try:
+                            page.click(f'button:text("{submit_now}")', timeout=5000)
+                        except Exception:
+                            page.evaluate(f"""() => {{
+                                const btn = [...document.querySelectorAll('button')].find(
+                                    b => b.textContent.trim().toLowerCase() === {json.dumps(submit_now.lower())}
+                                );
+                                if (btn) btn.click();
+                            }}""")
+                        time.sleep(3)
+                        success, _ = _check_submit_success(ctx, page, pages_before)
+                        if success:
+                            mark_applied(jid)
+                            emit_status("submitted", "Playwright review->submit")
+                            emit_next("verify")
+                            return 0
+                    # Look for next nav button
+                    try:
+                        next_btn = page.evaluate("""() => {
+                            const kws = ['next', 'review', 'continue'];
+                            const all = document.querySelectorAll('button, [role="button"]');
+                            for (const el of all) {
+                                if (el.offsetParent === null || el.disabled) continue;
+                                if (!el.closest('dialog') && el.closest('nav, header, footer')) continue;
+                                const t = (el.textContent || '').trim().toLowerCase();
+                                if (kws.includes(t)) return t;
+                            }
+                            return null;
+                        }""")
+                    except Exception:
+                        next_btn = None
 
                 try:
                     from lib.ask_api import available, ask_bytes
