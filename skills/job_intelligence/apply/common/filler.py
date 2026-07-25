@@ -20,6 +20,7 @@ eliminating the two-layer indirection (act → dispatch → filler → strategy)
 """
 from abc import ABC, abstractmethod
 import json
+import os
 
 from apply.common.field_types import is_combobox as _is_combobox
 from apply.common.value_reader import read_value as _read_value
@@ -268,6 +269,46 @@ class ContentEditableFiller(FieldFiller):
         return bool(ce.fill(page, sel, ans))
 
 
+class FileFiller(FieldFiller):
+    name = "file"
+
+    def can_handle(self, f):
+        return (f.get("type") or "").lower() == "file" or f.get("tag") == "INPUT" and (f.get("type") or "").lower() == "file"
+
+    def fill(self, page, f, ans):
+        sel = f.get("_sel", "")
+        if not sel:
+            return False
+        # ans should be a file path; if it's not a valid path, skip
+        path = str(ans).strip()
+        if not os.path.isfile(path):
+            return False
+        try:
+            # Try direct set_input_files
+            page.set_input_files(sel, path)
+            return True
+        except Exception:
+            pass
+        # Try in frames
+        for fr in page.frames:
+            if fr == page.main_frame:
+                continue
+            try:
+                fr.set_input_files(sel, path)
+                return True
+            except Exception:
+                continue
+        # Try JS: find hidden file input and set via DataTransfer
+        try:
+            el = page.query_selector(sel)
+            if el:
+                el.set_input_files(path)
+                return True
+        except Exception:
+            pass
+        return False
+
+
 class TextFiller(FieldFiller):
     name = "text"
 
@@ -312,6 +353,7 @@ class NativeSetterFallback(FieldFiller):
 _FILLERS = [
     CheckboxFiller(),
     RadioFiller(),
+    FileFiller(),
     SelectFiller(),
     ComboboxFiller(),
     DatepickerFiller(),

@@ -241,7 +241,7 @@ def resolve(
     # it conservative — no fuzzy guessing on multi-intent words.
     _SINGLE_OK = {"email", "phone", "location", "website", "portfolio",
                   "linkedin", "github", "city", "country", "address", "zip",
-                  "pronouns", "headline"}
+                  "pronouns", "headline", "name"}
     for key, (val, _source) in ephemeral.items():
         kw = key.replace("_", " ")
         if " " in kw:
@@ -283,6 +283,7 @@ def resolve(
 
 # (regex on normalized label, candidate profile/answer keys in priority order)
 _ALIAS_RULES = [
+    (r"^name$", ["full_name"]),
     (r"\bpreferred name\b", ["first_name"]),
     (r"\bworked (at|for) .* before|have you ever worked|previously worked|been employed (at|by)\b",
      ["previously_employed", "have_you_ever_been"]),
