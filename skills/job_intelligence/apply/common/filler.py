@@ -138,8 +138,6 @@ class RadioFiller(FieldFiller):
         if not sel:
             return False
         ans_lower = str(ans).strip().lower()
-        # For Yes/No radios, reduce long answers to just "yes" or "no"
-        # (e.g. "Yes, in the Toronto office" → "yes")
         yn_prefix = ""
         if ans_lower.startswith("yes"):
             yn_prefix = "yes"
@@ -154,22 +152,37 @@ class RadioFiller(FieldFiller):
 
                 // Helper: get a radio's visible label text
                 function radioLabel(r) {
-                    const lbl = r.closest('label');
-                    if (lbl) {
-                        const txt = lbl.textContent.replace(r.value || '', '').trim().toLowerCase();
+                    // Try label[for] by radio id (Ashby pattern: label is sibling of container)
+                    if (r.id) {
+                        const lbl = document.querySelector('label[for="' + r.id + '"]');
+                        if (lbl) {
+                            const txt = lbl.textContent.trim().toLowerCase();
+                            if (txt && txt !== 'on') return txt;
+                        }
+                    }
+                    // Try closest label (standard pattern)
+                    const closest = r.closest('label');
+                    if (closest) {
+                        const txt = closest.textContent.replace(r.value || '', '').trim().toLowerCase();
                         if (txt) return txt;
                     }
+                    // Walk up to the option container and find label sibling
                     let el = r;
                     for (let i = 0; i < 4; i++) {
                         el = el.parentElement;
                         if (!el) break;
-                        const txt = el.textContent.trim().toLowerCase();
-                        if (txt && txt !== 'on') return txt;
+                        // Look for a sibling <label> within this option div
+                        const lbl = el.querySelector('label');
+                        if (lbl) {
+                            const txt = lbl.textContent.trim().toLowerCase();
+                            if (txt && txt !== 'on') return txt;
+                        }
                     }
+                    // Sibling walk
                     let sib = r.nextElementSibling;
                     while (sib) {
                         const txt = sib.textContent.trim().toLowerCase();
-                        if (txt) return txt;
+                        if (txt && txt !== 'on') return txt;
                         sib = sib.nextElementSibling;
                     }
                     return (r.value || '').toLowerCase();
@@ -179,7 +192,7 @@ class RadioFiller(FieldFiller):
                 for (const r of radios) {
                     if (r.value && r.value.toLowerCase() === ans) { r.click(); return true; }
                 }
-                // Try 1b: Yes/No prefix match — collect ALL matches, disambiguate by location
+                // Try 1b: Yes/No prefix match — collect ALL matches, disambiguate
                 if (ynPref) {
                     const matches = [];
                     for (const r of radios) {
@@ -188,11 +201,16 @@ class RadioFiller(FieldFiller):
                             matches.push({radio: r, label: lbl});
                         }
                     }
-                    if (matches.length === 1) {
-                        matches[0].radio.click(); return true;
+                    // First: try exact full-answer match against option labels
+                    for (const m of matches) {
+                        if (m.label === ans || m.label.startsWith(ans) || ans.startsWith(m.label)) {
+                            m.radio.click(); return 'exact:' + m.label.slice(0, 40);
+                        }
                     }
-                    // Multiple Yes/No options — disambiguate by user's location words
-                    // country is a comma-separated list: "ottawa,ontario,canada,toronto"
+                    if (matches.length === 1) {
+                        matches[0].radio.click(); return 'single:' + matches[0].label.slice(0, 40);
+                    }
+                    // Multiple matches — disambiguate by location words
                     if (matches.length > 1 && country) {
                         const locWords = country.split(',').map(w => w.trim()).filter(Boolean);
                         let bestMatch = null;
@@ -214,7 +232,7 @@ class RadioFiller(FieldFiller):
                     }
                     // No country disambiguation — click first match
                     if (matches.length > 0) {
-                        matches[0].radio.click(); return true;
+                        matches[0].radio.click(); return 'first_match:' + matches[0].label.slice(0, 40);
                     }
                 }
                 // Try 2: match by associated <label> text
@@ -222,7 +240,7 @@ class RadioFiller(FieldFiller):
                     const lbl = r.closest('label');
                     if (lbl) {
                         const txt = lbl.textContent.replace(r.value || '', '').trim().toLowerCase();
-                        if (txt === ans || txt.startsWith(ans) || ans.startsWith(txt)) { r.click(); return true; }
+                        if (txt === ans || txt.startsWith(ans) || ans.startsWith(txt)) { r.click(); return 'try2:' + txt.slice(0, 40); }
                     }
                 }
                 // Try 3: walk up 4 levels and match text (LinkedIn pattern)
@@ -233,7 +251,7 @@ class RadioFiller(FieldFiller):
                         if (!el) break;
                         const txt = el.textContent.trim().toLowerCase();
                         if (txt === ans || txt.startsWith(ans + ' ') || txt.startsWith(ans + ',') || ans.startsWith(txt)) {
-                            r.click(); return true;
+                            r.click(); return 'try3:' + txt.slice(0, 40);
                         }
                     }
                 }
@@ -243,14 +261,14 @@ class RadioFiller(FieldFiller):
                     while (sib) {
                         const txt = sib.textContent.trim().toLowerCase();
                         if (txt && (txt === ans || txt.startsWith(ans) || ans.startsWith(txt))) {
-                            r.click(); return true;
+                            r.click(); return 'try4:' + txt.slice(0, 40);
                         }
                         sib = sib.nextElementSibling;
                     }
                 }
-                return false;
+                return 'no_match:radioCount=' + radios.length;
             }""", [sel, ans_lower, yn_prefix, country])
-            return bool(clicked)
+            return bool(clicked) and clicked != "false" and not str(clicked).startswith("no_match")
         except Exception:
             return False
 
@@ -531,6 +549,8 @@ def fill_field(page, field: dict, ans: str) -> tuple[bool, str]:
     """Try all fillers in order. Returns (success, filler_name).
     Includes pre/post-fill verification — the value must actually change."""
     sel = field.get("_sel", "")
+    if not sel:
+        sel = field.get("selector", "")
     if not sel:
         sel = resolve_selector(page, field)
         if not sel:

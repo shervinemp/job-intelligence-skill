@@ -109,9 +109,30 @@ def cmd_check(jid):
                         const radios = [...document.querySelectorAll(sel)];
                         for (const r of radios) {
                             if (r.checked) {
-                                const lbl = r.closest('label');
-                                if (lbl) return lbl.textContent.replace(r.value || '', '').trim();
-                                return r.value || '';
+                                // Try label[for] by radio id (Ashby pattern)
+                                if (r.id) {
+                                    const lbl = document.querySelector('label[for="' + r.id + '"]');
+                                    if (lbl) {
+                                        const txt = lbl.textContent.trim();
+                                        if (txt && txt !== 'on') return txt;
+                                    }
+                                }
+                                // Try closest label
+                                const closest = r.closest('label');
+                                if (closest) {
+                                    const txt = closest.textContent.replace(r.value || '', '').trim();
+                                    if (txt && txt !== 'on') return txt;
+                                }
+                                // Value-based (Ashby consent: "given"/"notGiven")
+                                if (r.value && r.value !== 'on') return r.value;
+                                // Find option index and get label from sibling
+                                const idx = radios.indexOf(r);
+                                const fieldset = r.closest('fieldset');
+                                if (fieldset) {
+                                    const labels = [...fieldset.querySelectorAll('label[class*="label"]')];
+                                    if (labels[idx]) return labels[idx].textContent.trim();
+                                }
+                                return 'checked (no label)';
                             }
                         }
                         return '';
@@ -119,29 +140,47 @@ def cmd_check(jid):
                     if selected:
                         actual_lower = selected.lower()
                         expected_lower = str(expected).lower()
-                        # Check for country/city mismatch in Yes/No options
-                        if actual_lower != expected_lower:
-                            # Is it a disambiguation issue?
-                            user_loc = (profile.get("location") or "").lower()
-                            user_city = user_loc.split(",")[0].strip() if "," in user_loc else ""
-                            if user_city and user_city not in actual_lower and actual_lower.startswith("yes"):
-                                issues.append({
-                                    "label": label,
-                                    "expected": str(expected),
-                                    "actual": selected,
-                                    "severity": "ERROR",
-                                    "reason": f"Wrong location selected — user is in '{user_city}' but form shows '{selected}'",
-                                })
-                            elif actual_lower.startswith(expected_lower[:3]):
-                                pass  # Close enough (prefix match)
-                            else:
-                                issues.append({
-                                    "label": label,
-                                    "expected": str(expected),
-                                    "actual": selected,
-                                    "severity": "WARN",
-                                    "reason": "Radio selection doesn't match expected value",
-                                })
+                        # Consent radios use value (given/notGiven) not label text
+                        if actual_lower == expected_lower or actual_lower.startswith(expected_lower) or expected_lower.startswith(actual_lower):
+                            continue
+                        # Check if expected is a radio value (given/notGiven) and selected is the label
+                        if expected_lower in ("given", "notgiven", "yes", "no", "true", "false"):
+                            # This is a value-based radio — label text doesn't match value
+                            # Check if the right value was checked instead
+                            checked_val = page.evaluate("""(args) => {
+                                const [sel] = args;
+                                const radios = [...document.querySelectorAll(sel)];
+                                for (const r of radios) {
+                                    if (r.checked) return (r.value || '').toLowerCase();
+                                }
+                                return '';
+                            }""", [sel])
+                            if checked_val == expected_lower:
+                                continue
+                        # Check for city/country mismatch in Yes/No options
+                        user_loc = (profile.get("location") or "").lower()
+                        loc_words = [w.strip() for w in user_loc.replace(",", " ").split() if len(w.strip()) > 2]
+                        if actual_lower.startswith("yes") and any(w in actual_lower for w in loc_words):
+                            continue  # Correct Yes option with matching location
+                        if actual_lower.startswith("yes") and not any(w in actual_lower for w in loc_words) and loc_words:
+                            # Check if the answer string itself matches
+                            if str(expected).lower() in actual_lower:
+                                continue
+                            issues.append({
+                                "label": label,
+                                "expected": str(expected),
+                                "actual": selected,
+                                "severity": "ERROR",
+                                "reason": f"Wrong location — user location words {loc_words} not in selected option",
+                            })
+                        else:
+                            issues.append({
+                                "label": label,
+                                "expected": str(expected),
+                                "actual": selected,
+                                "severity": "WARN",
+                                "reason": "Radio selection doesn't match expected value",
+                            })
                     continue
 
                 # Checkbox: check if consent matches

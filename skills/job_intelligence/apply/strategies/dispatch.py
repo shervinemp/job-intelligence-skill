@@ -16,10 +16,12 @@ def field_deterministic(page, f, ans):
     """
     sel = f.get("_sel", "")
     if not sel:
+        sel = f.get("selector", "")
+    if not sel:
         sel = resolve_selector(page, f)
         if not sel:
             return False
-        f["_sel"] = sel
+    f["_sel"] = sel
 
     # Pre-fill validation: catch bad values before they reach the widget.
     if not _is_combobox(f):
