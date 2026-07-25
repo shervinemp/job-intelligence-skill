@@ -106,18 +106,35 @@ def cmd_submit(jid, confirm=False):
                         page.click(f'button:text("{submit_text}")', force=True, timeout=5000)
                         clicked = True
                     except Exception:
-                        try:
-                            page.evaluate(f"""() => {{
-                                const btn = [...document.querySelectorAll('button')].find(
-                                    b => b.textContent.trim().toLowerCase() === {json.dumps(submit_text.lower())}
-                                );
-                                if (btn) btn.click();
-                            }}""")
+                        iframe_clicked = False
+                        for fr in page.frames:
+                            if fr == page.main_frame:
+                                continue
+                            try:
+                                btn = fr.locator(f'button:text("{submit_text}")').first
+                                if btn.count() > 0:
+                                    btn.click(timeout=5000)
+                                    iframe_clicked = True
+                                    print(f"  Clicked submit inside iframe", file=sys.stderr)
+                                    break
+                            except Exception:
+                                continue
+                        if iframe_clicked:
                             clicked = True
-                        except Exception:
-                            print(f"  Could not click submit button via Playwright", file=sys.stderr)
+                        else:
+                            try:
+                                page.evaluate(f"""() => {{
+                                    const btn = [...document.querySelectorAll('button')].find(
+                                        b => b.textContent.trim().toLowerCase() === {json.dumps(submit_text.lower())}
+                                    );
+                                    if (btn) btn.click();
+                                }}""")
+                                clicked = True
+                            except Exception:
+                                print(f"  Could not click submit button via Playwright", file=sys.stderr)
 
             if clicked:
+                time.sleep(3)
                 try:
                     page.wait_for_load_state("domcontentloaded", timeout=10000)
                 except Exception:
@@ -128,7 +145,7 @@ def cmd_submit(jid, confirm=False):
                     pass
 
                 _dismiss_confirm_modal(page)
-                time.sleep(1)
+                time.sleep(2)
 
                 pages_before = {id(p) for p in ctx.pages}
                 success, success_page = _check_submit_success(ctx, page, pages_before)

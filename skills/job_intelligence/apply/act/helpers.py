@@ -286,32 +286,45 @@ def _dismiss_confirm_modal(page):
 
 
 def _get_validation_errors(page):
+    _JS = """() => {
+        const sels = '[role="alert"], .field-error, .error-message, [class*="error"]:not([class*="error-icon"]), .form-error, .invalid-feedback, [class*="correction"], [class*="missing"], [class*="validation"]';
+        const seen = new Set();
+        const out = [];
+        for (const el of document.querySelectorAll(sels)) {
+            if (el.offsetParent === null) continue;
+            const t = (el.textContent || '').trim();
+            if (!t || t.length > 200 || seen.has(t)) continue;
+            seen.add(t);
+            out.push(t);
+        }
+        const body = document.body.innerText || '';
+        const ashbyMatch = body.match(/Missing entry for required field[:\\s]*([^\\n]+)/i);
+        if (ashbyMatch && !seen.has(ashbyMatch[0])) out.push('Missing: ' + ashbyMatch[1].trim());
+        const correctionsMatch = body.match(/form needs corrections/i);
+        if (correctionsMatch && !out.length) out.push('Form has validation errors');
+        const reqMatches = body.matchAll(/([A-Za-z][A-Za-z\\s]+?)\\s+is required\\.?/g);
+        for (const m of reqMatches) {
+            const t = m[0].trim();
+            if (!seen.has(t)) { seen.add(t); out.push(t); }
+        }
+        return out.slice(0, 15);
+    }"""
+    errors = []
     try:
-        return page.evaluate("""() => {
-            const sels = '[role="alert"], .field-error, .error-message, [class*="error"]:not([class*="error-icon"]), .form-error, .invalid-feedback, [class*="correction"], [class*="missing"], [class*="validation"]';
-            const seen = new Set();
-            const out = [];
-            for (const el of document.querySelectorAll(sels)) {
-                if (el.offsetParent === null) continue;
-                const t = (el.textContent || '').trim();
-                if (!t || t.length > 200 || seen.has(t)) continue;
-                seen.add(t);
-                out.push(t);
-            }
-            // Ashby: "Your form needs corrections" / "Missing entry for required field"
-            const body = document.body.innerText || '';
-            const ashbyMatch = body.match(/Missing entry for required field[:\\s]*([^\\n]+)/i);
-            if (ashbyMatch && !seen.has(ashbyMatch[0])) {
-                out.push('Missing: ' + ashbyMatch[1].trim());
-            }
-            const correctionsMatch = body.match(/form needs corrections/i);
-            if (correctionsMatch && !out.length) {
-                out.push('Form has validation errors');
-            }
-            return out.slice(0, 15);
-        }""") or []
+        errors = page.evaluate(_JS) or []
     except Exception:
-        return []
+        pass
+    if not errors:
+        for fr in page.frames:
+            if fr == page.main_frame:
+                continue
+            try:
+                errors = fr.evaluate(_JS) or []
+                if errors:
+                    break
+            except Exception:
+                continue
+    return errors
 
 
 def _empty_required(page):
@@ -352,6 +365,15 @@ def _empty_required(page):
 def _check_submit_success(ctx, page, pages_before_ids):
     if check_applied_signal(page) or has_success_text(page_text(page) or ""):
         return True, page
+    for fr in page.frames:
+        if fr == page.main_frame:
+            continue
+        try:
+            body = fr.evaluate("() => document.body.innerText") or ""
+            if has_success_text(body):
+                return True, page
+        except Exception:
+            continue
     new_pages = [p for p in ctx.pages if id(p) not in pages_before_ids
                  and "about:blank" not in p.url]
     for p in new_pages:
@@ -519,10 +541,28 @@ def _verify_with_ask_api(page, answers: dict) -> dict:
 
 
 def _detect_submit_button(page) -> str | None:
-    candidates = scan_actions(page, ["submit", "submit application", "send application", "next", "review", "continue"])
+    for fr in page.frames:
+        if fr == page.main_frame:
+            continue
+        try:
+            buttons = fr.evaluate("""() => {
+                const all = document.querySelectorAll('button, input[type=submit]');
+                return Array.from(all).filter(b => b.offsetParent !== null).map(b => ({
+                    text: (b.textContent || b.value || '').trim().toLowerCase(),
+                    type: b.type || '',
+                }));
+            }""")
+            for b in buttons:
+                if b.get("text") in ("submit", "submit application", "send", "send application") or b.get("type") == "submit":
+                    if b.get("text"):
+                        return b["text"]
+                    return "submit"
+        except Exception:
+            continue
+    candidates = scan_actions(page, ["submit", "submit application", "send application"])
     if candidates:
         for c in candidates:
-            if not c.get("disabled"):
+            if not c.get("disabled") and c.get("tag") != "A":
                 return c.get("text", "")
     try:
         buttons = page.evaluate("""() => {
