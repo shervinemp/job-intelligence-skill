@@ -8,7 +8,7 @@ from apply.act.helpers import (
     _load_profile, chrome_session, _host, _is_error_page, _url_fallbacks,
     _wait_for_fields, _probe_form, _fill_with_playwright, _find_next_button,
     _empty_required, _click_action, _verify_with_ask_api, _detect_submit_button,
-    _field_key, _build_ans_dict,
+    _field_key, _build_ans_dict, _resolve_linkedin_apply,
 )
 
 
@@ -29,7 +29,13 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
     url = state.get("external_url") or state.get("url", "")
     if not url:
-        emit_error("no external_url in state — run 'apply navigate <jid>' first")
+        row = get_conn().execute("SELECT url, external_url FROM jobs WHERE id=?", (jid,)).fetchone()
+        if row:
+            url = row["external_url"] or row["url"]
+            state["url"] = row["url"]
+            state["external_url"] = row["external_url"] or ""
+    if not url:
+        emit_error("no URL found — run 'apply detect <jid>' first")
         return 1
     orig_url = url
 
@@ -76,6 +82,28 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 fallbacks = []
 
             tag_page(page, jid)
+
+            if "linkedin.com/jobs" in (page.url or "").lower() and not state.get("external_url"):
+                resolved = _resolve_linkedin_apply(page)
+                if resolved:
+                    print(f"  LINKEDIN: Apply -> {resolved[:80]}", file=sys.stderr)
+                    get_conn().execute(
+                        "UPDATE jobs SET external_url=? WHERE id=?", (resolved, jid)
+                    ).connection.commit()
+                    state["external_url"] = resolved
+                    url = resolved
+                    page.goto(resolved, wait_until="domcontentloaded", timeout=30000)
+                    time.sleep(2)
+                    if _host(page.url) and _host(resolved) and _host(page.url) != _host(resolved):
+                        state["external_url"] = page.url
+                        url = page.url
+                else:
+                    ea_btn = page.locator('button:has-text("Easy Apply")').first
+                    if ea_btn.count() > 0:
+                        ea_btn.click()
+                        print(f"  Easy Apply: modal opened", file=sys.stderr)
+                        time.sleep(3)
+
             reg = resolve_registry(page.url) or resolve_registry(orig_url)
             if reg and reg.page_range:
                 try:
@@ -83,6 +111,27 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 except Exception:
                     pass
             _wait_for_fields(page, timeout=8)
+
+            if not page.query_selector('input, select, textarea'):
+                apply_btn = page.locator('a:has-text("Apply"), button:has-text("Apply")').first
+                if apply_btn.count() > 0:
+                    apply_btn.click()
+                    print(f"  Listing page: clicked Apply", file=sys.stderr)
+                    time.sleep(3)
+                    _wait_for_fields(page, timeout=10)
+
+            if not page.query_selector('input, select, textarea'):
+                for label in ["Apply Manually", "Autofill with Resume"]:
+                    btn = page.locator(f'button:has-text("{label}"), a:has-text("{label}")').first
+                    if btn.count() > 0:
+                        btn.click()
+                        print(f"  Apply modal: clicked '{label}'", file=sys.stderr)
+                        time.sleep(3)
+                        _wait_for_fields(page, timeout=10)
+                        break
+
+            if not _handle_login_wall(page, jid, quick):
+                return 1
 
             seen = set()
             for page_num in range(1, max_pages + 1):
@@ -224,3 +273,117 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     else:
         emit_next("act --inspect", "no fillable fields and no Skyvern run")
     return 0
+
+
+_LOGIN_JS = r"""() => {
+  const pw = document.querySelector('input[type="password"]');
+  if (!pw) return null;
+  const form = pw.closest('form') || pw.parentElement?.parentElement;
+  if (!form) return null;
+  const text = (form.textContent || '').toLowerCase();
+  const signIn = !!form.querySelector('button[type="submit"], input[type="submit"]')
+    || text.includes('sign in') || text.includes('log in') || text.includes('login');
+  if (!signIn) return null;
+  const emailInput = form.querySelector('input[type="email"], input[name*="email" i], input[name*="user" i]');
+  const createLink = [...document.querySelectorAll('a, button')]
+    .find(el => /create (an )?account|register|new (user|applicant)|sign up/i.test(el.textContent || ''));
+  return {
+    hasEmail: !!emailInput,
+    createText: createLink ? createLink.textContent.trim().substring(0, 40) : null,
+    createTag: createLink ? createLink.tagName : null,
+  };
+}"""
+
+
+def _handle_login_wall(page, jid, quick):
+    """Detect login walls and auto-login or auto-create account.
+    Returns True if we should continue to form fill, False to stop."""
+    from lib.credentials import get_creds, save_creds, get_account_defaults, gen_password, _domain_from_url
+
+    try:
+        info = page.evaluate(_LOGIN_JS)
+    except Exception:
+        return True
+    if not info:
+        return True
+
+    domain = _domain_from_url(page.url)
+    print(f"  LOGIN_WALL: {domain}", file=sys.stderr)
+
+    creds = get_creds(domain)
+    if creds:
+        print(f"  Auto-login: {creds['email']}", file=sys.stderr)
+        try:
+            email_input = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i]').first
+            if email_input.count() > 0:
+                email_input.fill(creds["email"])
+            pw_input = page.locator('input[type="password"]').first
+            if pw_input.count() > 0:
+                pw_input.fill(creds["password"])
+            submit = page.locator('button[type="submit"], input[type="submit"]').first
+            if submit.count() > 0:
+                try:
+                    submit.click(timeout=5000)
+                except Exception:
+                    submit.click(force=True, timeout=5000)
+                time.sleep(5)
+                print(f"  LOGIN: submitted", file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"  LOGIN_FAIL: {e}", file=sys.stderr)
+            return True
+
+    if info.get("createText"):
+        print(f"  CREATE_ACCOUNT: clicking '{info['createText']}'", file=sys.stderr)
+        try:
+            btn = page.locator(
+                f'{info["createTag"].lower()}:has-text("{info["createText"]}")'
+            ).first
+            if btn.count() > 0:
+                btn.click(force=True, timeout=5000)
+                time.sleep(3)
+        except Exception:
+            pass
+
+    defaults = get_account_defaults()
+    if not defaults.get("email"):
+        print(f"  LOGIN_REQUIRED: no creds for {domain}, no profile email", file=sys.stderr)
+        emit_status("login_required", f"create account at {domain}")
+        emit_next("login", f"domain={domain} jid={jid}")
+        return False
+
+    pw_inputs = page.query_selector_all('input[type="password"]')
+    if not pw_inputs:
+        print(f"  LOGIN_REQUIRED: no creds for {domain}", file=sys.stderr)
+        emit_status("login_required", f"sign in or create account at {domain}")
+        emit_next("login", f"domain={domain} jid={jid}")
+        return False
+
+    new_pw = gen_password()
+    try:
+        email_input = page.locator('input[type="email"], input[name*="email" i]').first
+        if email_input.count() > 0:
+            email_input.fill(defaults["email"])
+        for pwi in pw_inputs:
+            pwi.fill(new_pw)
+        first_input = page.locator('input[name*="first" i], input[name*="given" i]').first
+        if first_input.count() > 0:
+            first_input.fill(defaults.get("first_name", ""))
+        last_input = page.locator('input[name*="last" i], input[name*="family" i]').first
+        if last_input.count() > 0:
+            last_input.fill(defaults.get("last_name", ""))
+        submit = page.locator('button[type="submit"], input[type="submit"], [data-automation-id="createAccountSubmitButton"]').first
+        if submit.count() > 0:
+            try:
+                submit.click(timeout=5000)
+            except Exception:
+                submit.click(force=True, timeout=5000)
+            time.sleep(5)
+            save_creds(domain, defaults["email"], new_pw)
+            print(f"  ACCOUNT_CREATED: {defaults['email']} @ {domain} — creds saved", file=sys.stderr)
+            return True
+    except Exception as e:
+        print(f"  CREATE_FAIL: {e}", file=sys.stderr)
+    emit_status("login_required", f"account creation failed at {domain}")
+    emit_next("login", f"domain={domain} jid={jid}")
+    return False

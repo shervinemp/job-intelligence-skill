@@ -73,6 +73,9 @@ def main():
                        help="list pending for a job / confirm (promote) them / clear them")
     map_p.add_argument("jid", help="Job ID")
 
+    creds_p = sub.add_parser("creds", help="Credential vault for ATS sites")
+    creds_p.add_argument("args", nargs="+", help="list | get <domain> | set <domain> <email> <password> | delete <domain>")
+
     args = parser.parse_args()
 
     if args.command == "detect":
@@ -148,6 +151,9 @@ def main():
             print(f"UNDO: {args.jid} {stage} -> {new_stage}", file=sys.stderr)
     elif args.command == "mappings":
         print("MAPPINGS: removed in Skyvern migration", file=sys.stderr)
+    elif args.command == "creds":
+        from lib.credentials import cmd_creds
+        cmd_creds(args.args)
 
 
 if __name__ == "__main__":

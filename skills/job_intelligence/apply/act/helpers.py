@@ -355,6 +355,29 @@ def _field_key(f):
     return (f.get("label", ""), f.get("id", ""), f.get("name", ""))
 
 
+def _resolve_linkedin_apply(page):
+    """On a LinkedIn job page, find the 'Apply' link and extract the real ATS URL."""
+    import urllib.parse as _up
+    try:
+        href = page.evaluate("""() => {
+            const links = document.querySelectorAll('a');
+            for (const a of links) {
+                const text = (a.textContent || '').trim().toLowerCase();
+                if (text === 'apply') return a.href || null;
+            }
+            return null;
+        }""")
+        if not href:
+            return None
+        if 'linkedin.com/safety/go' in href:
+            qs = _up.parse_qs(_up.urlparse(href).query)
+            real = qs.get('url', [None])[0]
+            return real or href
+        return href
+    except Exception:
+        return None
+
+
 def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list[dict], list[dict]]:
     from apply.strategies.dispatch import field_deterministic
 

@@ -76,8 +76,8 @@ def run(jid):
             reg.emit_notes()
         emit_next("navigate")
     elif job_type == "easy_apply":
-        emit_type("easy_apply")
-        print("NOTE: LinkedIn Easy Apply needs CDP browser — run with --cdp or skip", file=sys.stderr)
+        emit_type("linkedin")
+        print("NOTE: LinkedIn job — fill will auto-resolve Apply link or Easy Apply modal", file=sys.stderr)
         emit_next("act --fill")
     else:
         emit_type("unknown")
