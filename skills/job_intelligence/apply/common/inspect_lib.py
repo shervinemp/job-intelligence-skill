@@ -32,7 +32,13 @@ def page_jpeg(page, full=True):
     """Capture page screenshot as JPEG bytes. No file I/O.
     full=True captures the entire scrollable page (for inspect/debug).
     full=False captures only the viewport (for vision checks — avoids API downscaling)."""
-    return page.screenshot(type="jpeg", quality=80, full_page=full)
+    try:
+        return page.screenshot(type="jpeg", quality=80, full_page=full, timeout=5000)
+    except Exception:
+        try:
+            return page.screenshot(type="jpeg", quality=80, full_page=False, timeout=5000)
+        except Exception:
+            return b""
 
 
 def form_jpeg(page):

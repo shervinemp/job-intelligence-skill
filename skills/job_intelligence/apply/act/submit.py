@@ -63,8 +63,11 @@ def cmd_submit(jid, confirm=False):
                 return 1
 
             if "linkedin.com/jobs" in (page.url or "").lower():
-                dialog = page.locator('dialog[data-testid="dialog"]').first
-                if dialog.count() > 0:
+                dialog_open = page.evaluate("""() => {
+                    const d = document.querySelector('dialog[data-testid="dialog"]');
+                    return d && d.open && d.offsetParent !== null;
+                }""")
+                if dialog_open:
                     print(f"  Easy Apply: modal already open", file=sys.stderr)
                 else:
                     ea_btn = page.locator('button:has-text("Easy Apply")').first
@@ -147,22 +150,34 @@ def cmd_submit(jid, confirm=False):
                     return 1
 
                 next_btn = _detect_submit_button(page)
-                if next_btn:
-                    print(f"  Review step detected — clicking '{next_btn}'", file=sys.stderr)
+                for _ in range(5):
+                    if not next_btn:
+                        break
+                    print(f"  Review step — clicking '{next_btn}'", file=sys.stderr)
                     try:
-                        page.click(f'button:text("{next_btn}")')
+                        page.click(f'button:text("{next_btn}")', timeout=5000)
                     except Exception:
-                        pass
+                        try:
+                            page.evaluate(f"""() => {{
+                                const btn = [...document.querySelectorAll('button')].find(
+                                    b => b.textContent.trim().toLowerCase() === {json.dumps(next_btn.lower())}
+                                );
+                                if (btn) btn.click();
+                            }}""")
+                        except Exception:
+                            break
+                    time.sleep(2)
                     try:
-                        page.wait_for_load_state("domcontentloaded", timeout=10000)
+                        page.wait_for_load_state("domcontentloaded", timeout=5000)
                     except Exception:
                         pass
                     success, _ = _check_submit_success(ctx, page, pages_before)
                     if success:
                         mark_applied(jid)
-                        emit_status("submitted", "Playwright review->submit")
+                        emit_status("submitted", "Playwright multi-step submit")
                         emit_next("verify")
                         return 0
+                    next_btn = _detect_submit_button(page)
 
                 try:
                     from lib.ask_api import available, ask_bytes
