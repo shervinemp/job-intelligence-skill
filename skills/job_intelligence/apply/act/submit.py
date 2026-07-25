@@ -202,9 +202,15 @@ def cmd_submit(jid, confirm=False):
                     print(f"  VISION_SKIP: {ve}", file=sys.stderr)
 
             if not clicked:
+                empt = _empty_required(page)
+                if empt:
+                    print(f"  {empt} required field(s) empty — cannot submit", file=sys.stderr)
+                    emit_status("incomplete", f"{empt} required field(s) need answers")
+                    emit_next("act --fill", "supply answers for empty fields, then resubmit")
+                    return 1
                 print(f"  Playwright could not click submit — using Skyvern", file=sys.stderr)
                 from apply.common.skyvern_bridge import click_submit
-                result = click_submit(url=page.url, browser_session_id=browser_session_id, timeout=180)
+                result = click_submit(url=page.url, browser_session_id=browser_session_id, timeout=60)
                 if result.get("status") == "completed":
                     mark_applied(jid)
                     emit_status("submitted", "Skyvern clicked submit")
