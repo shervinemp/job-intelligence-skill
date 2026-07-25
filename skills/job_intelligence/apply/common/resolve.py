@@ -303,6 +303,7 @@ _ALIAS_RULES = [
     (r"\byears? (of )?experience\b", ["years_of_experience", "years_core_skill"]),
     (r"\brelocat", ["willing_to_relocate"]),
     (r"\bcommute\b", ["willing_to_commute"]),
+    (r"\bhybrid role|comfortable with this|in (our |the )?office\b", ["office_preference"]),
 ]
 
 

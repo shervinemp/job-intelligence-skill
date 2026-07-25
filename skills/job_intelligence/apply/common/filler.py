@@ -130,31 +130,69 @@ class RadioFiller(FieldFiller):
         if not sel:
             return False
         ans_lower = str(ans).strip().lower()
+        # For Yes/No radios, reduce long answers to just "yes" or "no"
+        # (e.g. "Yes, in the Toronto office" → "yes")
+        yn_prefix = ""
+        if ans_lower.startswith("yes"):
+            yn_prefix = "yes"
+        elif ans_lower.startswith("no"):
+            yn_prefix = "no"
         try:
             clicked = page.evaluate("""(args) => {
-                const [sel, ans] = args;
+                const [sel, ans, ynPref] = args;
                 const radios = [...document.querySelectorAll(sel)];
                 if (!radios.length) return false;
+
+                // Helper: get a radio's visible label text
+                function radioLabel(r) {
+                    const lbl = r.closest('label');
+                    if (lbl) {
+                        const txt = lbl.textContent.replace(r.value || '', '').trim().toLowerCase();
+                        if (txt) return txt;
+                    }
+                    let el = r;
+                    for (let i = 0; i < 4; i++) {
+                        el = el.parentElement;
+                        if (!el) break;
+                        const txt = el.textContent.trim().toLowerCase();
+                        if (txt && txt.length < 30 && txt !== 'on') return txt;
+                    }
+                    let sib = r.nextElementSibling;
+                    while (sib) {
+                        const txt = sib.textContent.trim().toLowerCase();
+                        if (txt && txt.length < 30) return txt;
+                        sib = sib.nextElementSibling;
+                    }
+                    return (r.value || '').toLowerCase();
+                }
+
                 // Try 1: match by value (standard HTML)
                 for (const r of radios) {
                     if (r.value && r.value.toLowerCase() === ans) { r.click(); return true; }
+                }
+                // Try 1b: Yes/No prefix match (e.g. ans="yes, in the toronto office" → match "yes")
+                if (ynPref) {
+                    for (const r of radios) {
+                        const lbl = radioLabel(r);
+                        if (lbl === ynPref || lbl.startsWith(ynPref)) { r.click(); return true; }
+                    }
                 }
                 // Try 2: match by associated <label> text
                 for (const r of radios) {
                     const lbl = r.closest('label');
                     if (lbl) {
                         const txt = lbl.textContent.replace(r.value || '', '').trim().toLowerCase();
-                        if (txt === ans || txt.startsWith(ans)) { r.click(); return true; }
+                        if (txt === ans || txt.startsWith(ans) || ans.startsWith(txt)) { r.click(); return true; }
                     }
                 }
-                // Try 3: walk up 3 levels and match text (LinkedIn pattern)
+                // Try 3: walk up 4 levels and match text (LinkedIn pattern)
                 for (const r of radios) {
                     let el = r;
                     for (let i = 0; i < 4; i++) {
                         el = el.parentElement;
                         if (!el) break;
                         const txt = el.textContent.trim().toLowerCase();
-                        if (txt === ans || txt.startsWith(ans + ' ') || txt === ans.substring(0, 20)) {
+                        if (txt === ans || txt.startsWith(ans + ' ') || ans.startsWith(txt)) {
                             r.click(); return true;
                         }
                     }
@@ -164,14 +202,14 @@ class RadioFiller(FieldFiller):
                     let sib = r.nextElementSibling;
                     while (sib) {
                         const txt = sib.textContent.trim().toLowerCase();
-                        if (txt && txt.length < 30 && (txt === ans || txt.startsWith(ans))) {
+                        if (txt && txt.length < 30 && (txt === ans || txt.startsWith(ans) || ans.startsWith(txt))) {
                             r.click(); return true;
                         }
                         sib = sib.nextElementSibling;
                     }
                 }
                 return false;
-            }""", [sel, ans_lower])
+            }""", [sel, ans_lower, yn_prefix])
             return bool(clicked)
         except Exception:
             return False
