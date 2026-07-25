@@ -21,6 +21,7 @@ eliminating the two-layer indirection (act → dispatch → filler → strategy)
 from abc import ABC, abstractmethod
 import json
 import os
+import time
 
 from apply.common.field_types import is_combobox as _is_combobox
 from apply.common.value_reader import read_value as _read_value
@@ -315,6 +316,69 @@ class FileFiller(FieldFiller):
         return False
 
 
+class AutocompleteFiller(FieldFiller):
+    """Handles text inputs with autocomplete dropdowns (Ashby Location, Greenhouse typeahead).
+    Detected by generic placeholders like 'Start typing...', 'Type to search...'.
+    Uses keyboard typing (not el.value) so React state updates, then selects first suggestion."""
+    name = "autocomplete"
+
+    _AUTOCOMPLETE_PLACEHOLDERS = {"start typing...", "type to search...", "type here and select...",
+                                  "search and select...", "start typing and select..."}
+
+    def can_handle(self, f):
+        if _is_combobox(f):
+            return False
+        if f.get("tag") not in ("INPUT", "TEXTAREA"):
+            return False
+        if (f.get("type") or "").lower() in ("checkbox", "radio", "file", "hidden", "email", "tel", "number"):
+            return False
+        placeholder = (f.get("placeholder") or "").lower().strip()
+        label = (f.get("label") or "").lower().strip()
+        if placeholder in self._AUTOCOMPLETE_PLACEHOLDERS:
+            return True
+        if placeholder == "start typing..." and "location" in label:
+            return True
+        return False
+
+    def fill(self, page, f, ans):
+        sel = f.get("_sel", "")
+        if not sel:
+            return False
+        try:
+            el = page.locator(sel).first
+            if el.count() == 0:
+                return False
+            el.click(timeout=3000)
+            time.sleep(0.3)
+            el.fill("")
+            time.sleep(0.2)
+            # Type character by character so React/autcomplete picks up events
+            el.type(str(ans), delay=80)
+            time.sleep(1.5)
+            # Look for autocomplete dropdown suggestions
+            suggestion_clicked = page.evaluate("""() => {
+                // Look for visible suggestion/option elements near the input
+                const sels = '[role="option"], [class*="suggestion"], [class*="dropdown-item"], [class*="list-item"], [class*="menu-item"], li[class*="option"]';
+                const all = [...document.querySelectorAll(sels)].filter(el => el.offsetParent !== null);
+                if (all.length > 0) {
+                    all[0].click();
+                    return true;
+                }
+                return false;
+            }""")
+            if suggestion_clicked:
+                time.sleep(0.5)
+                return True
+            # No dropdown appeared — try pressing ArrowDown + Enter
+            el.press("ArrowDown")
+            time.sleep(0.3)
+            el.press("Enter")
+            time.sleep(0.5)
+            return True
+        except Exception:
+            return False
+
+
 class TextFiller(FieldFiller):
     name = "text"
 
@@ -364,6 +428,7 @@ _FILLERS = [
     ComboboxFiller(),
     DatepickerFiller(),
     ContentEditableFiller(),
+    AutocompleteFiller(),
     TextFiller(),
     NativeSetterFallback(),
 ]

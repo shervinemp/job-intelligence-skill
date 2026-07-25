@@ -19,6 +19,13 @@ SUCCESS_STRICT = (
     "application submitted",
     "successfully applied",
     "thank you for applying",
+    "application complete",
+    "we received your application",
+    "successfully submitted",
+    "your application is complete",
+    "thanks for your application",
+    "application has been received",
+    "application has been submitted",
 )
 
 

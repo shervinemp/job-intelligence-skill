@@ -61,12 +61,16 @@ def check_applied_signal(page):
         return False
     if has_success_text(body):
         return True
+    # URL-based: Ashby/Workday redirect to confirmation pages
+    url = (page.url or "").lower()
+    if "/application" in url and ("submitted" in url or "complete" in url or "confirmed" in url or "success" in url):
+        return True
     try:
         found = page.evaluate("""() => {
-            const all = document.querySelectorAll('button, a, span, div');
+            const all = document.querySelectorAll('button, a, span, div, h1, h2, h3');
             for (const el of all) {
                 const t = (el.textContent || '').trim().toLowerCase();
-                if (t === 'applied' || t === 'application submitted') return true;
+                if (t === 'applied' || t === 'application submitted' || t === 'application complete') return true;
             }
             return false;
         }""")

@@ -276,7 +276,7 @@ def _dismiss_confirm_modal(page):
 def _get_validation_errors(page):
     try:
         return page.evaluate("""() => {
-            const sels = '[role="alert"], .field-error, .error-message, [class*="error"]:not([class*="error-icon"]), .form-error, .invalid-feedback';
+            const sels = '[role="alert"], .field-error, .error-message, [class*="error"]:not([class*="error-icon"]), .form-error, .invalid-feedback, [class*="correction"], [class*="missing"], [class*="validation"]';
             const seen = new Set();
             const out = [];
             for (const el of document.querySelectorAll(sels)) {
@@ -285,6 +285,16 @@ def _get_validation_errors(page):
                 if (!t || t.length > 200 || seen.has(t)) continue;
                 seen.add(t);
                 out.push(t);
+            }
+            // Ashby: "Your form needs corrections" / "Missing entry for required field"
+            const body = document.body.innerText || '';
+            const ashbyMatch = body.match(/Missing entry for required field[:\\s]*([^\\n]+)/i);
+            if (ashbyMatch && !seen.has(ashbyMatch[0])) {
+                out.push('Missing: ' + ashbyMatch[1].trim());
+            }
+            const correctionsMatch = body.match(/form needs corrections/i);
+            if (correctionsMatch && !out.length) {
+                out.push('Form has validation errors');
             }
             return out.slice(0, 15);
         }""") or []

@@ -24,20 +24,49 @@ _READER_JS = """(config) => {
             if (ref) label = ref.textContent.trim();
         }
         if (!label && el.getAttribute('aria-label')) label = el.getAttribute('aria-label');
-        // AOM: Chrome 121+ computed accessible name ΓÇö bypasses obfuscated classes
+        // AOM: Chrome 121+ computed accessible name — bypasses obfuscated classes
         if (!label && el.computedName) {
             const cn = el.computedName.trim();
             if (cn && cn.length > 0 && cn.length < 100) label = cn;
         }
-        if (!label) {
+        if (!label && el.id) {
             const lbl = scopeRoot.querySelector('label[for="' + el.id + '"]');
+            if (lbl) label = lbl.textContent.trim();
+        }
+        if (!label && el.name) {
+            const lbl = scopeRoot.querySelector('label[for="' + el.name + '"]');
             if (lbl) label = lbl.textContent.trim();
         }
         if (!label) {
             const parentLabel = el.closest('label');
             if (parentLabel) label = parentLabel.textContent.trim();
         }
-        if (!label && el.placeholder) label = el.placeholder;
+        // Before falling back to placeholder, look for unclaimed <label> by
+        // walking up the DOM tree. Fixes Ashby/React apps where label[for]
+        // points to a generated ID that was stripped from the input.
+        if (!label) {
+            let ancestor = el.parentElement;
+            for (let level = 0; level < 5 && ancestor; level++) {
+                const labels = [...ancestor.querySelectorAll('label')];
+                const unclaimed = labels.filter(l => {
+                    const forAttr = l.getAttribute('for');
+                    if (!forAttr) return true;
+                    return !document.getElementById(forAttr);
+                });
+                if (unclaimed.length === 1) {
+                    const txt = unclaimed[0].textContent.trim();
+                    if (txt.length > 1 && txt.length < 100) { label = txt; break; }
+                }
+                if (unclaimed.length > 1) break; // ambiguous — stop searching
+                ancestor = ancestor.parentElement;
+            }
+        }
+        // Generic placeholders are useless labels — try parent's label before using them
+        const _GENERIC_PLACEHOLDERS = new Set(['start typing...', 'type here...', 'type to search...',
+            'enter text...', 'select...', 'choose...', 'search...']);
+        if (!label && el.placeholder && !_GENERIC_PLACEHOLDERS.has(el.placeholder.toLowerCase().trim())) {
+            label = el.placeholder;
+        }
         if (!label) {
             const parent = el.closest('div,fieldset,section,li,form');
             const plbl = parent ? parent.querySelector('label, legend, strong, span') : null;
