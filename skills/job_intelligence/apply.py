@@ -5,7 +5,7 @@ Usage:
   python3 apply.py detect [<jid>]
   python3 apply.py navigate <jid>
   python3 apply.py act --fill <jid> [--answers '{}'] [--max-pages N]
-  python3 apply.py act --next <jid>
+  python3 apply.py act --check <jid>
   python3 apply.py act --submit <jid>
   python3 apply.py act --inspect <jid>
   python3 apply.py act --investigate <jid>
@@ -47,6 +47,7 @@ def main():
     act_p.add_argument("--next", action="store_true", help="Next page on multi-step form")
     act_p.add_argument("--submit", action="store_true", help="Submit the application")
     act_p.add_argument("--inspect", action="store_true", help="Analyze the page (screenshot, fields, buttons)")
+    act_p.add_argument("--check", action="store_true", help="Pre-submit validation: flag contradictions before submitting")
     act_p.add_argument("--investigate", action="store_true", help="Deep-analyze unknown platform (Skyvern investigator)")
     act_p.add_argument("--answers", help="JSON field->value mapping for --fill")
     act_p.add_argument("--no-verify", action="store_true", help="Skip vision verification after fill")
@@ -86,8 +87,12 @@ def main():
         run(args.jid)
     elif args.command == "act":
         from apply.act import run
+        if args.fill and args.submit:
+            print("ERROR: --fill and --submit together is not allowed. The orchestrator must review the fill report before submitting.", file=sys.stderr)
+            sys.exit(1)
         cmd = "fill" if args.fill else ("submit" if args.submit else
               "next" if args.next else ("inspect" if args.inspect else
+              "check" if args.check else
               "investigate" if args.investigate else ""))
         if not cmd:
             print("ERROR: specify --fill, --next, --submit, --inspect, or --investigate", file=sys.stderr)

@@ -140,6 +140,8 @@ _READER_JS = """(config) => {
 
     function isVisible(el) {
         if (el.type === 'file') return true;
+        // Ashby Yes/No: hidden checkbox but visible button container
+        if (el.type === 'checkbox' && el.closest('[class*="yesno"]')) return true;
         const s = window.getComputedStyle(el);
         if (s.display === 'none' || s.visibility === 'hidden') return false;
         if (s.position === 'absolute' && parseInt(s.left) < -100) return false;

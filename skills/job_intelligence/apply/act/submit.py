@@ -80,14 +80,6 @@ def cmd_submit(jid, confirm=False):
                         time.sleep(3)
 
             try:
-                from apply.common.registry import resolve as resolve_registry
-                profile = _load_profile()
-                pr = _probe_form(page, resolve_registry(page.url), jid, allow_vision=False)
-                fields = pr.fields or []
-                if fields:
-                    refilled, _ = _fill_with_playwright(page, fields, profile, None)
-                    if refilled:
-                        print(f"  Re-fill: {len(refilled)} fields restored/confirmed", file=sys.stderr)
                 empt = _empty_required(page)
                 if empt:
                     print(f"  WARN: {empt} required field(s) still empty before submit", file=sys.stderr)

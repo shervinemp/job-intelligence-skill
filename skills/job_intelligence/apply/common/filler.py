@@ -145,9 +145,10 @@ class RadioFiller(FieldFiller):
             yn_prefix = "yes"
         elif ans_lower.startswith("no"):
             yn_prefix = "no"
+        country = (f.get("_country") or "").lower()
         try:
             clicked = page.evaluate("""(args) => {
-                const [sel, ans, ynPref] = args;
+                const [sel, ans, ynPref, country] = args;
                 const radios = [...document.querySelectorAll(sel)];
                 if (!radios.length) return false;
 
@@ -163,12 +164,12 @@ class RadioFiller(FieldFiller):
                         el = el.parentElement;
                         if (!el) break;
                         const txt = el.textContent.trim().toLowerCase();
-                        if (txt && txt.length < 30 && txt !== 'on') return txt;
+                        if (txt && txt !== 'on') return txt;
                     }
                     let sib = r.nextElementSibling;
                     while (sib) {
                         const txt = sib.textContent.trim().toLowerCase();
-                        if (txt && txt.length < 30) return txt;
+                        if (txt) return txt;
                         sib = sib.nextElementSibling;
                     }
                     return (r.value || '').toLowerCase();
@@ -178,11 +179,42 @@ class RadioFiller(FieldFiller):
                 for (const r of radios) {
                     if (r.value && r.value.toLowerCase() === ans) { r.click(); return true; }
                 }
-                // Try 1b: Yes/No prefix match (e.g. ans="yes, in the toronto office" → match "yes")
+                // Try 1b: Yes/No prefix match — collect ALL matches, disambiguate by location
                 if (ynPref) {
+                    const matches = [];
                     for (const r of radios) {
                         const lbl = radioLabel(r);
-                        if (lbl === ynPref || lbl.startsWith(ynPref)) { r.click(); return true; }
+                        if (lbl === ynPref || lbl.startsWith(ynPref + ' ') || lbl.startsWith(ynPref + ',') || lbl.startsWith(ynPref + '-')) {
+                            matches.push({radio: r, label: lbl});
+                        }
+                    }
+                    if (matches.length === 1) {
+                        matches[0].radio.click(); return true;
+                    }
+                    // Multiple Yes/No options — disambiguate by user's location words
+                    // country is a comma-separated list: "ottawa,ontario,canada,toronto"
+                    if (matches.length > 1 && country) {
+                        const locWords = country.split(',').map(w => w.trim()).filter(Boolean);
+                        let bestMatch = null;
+                        let bestScore = -1;
+                        for (const m of matches) {
+                            const lblLower = m.label.toLowerCase();
+                            let score = 0;
+                            for (const w of locWords) {
+                                if (lblLower.includes(w)) score++;
+                            }
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestMatch = m;
+                            }
+                        }
+                        if (bestMatch && bestScore >= 0) {
+                            bestMatch.radio.click(); return true;
+                        }
+                    }
+                    // No country disambiguation — click first match
+                    if (matches.length > 0) {
+                        matches[0].radio.click(); return true;
                     }
                 }
                 // Try 2: match by associated <label> text
@@ -200,7 +232,7 @@ class RadioFiller(FieldFiller):
                         el = el.parentElement;
                         if (!el) break;
                         const txt = el.textContent.trim().toLowerCase();
-                        if (txt === ans || txt.startsWith(ans + ' ') || ans.startsWith(txt)) {
+                        if (txt === ans || txt.startsWith(ans + ' ') || txt.startsWith(ans + ',') || ans.startsWith(txt)) {
                             r.click(); return true;
                         }
                     }
@@ -210,14 +242,14 @@ class RadioFiller(FieldFiller):
                     let sib = r.nextElementSibling;
                     while (sib) {
                         const txt = sib.textContent.trim().toLowerCase();
-                        if (txt && txt.length < 30 && (txt === ans || txt.startsWith(ans) || ans.startsWith(txt))) {
+                        if (txt && (txt === ans || txt.startsWith(ans) || ans.startsWith(txt))) {
                             r.click(); return true;
                         }
                         sib = sib.nextElementSibling;
                     }
                 }
                 return false;
-            }""", [sel, ans_lower, yn_prefix])
+            }""", [sel, ans_lower, yn_prefix, country])
             return bool(clicked)
         except Exception:
             return False
@@ -400,6 +432,52 @@ class TextFiller(FieldFiller):
         return False
 
 
+class AshbyYesNoFiller(FieldFiller):
+    """Handles Ashby's custom Yes/No button widget: two <button> elements
+    inside a _yesno_ container with a hidden checkbox."""
+    name = "ashby_yesno"
+
+    def can_handle(self, f):
+        tag = (f.get("tag") or "").upper()
+        ftype = (f.get("type") or "").lower()
+        if tag != "INPUT" or ftype != "checkbox":
+            return False
+        # Only handle non-consent checkboxes (CheckboxFiller handles consent)
+        lbl = (f.get("label") or "").lower()
+        consent_kw = ["agree", "consent", "accept", "terms", "confirm",
+                      "understand", "authorize", "certify", "marketing",
+                      "privacy", "notice", "future job", "updates"]
+        if any(kw in lbl for kw in consent_kw):
+            return False
+        return True
+
+    def fill(self, page, f, ans):
+        sel = f.get("_sel", f.get("selector", ""))
+        if not sel:
+            return False
+        ans_lower = str(ans).strip().lower()
+        target = "yes" if ans_lower.startswith("yes") else "no"
+        try:
+            clicked = page.evaluate("""(args) => {
+                const [sel, target] = args;
+                const cb = document.querySelector(sel);
+                if (!cb) return false;
+                const container = cb.closest('[class*="yesno"]');
+                if (!container) return false;
+                const buttons = container.querySelectorAll('button');
+                for (const btn of buttons) {
+                    if (btn.textContent.trim().toLowerCase() === target) {
+                        btn.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""", [sel, target])
+            return bool(clicked)
+        except Exception:
+            return False
+
+
 class NativeSetterFallback(FieldFiller):
     name = "native_setter"
 
@@ -423,6 +501,7 @@ class NativeSetterFallback(FieldFiller):
 _FILLERS = [
     CheckboxFiller(),
     RadioFiller(),
+    AshbyYesNoFiller(),
     FileFiller(),
     SelectFiller(),
     ComboboxFiller(),

@@ -240,15 +240,18 @@ def resolve(
 
     # Step 3c: single-word whole-word match for unambiguous contact/location
     # keys ("Location (City)" → location, "Country" → country). Whitelist keeps
-    # it conservative — no fuzzy guessing on multi-intent words.
+    # it conservative — only fires when the label is SHORT (≤3 words) so a word
+    # like "country" doesn't match inside a long question like "...require visa
+    # sponsorship to work in the United States or Canada?".
     _SINGLE_OK = {"email", "phone", "location", "website", "portfolio",
                   "linkedin", "github", "city", "country", "address", "zip",
                   "pronouns", "headline", "name"}
+    _norm_word_count = len(_norm_words)
     for key, (val, _source) in ephemeral.items():
         kw = key.replace("_", " ")
         if " " in kw:
             continue
-        if kw in _SINGLE_OK and kw in _norm_words:
+        if kw in _SINGLE_OK and kw in _norm_words and _norm_word_count <= 3:
             return Resolution(val, key, label, "ephemeral")
 
     # Step 4: learned mappings — labels the user/orchestrator answered in

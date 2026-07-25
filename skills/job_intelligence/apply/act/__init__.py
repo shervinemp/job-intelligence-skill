@@ -44,6 +44,10 @@ def run(args):
         from apply.act.inspect import cmd_inspect
         return cmd_inspect(jid)
 
+    elif cmd == "check":
+        from apply.act.check import cmd_check
+        return cmd_check(jid)
+
     elif cmd == "investigate":
         from apply.act.investigate import cmd_investigate
         return cmd_investigate(jid)

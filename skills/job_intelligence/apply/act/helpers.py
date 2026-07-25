@@ -453,6 +453,29 @@ def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list
         if covers:
             cover_path = covers[0]
 
+    # Derive user's location parts for radio disambiguation
+    # (e.g. Ashby 4-option sponsorship: "Yes...United States" vs "Yes...Canada"
+    #  and 3-option office: "Yes, in the San Francisco office" vs "Yes, in the Toronto office")
+    loc = (profile.get("location") or "")
+    user_country = ""
+    user_city = ""
+    user_region = ""
+    if loc and "," in loc:
+        parts = [p.strip() for p in loc.split(",")]
+        if parts:
+            user_city = parts[0]
+        if len(parts) >= 2:
+            user_region = parts[1]
+        if len(parts) >= 3:
+            user_country = parts[-1]
+    if not user_country:
+        user_country = profile.get("country", "")
+    # Comma-separated location keywords for matching (e.g. "ottawa,ontario,canada,toronto")
+    user_loc_words = ",".join(w.strip().lower() for w in [user_city, user_region, user_country] if w)
+
+    for f in fields:
+        f["_country"] = user_loc_words
+
     for f in fields:
         label = f.get("label", "").strip()
         if not label:
@@ -473,7 +496,17 @@ def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list
                     if sel and _set_files_any_frame(page, sel, path):
                         filled.append({"label": label, "key": _field_key(f)})
                         continue
-                    print(f"  UPLOAD_FAIL: {label}", file=sys.stderr)
+                    fallbacks = [
+                        'input[type=file][id*="resume"]',
+                        'input[type=file][accept*="pdf"]',
+                        'input[type=file]',
+                    ]
+                    for fb in fallbacks:
+                        if _set_files_any_frame(page, fb, path):
+                            filled.append({"label": label, "key": _field_key(f)})
+                            break
+                    else:
+                        print(f"  UPLOAD_FAIL: {label}", file=sys.stderr)
                 except Exception as ue:
                     print(f"  UPLOAD_FAIL: {label} — {str(ue)[:120]}", file=sys.stderr)
 
