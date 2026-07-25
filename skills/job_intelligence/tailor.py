@@ -364,12 +364,11 @@ def cmd_retry(job_id=None, feedback=None):
     print(f"\nRetry complete. Succeeded: {processed}/{len(failed)}", file=sys.stderr)
 
 
-def cmd_relentless(max_jobs=None):
+def cmd_relentless():
     if os.environ.get("JI_TAILOR", "agent") == "agent":
         print("ERROR: --auto requires gem route (JI_TAILOR=gem). Agent mode is one-job-at-a-time.", file=sys.stderr)
         return
     consecutive_fail = 0
-    done = 0
     while True:
         state = load()
         described = [(jid, e) for jid, e in state["jobs"].items()
@@ -382,10 +381,6 @@ def cmd_relentless(max_jobs=None):
             else:
                 print(f"DONE: {s['stages'].get('tailored', 0)} tailored, all clear", file=sys.stderr)
             break
-        if max_jobs and done >= max_jobs:
-            s = pipeline_status()
-            print(f"BATCH_DONE: {done} tailored, {len(described)} still pending", file=sys.stderr)
-            break
         if consecutive_fail >= 3:
             print(f"PAUSED: {consecutive_fail} consecutive failures — Chrome/gemini likely down", file=sys.stderr)
             break
@@ -393,7 +388,7 @@ def cmd_relentless(max_jobs=None):
         jid, entry = described[0]
         title = entry.get("title", "?")
         company = entry.get("company", "?")
-        print(f"\n[{done+1}] {jid} {title} @ {company}", file=sys.stderr)
+        print(f"\n{jid} {title} @ {company}", file=sys.stderr)
 
         try:
             success, result = generate_tailored_docs(entry)
@@ -402,22 +397,18 @@ def cmd_relentless(max_jobs=None):
 
         if success:
             consecutive_fail = 0
-            done += 1
-            mode = os.environ.get("JI_TAILOR", "agent")
-            if mode == "agent":
-                print(f"  PROMPT_READY {jid}", file=sys.stderr)
-            else:
-                print(f"  COMPLETE {jid}", file=sys.stderr)
+            advance(entry, "tailored", state="active")
+            print(f"  COMPLETE {jid}", file=sys.stderr)
         else:
             err_str = str(result)[:160]
             if any(x in err_str for x in ["RATE_LIMIT", "rate_limit"]):
                 resets = _re_search_resets(err_str)
                 if resets:
                     _wait_until(resets)
-                    continue
-                print(f"  RATE_LIMIT {jid} — sleeping 120s", file=sys.stderr)
-                import time as _t
-                _t.sleep(120)
+                else:
+                    print(f"  RATE_LIMIT {jid} — sleeping 120s", file=sys.stderr)
+                    import time as _t
+                    _t.sleep(120)
                 continue
             consecutive_fail += 1
             if any(x in err_str for x in ["Chrome not responding", "[gemini]"]):
@@ -489,7 +480,7 @@ def cmd_reset(job_id=None, states=None, stages=None):
 
 def cmd_help():
     print("""Usage:
-  [--auto] [--max-jobs N]                    Craft described jobs (N=limit per batch)
+  [--auto]                                  Craft all described jobs (gem route only)
   admit <jid> [jid...]                      Mark tailored (also: done)
   reject <jid> [jid...]                     Reject
   undo <jid>                                Move back one stage
@@ -506,7 +497,6 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(prog="tailor.py", description="Tailor CVs via Gemini Web")
     parser.add_argument("--auto", action="store_true", help="Craft all described jobs, retry on rate limit")
-    parser.add_argument("--max-jobs", type=int, default=None, help="Max jobs to process in --auto mode")
     parser.add_argument("--jid", help="Tailor a specific job by JID")
 
     sub = parser.add_subparsers(dest="command")
@@ -557,7 +547,7 @@ def main():
         craft_jid(args.jid)
     elif args.command is None:
         if args.auto:
-            cmd_relentless(max_jobs=args.max_jobs)
+            cmd_relentless()
         else:
             cmd_craft(auto=False)
 
