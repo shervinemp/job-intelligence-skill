@@ -78,6 +78,7 @@ def run(jid):
     elif job_type == "easy_apply":
         emit_type("linkedin")
         print("NOTE: LinkedIn job — fill will auto-resolve Apply link or Easy Apply modal", file=sys.stderr)
+        resolved_url = url
         emit_next("act --fill")
     else:
         emit_type("unknown")

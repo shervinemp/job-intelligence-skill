@@ -1,5 +1,5 @@
 """act/submit.py — Submit command with policy gate, Playwright + Skyvern fallback."""
-import os, sys, time
+import json, os, sys, time
 
 from lib.db import get_conn
 from apply.common.output import emit_next, emit_status, emit_error
@@ -62,6 +62,20 @@ def cmd_submit(jid, confirm=False):
                 emit_status("captcha", "CAPTCHA still present after timeout")
                 return 1
 
+            if "linkedin.com/jobs" in (page.url or "").lower():
+                dialog = page.locator('dialog[data-testid="dialog"]').first
+                if dialog.count() > 0:
+                    print(f"  Easy Apply: modal already open", file=sys.stderr)
+                else:
+                    ea_btn = page.locator('button:has-text("Easy Apply")').first
+                    if ea_btn.count() > 0:
+                        try:
+                            ea_btn.click(timeout=5000)
+                        except Exception:
+                            ea_btn.click(force=True, timeout=5000)
+                        print(f"  Easy Apply: modal opened", file=sys.stderr)
+                        time.sleep(3)
+
             try:
                 from apply.common.registry import resolve as resolve_registry
                 profile = _load_profile()
@@ -82,14 +96,23 @@ def cmd_submit(jid, confirm=False):
             if submit_text:
                 print(f"  Found submit button: '{submit_text}'", file=sys.stderr)
                 try:
-                    page.click(f'button:text("{submit_text}")')
+                    page.click(f'button:text("{submit_text}")', timeout=5000)
                     clicked = True
                 except Exception:
                     try:
-                        page.click(f'text="{submit_text}"')
+                        page.click(f'button:text("{submit_text}")', force=True, timeout=5000)
                         clicked = True
                     except Exception:
-                        print(f"  Could not click submit button via Playwright", file=sys.stderr)
+                        try:
+                            page.evaluate(f"""() => {{
+                                const btn = [...document.querySelectorAll('button')].find(
+                                    b => b.textContent.trim().toLowerCase() === {json.dumps(submit_text.lower())}
+                                );
+                                if (btn) btn.click();
+                            }}""")
+                            clicked = True
+                        except Exception:
+                            print(f"  Could not click submit button via Playwright", file=sys.stderr)
 
             if clicked:
                 try:

@@ -9,7 +9,18 @@ def try_select_tag(el, f, ans, method=None):
         return False
     try:
         values = ans if isinstance(ans, list) else [ans]
-        selected = [next((o for o in f.get("options", []) if v.lower() == o.lower()), v) for v in values]
+        opts = f.get("options", [])
+
+        selected = []
+        for v in values:
+            vl = v.lower()
+            match = next((o for o in opts if vl == o.lower()), None)
+            if not match:
+                match = next((o for o in opts if vl in o.lower()), None)
+            if not match and vl.startswith("+"):
+                match = next((o for o in opts if f"({vl})" in o.lower() or f" {vl}" in o.lower()), None)
+            selected.append(match or v)
+
         final = selected if len(selected) > 1 else selected[0]
 
         if method is None or method == "select_option":
@@ -30,7 +41,10 @@ def try_select_tag(el, f, ans, method=None):
         elif method == "js_click":
             el.evaluate("""(args) => {
                 const el = args[0], val = args[1];
-                const opt = Array.from(el.options).find(o => o.value === val || o.text === val);
+                const vl = val.toLowerCase();
+                let opt = Array.from(el.options).find(o => o.value === val || o.text === val);
+                if (!opt) opt = Array.from(el.options).find(o => o.text.toLowerCase().includes(vl));
+                if (!opt && vl.startsWith('+')) opt = Array.from(el.options).find(o => o.text.toLowerCase().includes('(' + vl + ')'));
                 if (opt) {
                     el.value = opt.value;
                     el.dispatchEvent(new Event('change', {bubbles: true}));

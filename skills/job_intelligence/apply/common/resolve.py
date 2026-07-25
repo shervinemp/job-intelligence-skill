@@ -175,12 +175,23 @@ def resolve(
         if len(nk) >= 10 and norm.startswith(nk):
             return Resolution(v, "answers_override", label, "user_typed")
 
+    # Step 1.5a: phone country code — extract from phone before generic matching
+    if "country code" in norm and "phone" in norm:
+        phone_val = _find_ephemeral_value("phone", _build_ephemeral(profile))
+        if phone_val:
+            m = re.match(r'\+?(\d{1,3})', phone_val)
+            return Resolution(("+" + m.group(1)) if m else "+1", "phone", label, "country_code")
+
     # Step 1.5: HTML autocomplete attribute (standardized semantics, free)
     ephemeral = _build_ephemeral(profile)
     ac_key = _autocomplete_key(autocomplete)
     if ac_key:
         val = _find_ephemeral_value(ac_key, ephemeral)
         if val:
+            if ac_key == "tel-country-code":
+                import re as _re
+                m = _re.match(r'\+?(\d{1,3})', val)
+                val = ("+" + m.group(1)) if m else "+1"
             return Resolution(val, ac_key, label, "autocomplete")
 
     # Step 1.6: name/id attribute semantics — ATS vendors use consistent
@@ -194,6 +205,10 @@ def resolve(
             if pat in av:
                 val = _find_ephemeral_value(ekey, ephemeral)
                 if val:
+                    if "country_code" in av or "countrycode" in av:
+                        import re as _re
+                        m = _re.match(r'\+?(\d{1,3})', val)
+                        val = ("+" + m.group(1)) if m else "+1"
                     return Resolution(val, ekey, label, "attr")
 
     # Step 2: profile ephemeral exact match (deterministic facts/derivations)

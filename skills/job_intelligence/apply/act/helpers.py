@@ -487,7 +487,7 @@ def _verify_with_ask_api(page, answers: dict) -> dict:
 
 
 def _detect_submit_button(page) -> str | None:
-    candidates = scan_actions(page, ["submit", "submit application", "send application", "apply"])
+    candidates = scan_actions(page, ["submit", "submit application", "send application", "next", "review", "continue"])
     if candidates:
         for c in candidates:
             if not c.get("disabled"):

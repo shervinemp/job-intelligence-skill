@@ -83,7 +83,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
             tag_page(page, jid)
 
-            if "linkedin.com/jobs" in (page.url or "").lower() and not state.get("external_url"):
+            if "linkedin.com/jobs" in (page.url or "").lower():
                 resolved = _resolve_linkedin_apply(page)
                 if resolved:
                     print(f"  LINKEDIN: Apply -> {resolved[:80]}", file=sys.stderr)
