@@ -174,12 +174,21 @@ _READER_JS = """(config) => {
         if (radios.length < 2) return;
         // Find parent question label from DOM structure.
         // Typical HTML: <div class="row"><div class="col-4"><label>Question?</label></div><div class="col-8"><input type="radio" name="..."></div></div>
+        // LinkedIn: <div><p>Question? *</p><fieldset>...radios...</fieldset><p>This field is required</p></div>
         const firstEl = root.querySelector(`input[name="${CSS.escape(name)}"]`);
         let question = radios[0].label || '';
+        const fieldset = firstEl ? firstEl.closest('fieldset') : null;
         if (firstEl) {
+            // Step 0: fieldset's previous sibling (LinkedIn Easy Apply pattern)
+            if (fieldset && fieldset.previousElementSibling) {
+                const txt = (fieldset.previousElementSibling.textContent || '').trim();
+                if (txt.length > 3 && txt.length < 200 && txt !== fieldset.textContent.trim()) {
+                    question = txt;
+                }
+            }
             // Step 1: look at the previous sibling's label (most common pattern)
             const myContainer = firstEl.closest('div,fieldset,section,li');
-            if (myContainer) {
+            if (question === radios[0].label && myContainer) {
                 const prevSibling = myContainer.previousElementSibling;
                 if (prevSibling) {
                     const prevLabel = prevSibling.querySelector('label, legend, strong, b, span, p');
@@ -244,7 +253,7 @@ _READER_JS = """(config) => {
             tag: 'RADIO_GROUP', name: name, id: firstEl ? firstEl.id || '' : '',
             label: question || name,
             type: 'radio', options: uniqueOpts.length >= 2 ? uniqueOpts : (radios.length >= 2 ? ['Yes', 'No'] : optionLabels),
-            required: radios.some(r => r.required),
+            required: radios.some(r => r.required) || /\\*\\s*$/.test(question) || !!(fieldset && fieldset.nextElementSibling && /required/i.test(fieldset.nextElementSibling.textContent)),
             selector: `input[name="${CSS.escape(name)}"]`,
             value: radios.find(r => r.checked) ? radios.find(r => r.checked).label : '',
             placeholder: '', data_automation_id: '', role: 'radiogroup',

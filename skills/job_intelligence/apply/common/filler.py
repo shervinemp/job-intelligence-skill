@@ -119,6 +119,64 @@ class CheckboxFiller(FieldFiller):
             return False
 
 
+class RadioFiller(FieldFiller):
+    name = "radio"
+
+    def can_handle(self, f):
+        return f.get("tag") == "RADIO_GROUP" or f.get("type") == "radio"
+
+    def fill(self, page, f, ans):
+        sel = f.get("_sel", f.get("selector", ""))
+        if not sel:
+            return False
+        ans_lower = str(ans).strip().lower()
+        try:
+            clicked = page.evaluate("""(args) => {
+                const [sel, ans] = args;
+                const radios = [...document.querySelectorAll(sel)];
+                if (!radios.length) return false;
+                // Try 1: match by value (standard HTML)
+                for (const r of radios) {
+                    if (r.value && r.value.toLowerCase() === ans) { r.click(); return true; }
+                }
+                // Try 2: match by associated <label> text
+                for (const r of radios) {
+                    const lbl = r.closest('label');
+                    if (lbl) {
+                        const txt = lbl.textContent.replace(r.value || '', '').trim().toLowerCase();
+                        if (txt === ans || txt.startsWith(ans)) { r.click(); return true; }
+                    }
+                }
+                // Try 3: walk up 3 levels and match text (LinkedIn pattern)
+                for (const r of radios) {
+                    let el = r;
+                    for (let i = 0; i < 4; i++) {
+                        el = el.parentElement;
+                        if (!el) break;
+                        const txt = el.textContent.trim().toLowerCase();
+                        if (txt === ans || txt.startsWith(ans + ' ') || txt === ans.substring(0, 20)) {
+                            r.click(); return true;
+                        }
+                    }
+                }
+                // Try 4: check next sibling text (label after radio)
+                for (const r of radios) {
+                    let sib = r.nextElementSibling;
+                    while (sib) {
+                        const txt = sib.textContent.trim().toLowerCase();
+                        if (txt && txt.length < 30 && (txt === ans || txt.startsWith(ans))) {
+                            r.click(); return true;
+                        }
+                        sib = sib.nextElementSibling;
+                    }
+                }
+                return false;
+            }""", [sel, ans_lower])
+            return bool(clicked)
+        except Exception:
+            return False
+
+
 class SelectFiller(FieldFiller):
     name = "select"
 
@@ -215,6 +273,7 @@ class NativeSetterFallback(FieldFiller):
 
 _FILLERS = [
     CheckboxFiller(),
+    RadioFiller(),
     SelectFiller(),
     ComboboxFiller(),
     DatepickerFiller(),

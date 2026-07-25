@@ -103,6 +103,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         ea_btn.click()
                         print(f"  Easy Apply: modal opened", file=sys.stderr)
                         time.sleep(3)
+                    max_pages = max(max_pages, 6)
 
             reg = resolve_registry(page.url) or resolve_registry(orig_url)
             if reg and reg.page_range:
@@ -187,6 +188,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 if not _click_action(page, nxt["text"]):
                     break
                 time.sleep(2)
+                _wait_for_fields(page, timeout=5)
                 if handle_captcha(page, state):
                     emit_status("captcha", "CAPTCHA during multi-page navigation")
                     return 1

@@ -151,7 +151,7 @@ def _find_next_button(page):
             const all = document.querySelectorAll('button, a, [role="button"], input[type=submit]');
             for (const el of all) {
                 if (el.offsetParent === null || el.disabled) continue;
-                if (el.closest('nav, header, footer, [role=navigation], [role=banner], [role=contentinfo]')) continue;
+                if (!el.closest('dialog') && el.closest('nav, header, footer, [role=navigation], [role=banner], [role=contentinfo]')) continue;
                 const t = ((el.textContent || el.value || '')).trim().toLowerCase().replace(/\\s+/g, ' ');
                 if (!t || t.length > 30) continue;
                 let score = 0;
@@ -296,10 +296,20 @@ def _empty_required(page):
     try:
         return int(page.evaluate("""() => {
             let n = 0;
+            const seenRadios = new Set();
             for (const el of document.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea')) {
                 if (el.offsetParent === null) continue;
                 if (!(el.required || el.getAttribute('aria-required') === 'true')) continue;
                 if (el.type === 'checkbox') { if (!el.checked) n++; continue; }
+                if (el.type === 'radio') {
+                    const name = el.name || el.id;
+                    if (!name || seenRadios.has(name)) continue;
+                    seenRadios.add(name);
+                    const group = el.closest('form, dialog, [role=radiogroup], div') || document;
+                    const checked = group.querySelector(`input[type=radio][name="${CSS.escape(name)}"]:checked`);
+                    if (!checked) n++;
+                    continue;
+                }
                 if (el.getAttribute('role') === 'combobox') {
                     const scope = el.closest('.select__control') || el.parentElement;
                     if (scope && scope.querySelector('.select__single-value')) continue;

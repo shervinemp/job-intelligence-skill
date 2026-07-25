@@ -30,7 +30,8 @@ class FieldValueReader(ABC):
 # ΓöÇΓöÇ Reader cascade ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 class StandardReader(FieldValueReader):
-    """Read el.value ΓÇö works for all standard INPUT/SELECT/TEXTAREA fields."""
+    """Read el.value — works for all standard INPUT/SELECT/TEXTAREA fields.
+    Radio inputs are handled by RadioReader instead (el.value is 'on' for all)."""
     name = "standard"
 
     def read(self, page, sel, ans=None):
@@ -40,8 +41,45 @@ class StandardReader(FieldValueReader):
                 if (!el) return null;
                 if (el.tagName === 'SELECT') return el.options[el.selectedIndex]?.text || el.value || null;
                 if (el.type === 'checkbox') return el.checked ? '__checked__' : '';
+                if (el.type === 'radio') return null;
                 if (el.tagName === 'DIV' || el.isContentEditable) return el.textContent?.trim() || null;
                 return el.value || null;
+            }}""") or "").strip() or None
+        except Exception:
+            return None
+
+
+class RadioReader(FieldValueReader):
+    """Read radio group value by finding the checked radio's label text.
+    LinkedIn radios all have value='on', so we walk up the DOM to find
+    the visible label (Yes/No) of the checked radio."""
+    name = "radio"
+
+    def read(self, page, sel, ans=None):
+        try:
+            return (page.evaluate(f"""() => {{
+                const el = document.querySelector({json.dumps(sel)});
+                if (!el || el.type !== 'radio') return null;
+                const name = el.name;
+                if (!name) return el.checked ? el.value : null;
+                const radios = [...document.querySelectorAll(`input[type=radio][name="${{CSS.escape(name)}}"]`)];
+                const checked = radios.find(r => r.checked);
+                if (!checked) return '';
+                // Walk up to find label text (same logic as RadioFiller)
+                let el2 = checked;
+                for (let i = 0; i < 4; i++) {{
+                    el2 = el2.parentElement;
+                    if (!el2) break;
+                    const txt = el2.textContent.trim();
+                    if (txt && txt.length < 30 && txt.toLowerCase() !== 'on') return txt;
+                }}
+                // Try <label> wrapper
+                const lbl = checked.closest('label');
+                if (lbl) {{
+                    const txt = lbl.textContent.replace(checked.value || '', '').trim();
+                    if (txt) return txt;
+                }}
+                return checked.value || '';
             }}""") or "").strip() or None
         except Exception:
             return None
@@ -158,6 +196,7 @@ class VisionReader(FieldValueReader):
 # ΓöÇΓöÇ Default cascade ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 _DEFAULT_CASCADE = [
+    RadioReader(),
     StandardReader(),
     AriaComboboxReader(),
     ReactSelectReader(),
