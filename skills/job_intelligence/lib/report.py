@@ -117,6 +117,10 @@ def cmd_inspect(jid):
         print(f"\n  Contacts ({len(contacts)}):")
         for c in contacts:
             print(f"    {c['name']:20s} {c['role'] or ''}")
+    rname = job.get("recruiter_name", "")
+    rurl = job.get("recruiter_url", "")
+    if rname:
+        print(f"\n  Recruiter: {rname}" + (f"  {rurl}" if rurl else ""))
 
 
 def cmd_search(query):

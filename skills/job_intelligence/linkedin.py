@@ -19,6 +19,73 @@ from lib.chrome_manager import connect
 from lib.db import add_job, desc_get, desc_save, get_conn
 from lib.platforms import clean as clean_desc
 
+
+_RECRUITER_JS = r"""() => {
+  const seen = new Set();
+
+  // Strategy 1: "Meet the hiring team" / "Hiring team" section
+  const hiringSection = [...document.querySelectorAll('section, div')]
+    .filter(el => /hiring team|meet the (hiring )?team|recruiter/i.test(el.getAttribute('aria-label') || ''))
+    .filter(el => el.querySelector('a[href*="/in/"]'));
+  for (const section of hiringSection) {
+    const links = section.querySelectorAll('a[href*="/in/"]');
+    for (const link of links) {
+      const href = link.href || '';
+      if (!href.includes('/in/')) continue;
+      const name = (link.textContent || '').trim().replace(/\\s+/g, ' ');
+      if (!name || name.length < 2 || seen.has(href)) continue;
+      seen.add(href);
+      let role = '';
+      let parent = link.closest('li, div, .artdeco-entity-lockup, .hire-pipeline-card');
+      if (parent) {
+        const roleEl = parent.querySelector('.artdeco-entity-lockup__subtitle, [class*="subtitle"], [class*="role"]');
+        if (roleEl) role = (roleEl.textContent || '').trim();
+      }
+      return { name, role, linkedin_url: href };
+    }
+  }
+
+  // Strategy 2: Any /in/ links in the job details sidebar
+  const sidebar = document.querySelector('.jobs-search__job-details--sidebar, .job-view-layout__sidebar, [class*="sidebar"]');
+  if (sidebar) {
+    const links = sidebar.querySelectorAll('a[href*="/in/"]');
+    for (const link of links) {
+      const href = link.href || '';
+      if (!href.includes('/in/')) continue;
+      const name = (link.textContent || '').trim().replace(/\\s+/g, ' ');
+      if (!name || name.length < 2 || seen.has(href)) continue;
+      seen.add(href);
+      let role = '';
+      let parent = link.closest('li, div, .artdeco-entity-lockup');
+      if (parent) {
+        const roleEl = parent.querySelector('.artdeco-entity-lockup__subtitle, [class*="subtitle"]');
+        if (roleEl) role = (roleEl.textContent || '').trim();
+      }
+      return { name, role, linkedin_url: href };
+    }
+  }
+
+  // Strategy 3: /in/ links near recruiter/hiring keywords in full details
+  const allLinks = document.querySelectorAll('a[href*="/in/"]');
+  for (const link of allLinks) {
+    const href = link.href || '';
+    if (seen.has(href)) continue;
+    const name = (link.textContent || '').trim().replace(/\\s+/g, ' ');
+    if (!name || name.length < 2) continue;
+    let parent = link.parentElement;
+    let context = '';
+    for (let i = 0; i < 3 && parent; i++) {
+      context += ' ' + (parent.textContent || '');
+      parent = parent.parentElement;
+    }
+    if (/recruiter|hiring|talent|recruit/i.test(context)) {
+      return { name, role: '', linkedin_url: href };
+    }
+  }
+
+  return null;
+}"""
+
 DEFAULT_URL = "https://www.linkedin.com/jobs/collections/recommended/"
 DEFAULT_MAX_PAGES = 20
 
@@ -147,6 +214,19 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                     if desc:
                         desc = clean_desc(job_url, desc)
                         desc_save(jid, desc)
+                    try:
+                        rc = page.evaluate(_RECRUITER_JS)
+                    except Exception:
+                        rc = None
+                    if rc:
+                        try:
+                            get_conn().execute(
+                                "UPDATE jobs SET recruiter_name=?, recruiter_url=? WHERE id=?",
+                                (rc["name"], rc.get("linkedin_url", ""), jid),
+                            ).connection.commit()
+                            print(f"  RECRUITER: {rc['name']} ({rc.get('role','')})", file=sys.stderr)
+                        except Exception:
+                            pass
                     print(f"JOB:{jid}:{job_url}  [{parsed['title'] or '?'} @ {parsed['company'] or '?'} - {parsed['location'] or '?'}]")
                     count += 1
                 except Exception as e:
