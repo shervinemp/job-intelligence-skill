@@ -364,39 +364,92 @@ def cmd_retry(job_id=None, feedback=None):
     print(f"\nRetry complete. Succeeded: {processed}/{len(failed)}", file=sys.stderr)
 
 
-def cmd_relentless():
-    import re as _re, time as _time, subprocess as _sp, sys as _sys, os as _os
-    from datetime import datetime
-    _YEAR = datetime.now().year
-    def wait_until(target_str):
-        for fmt in [f"%b %d, %I:%M %p, %Y", f"%B %d, %I:%M %p, %Y"]:
-            try:
-                target = datetime.strptime(target_str + f", {_YEAR}", fmt)
-                wait = (target - datetime.now()).total_seconds()
-                if 0 < wait < 14400:
-                    print(f"Rate limit — sleeping {wait:.0f}s", file=sys.stderr)
-                    _time.sleep(wait)
-                    return
-            except ValueError:
-                continue
-        print(f"Rate limit — unknown reset '{target_str}', sleeping 120s", file=sys.stderr)
-        _time.sleep(120)
-    tailor_script = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "tailor.py")
+def cmd_relentless(max_jobs=None):
+    if os.environ.get("JI_TAILOR", "agent") == "agent":
+        print("ERROR: --auto requires gem route (JI_TAILOR=gem). Agent mode is one-job-at-a-time.", file=sys.stderr)
+        return
+    consecutive_fail = 0
+    done = 0
     while True:
-        r = _sp.run([_sys.executable, tailor_script], capture_output=True, text=True, timeout=300)
-        output = (r.stdout or "") + (r.stderr or "")
-        if "ALL_DONE" in output or "NO_PENDING" in output:
+        state = load()
+        described = [(jid, e) for jid, e in state["jobs"].items()
+                     if e.get("stage") == "described" and e.get("state") == "active"]
+        if not described:
             s = pipeline_status()
-            print(f"DONE: {s['stages'].get('tailored',0)} tailored")
+            failed = state.get("stages", {}).get("failed", 0)
+            if failed:
+                print(f"DONE: {s['stages'].get('tailored', 0)} tailored, {failed} failed (use 'retry')", file=sys.stderr)
+            else:
+                print(f"DONE: {s['stages'].get('tailored', 0)} tailored, all clear", file=sys.stderr)
             break
-        m = _re.search(r'"resetsAt"\s*:\s*"([^"]+)"', output)
-        if m:
-            wait_until(m.group(1))
+        if max_jobs and done >= max_jobs:
+            s = pipeline_status()
+            print(f"BATCH_DONE: {done} tailored, {len(described)} still pending", file=sys.stderr)
+            break
+        if consecutive_fail >= 3:
+            print(f"PAUSED: {consecutive_fail} consecutive failures — Chrome/gemini likely down", file=sys.stderr)
+            break
+
+        jid, entry = described[0]
+        title = entry.get("title", "?")
+        company = entry.get("company", "?")
+        print(f"\n[{done+1}] {jid} {title} @ {company}", file=sys.stderr)
+
+        try:
+            success, result = generate_tailored_docs(entry)
+        except Exception as e:
+            success, result = False, str(e)
+
+        if success:
+            consecutive_fail = 0
+            done += 1
+            mode = os.environ.get("JI_TAILOR", "agent")
+            if mode == "agent":
+                print(f"  PROMPT_READY {jid}", file=sys.stderr)
+            else:
+                print(f"  COMPLETE {jid}", file=sys.stderr)
+        else:
+            err_str = str(result)[:160]
+            if any(x in err_str for x in ["RATE_LIMIT", "rate_limit"]):
+                resets = _re_search_resets(err_str)
+                if resets:
+                    _wait_until(resets)
+                    continue
+                print(f"  RATE_LIMIT {jid} — sleeping 120s", file=sys.stderr)
+                import time as _t
+                _t.sleep(120)
+                continue
+            consecutive_fail += 1
+            if any(x in err_str for x in ["Chrome not responding", "[gemini]"]):
+                print(f"  TRANSIENT {jid} — {err_str}", file=sys.stderr)
+                continue
+            advance(entry, entry.get("stage"), state="failed", error=err_str[:200])
+            print(f"  FAILED {jid} — {err_str}", file=sys.stderr)
+
+
+def _re_search_resets(s):
+    import re as _re
+    m = _re.search(r'"resetsAt"\s*:\s*"([^"]+)"', s)
+    return m.group(1) if m else None
+
+
+def _wait_until(target_str):
+    from datetime import datetime
+    year = datetime.now().year
+    for fmt in [f"%b %d, %I:%M %p, %Y", f"%B %d, %I:%M %p, %Y"]:
+        try:
+            target = datetime.strptime(target_str + f", {year}", fmt)
+            wait = (target - datetime.now()).total_seconds()
+            if 0 < wait < 14400:
+                print(f"Rate limit — sleeping {wait:.0f}s", file=sys.stderr)
+                import time as _t
+                _t.sleep(wait)
+                return
+        except ValueError:
             continue
-        s = pipeline_status()
-        if s.get("stages", {}).get("described", 0) == 0:
-            print(f"DONE: {s['stages'].get('tailored',0)} tailored")
-            break
+    print(f"Rate limit — unknown reset '{target_str}', sleeping 120s", file=sys.stderr)
+    import time as _t
+    _t.sleep(120)
 
 
 def cmd_reset(job_id=None, states=None, stages=None):
@@ -436,7 +489,7 @@ def cmd_reset(job_id=None, states=None, stages=None):
 
 def cmd_help():
     print("""Usage:
-  [--auto]                                  Craft all described jobs
+  [--auto] [--max-jobs N]                    Craft described jobs (N=limit per batch)
   admit <jid> [jid...]                      Mark tailored (also: done)
   reject <jid> [jid...]                     Reject
   undo <jid>                                Move back one stage
@@ -453,6 +506,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(prog="tailor.py", description="Tailor CVs via Gemini Web")
     parser.add_argument("--auto", action="store_true", help="Craft all described jobs, retry on rate limit")
+    parser.add_argument("--max-jobs", type=int, default=None, help="Max jobs to process in --auto mode")
     parser.add_argument("--jid", help="Tailor a specific job by JID")
 
     sub = parser.add_subparsers(dest="command")
@@ -502,7 +556,10 @@ def main():
     elif args.jid:
         craft_jid(args.jid)
     elif args.command is None:
-        cmd_craft(auto=args.auto)
+        if args.auto:
+            cmd_relentless(max_jobs=args.max_jobs)
+        else:
+            cmd_craft(auto=False)
 
 
 if __name__ == "__main__":
