@@ -341,7 +341,8 @@ def _empty_required(page):
                     if (!name || seenRadios.has(name)) continue;
                     seenRadios.add(name);
                     const group = el.closest('form, dialog, [role=radiogroup], div') || document;
-                    const checked = group.querySelector(`input[type=radio][name="${CSS.escape(name)}"]:checked`);
+                    const _escN = name.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
+                    const checked = group.querySelector('input[type=radio][name="' + _escN + '"]:checked');
                     if (!checked) n++;
                     continue;
                 }

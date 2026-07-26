@@ -166,6 +166,17 @@ class RadioFiller(FieldFiller):
                         const txt = closest.textContent.replace(r.value || '', '').trim().toLowerCase();
                         if (txt) return txt;
                     }
+                    // LinkedIn Easy Apply: role="radio" container → <p> text
+                    const radioRole = r.closest('[role="radio"]');
+                    if (radioRole) {
+                        const pEls = radioRole.querySelectorAll('p');
+                        for (const p of pEls) {
+                            const txt = p.textContent.trim().toLowerCase();
+                            if (txt && txt !== 'on' && txt.length < 30) return txt;
+                        }
+                        const al = radioRole.getAttribute('aria-label');
+                        if (al && al.length < 30 && !/\\.pdf$|\\.doc/i.test(al)) return al.toLowerCase();
+                    }
                     // Walk up to the option container and find label sibling
                     let el = r;
                     for (let i = 0; i < 4; i++) {
@@ -264,6 +275,28 @@ class RadioFiller(FieldFiller):
                             r.click(); return 'try4:' + txt.slice(0, 40);
                         }
                         sib = sib.nextElementSibling;
+                    }
+                }
+                // Try 5: normalized match for EEOC options (different phrasing)
+                // e.g. "I do not have a disability" vs "No, I don't have a disability"
+                function normEEOC(s) {
+                    return s.replace(/^(yes|no)[,\\s]+/i, '')
+                            .replace(/['\u2019]/g, '')
+                            .replace(/\\bdo not\\b/g, 'dont')
+                            .replace(/[^a-z\\s]/g, '')
+                            .trim();
+                }
+                const ansNorm = normEEOC(ans);
+                if (ansNorm && ansNorm.length > 5) {
+                    for (const r of radios) {
+                        const lbl = radioLabel(r);
+                        if (!lbl) continue;
+                        const lblNorm = normEEOC(lbl);
+                        if (lblNorm && lblNorm.length > 5) {
+                            if (ansNorm === lblNorm || ansNorm.includes(lblNorm) || lblNorm.includes(ansNorm)) {
+                                r.click(); return 'try5:norm:' + lbl.slice(0, 40);
+                            }
+                        }
                     }
                 }
                 return 'no_match:radioCount=' + radios.length;
@@ -387,6 +420,12 @@ class AutocompleteFiller(FieldFiller):
         if placeholder in self._AUTOCOMPLETE_PLACEHOLDERS:
             return True
         if placeholder == "start typing..." and "location" in label:
+            return True
+        # LinkedIn Easy Apply location typeahead
+        if "city or location" in label or "enter city" in label:
+            return True
+        # Generic typeahead detection via aria-autocomplete
+        if f.get("aria_autocomplete") in ("list", "both") and f.get("tag") == "INPUT":
             return True
         return False
 

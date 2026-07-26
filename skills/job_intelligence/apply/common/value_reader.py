@@ -62,7 +62,8 @@ class RadioReader(FieldValueReader):
                 if (!el || el.type !== 'radio') return null;
                 const name = el.name;
                 if (!name) return el.checked ? el.value : null;
-                const radios = [...document.querySelectorAll(`input[type=radio][name="${{CSS.escape(name)}}"]`)];
+                const _escN = name.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
+                const radios = [...document.querySelectorAll('input[type=radio][name="' + _escN + '"]')];
                 const checked = radios.find(r => r.checked);
                 if (!checked) return '';
                 // Walk up to find label text (same logic as RadioFiller)

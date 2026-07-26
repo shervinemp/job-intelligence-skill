@@ -127,6 +127,7 @@ _READER_JS = """(config) => {
             label: label, option_label: resolveOptionLabel(el, scopeRoot, label),
             placeholder: el.placeholder || '',
             autocomplete: el.getAttribute('autocomplete') || '',
+            aria_autocomplete: el.getAttribute('aria-autocomplete') || '',
             data_automation_id: el.getAttribute('data-automation-id') || '',
             role: el.getAttribute('role') || '',
             required: !!el.required || el.getAttribute('aria-required') === 'true',
@@ -194,9 +195,12 @@ _READER_JS = """(config) => {
         root.querySelectorAll(customWidgets.dropdown).forEach(btn => { const d = makeDropdown(btn, root); if (d) fields.push(d); });
     }
 
-    // ΓöÇΓöÇ Radio button grouping ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── Radio button grouping ──────────────────────────────────────────
     // Group radios by name attribute, extract parent question as label.
-    // Individual radio -> "Yes" is useless; we need "Are you willing to relocate? ΓåÆ [Yes, No]"
+    // Individual radio -> "Yes" is useless; we need "Are you willing to relocate? → [Yes, No]"
+    // CSS.escape mangles Unicode chars (\ufffd etc) in attribute values.
+    // Use simple backslash/quote escaping for quoted attribute selectors instead.
+    function escAttr(s) { return s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"'); }
     const radioGroups = {};
     const radioNames = new Set();
     fields.forEach(f => { if (f.type === 'radio' && f.name) radioNames.add(f.name); });
@@ -206,15 +210,40 @@ _READER_JS = """(config) => {
         // Find parent question label from DOM structure.
         // Typical HTML: <div class="row"><div class="col-4"><label>Question?</label></div><div class="col-8"><input type="radio" name="..."></div></div>
         // LinkedIn: <div><p>Question? *</p><fieldset>...radios...</fieldset><p>This field is required</p></div>
-        const firstEl = root.querySelector(`input[name="${CSS.escape(name)}"]`);
+        const firstEl = root.querySelector('input[name="' + escAttr(name) + '"]');
         let question = radios[0].label || '';
         const fieldset = firstEl ? firstEl.closest('fieldset') : null;
         if (firstEl) {
             // Step 0: fieldset's previous sibling (LinkedIn Easy Apply pattern)
+            // <p>Question? *</p><fieldset>...radios...</fieldset>
             if (fieldset && fieldset.previousElementSibling) {
                 const txt = (fieldset.previousElementSibling.textContent || '').trim();
-                if (txt.length > 3 && txt.length < 200 && txt !== fieldset.textContent.trim()) {
+                if (txt.length > 3 && txt.length < 500 && txt !== fieldset.textContent.trim()) {
                     question = txt;
+                }
+            }
+            // Step 0b: walk backwards through fieldset's previous siblings
+            // (LinkedIn EEOC: <p>Race/Ethnicity</p><p>definitions...</p><ul>...</ul><fieldset>)
+            // Collect short <p> candidates and prefer question-like ones.
+            if (question === radios[0].label || question === name) {
+                let prev = fieldset ? fieldset.previousElementSibling : null;
+                let candidates = [];
+                while (prev) {
+                    const txt = (prev.textContent || '').trim();
+                    if (txt.length > 3 && txt.length < 100 && prev.tagName === 'P' && !prev.querySelector('ul, li, ol')) {
+                        if (!/^\\d+\\/\\d+\\s*pages?$/.test(txt)) candidates.push(txt);
+                    }
+                    prev = prev.previousElementSibling;
+                }
+                if (candidates.length > 0) {
+                    // Prefer: short category labels (no question words, not ending with ?)
+                    let best = candidates.find(t =>
+                        t.length <= 30 &&
+                        !/^(why|how|what|please|race categories|gender)/i.test(t) &&
+                        !/\\?\\s*$/.test(t) &&
+                        !/defined|follows|please|check one|being asked/i.test(t)
+                    );
+                    question = best || candidates.find(t => !/being asked|defined|follows/i.test(t)) || candidates[0];
                 }
             }
             // Step 1: look at the previous sibling's label (most common pattern)
@@ -255,45 +284,74 @@ _READER_JS = """(config) => {
                 if (clean.length > 3 && clean.length < 200) question = clean;
             }
         }
-        // Options are the radio's value attribute (Yes/No), NOT the resolved
-        // label which is the parent question text. The visible text next to
-        // the radio is in the parent <label>'s textContent minus the input.
-        const optionLabels = radios.map(r => {
-            const val = r.value || r.name || '';
-            const el = root.querySelector(`input[name="${CSS.escape(name)}"][value="${CSS.escape(val)}"]`);
-            if (el) {
-                const parentLabel = el.closest('label');
-                if (parentLabel) {
-                    // Get the label's text excluding the input element's HTML
-                    const txt = (parentLabel.textContent || '').trim();
-                    // Remove child element text (div/span contents) to get just the option text
-                    const childText = Array.from(parentLabel.querySelectorAll('div,span'))
-                        .map(c => (c.textContent || '').trim()).join(' ');
-                    const clean = txt.replace(childText, '').replace(/\\s+/g, ' ').trim();
-                    if (clean.length > 0 && clean.length < 20) return clean;
-                }
-                // Fallback: the label might just have simple text
-                const simple = (parentLabel ? parentLabel.textContent.trim() : val);
-                if (simple.length < 20) return simple;
+        // Options: extract visible text for each radio. LinkedIn Easy Apply
+        // radios have NO value attribute and empty <label> — option text is
+        // in a <p> inside the role="radio" container. Query all radios by name
+        // and iterate (not by value, which may be absent).
+        const allRadioEls = [...root.querySelectorAll('input[type="radio"][name="' + escAttr(name) + '"]')];
+        const optionLabels = allRadioEls.map(el => {
+            // 1) Try parent <label> text (traditional forms)
+            const parentLabel = el.closest('label');
+            if (parentLabel) {
+                const txt = (parentLabel.textContent || '').trim();
+                const childText = Array.from(parentLabel.querySelectorAll('div,span'))
+                    .map(c => (c.textContent || '').trim()).join(' ');
+                const clean = txt.replace(childText, '').replace(/\\s+/g, ' ').trim();
+                if (clean.length > 0 && clean.length < 30) return clean;
             }
-            return val || 'Yes';
+            // 2) LinkedIn Easy Apply: role="radio" container → find <p> text
+            const radioRole = el.closest('[role="radio"]');
+            if (radioRole) {
+                const pEls = radioRole.querySelectorAll('p');
+                for (const p of pEls) {
+                    const pt = (p.textContent || '').trim();
+                    if (pt.length > 0 && pt.length < 30 && pt !== question) return pt;
+                }
+                // 3) Fallback: radio container's aria-label (skip filenames)
+                const al = radioRole.getAttribute('aria-label');
+                if (al && al.length < 30 && !/\\.pdf$|\\.doc/i.test(al)) return al;
+            }
+            // 4) Fallback: value attribute or id (skip default "on")
+            const v = el.value;
+            return (v && v !== 'on') ? v : (el.id || '');
         });
         const uniqueOpts = [...new Set(optionLabels)].filter(Boolean);
+        // Skip resume/file-selection radio groups (LinkedIn Easy Apply page 2):
+        // aria-label is a filename, no question text, already checked
+        if (!question || question === name) {
+            // Check radio labels AND aria-labels for filenames (resume selection)
+            const hasFile = allRadioEls.some(el => {
+                if (el.value && /\\.(pdf|docx?|txt|rtf)$/i.test(el.value)) return true;
+                const rr = el.closest('[role="radio"]');
+                if (rr) {
+                    const al = rr.getAttribute('aria-label') || '';
+                    if (/\\.(pdf|docx?|txt|rtf)$/i.test(al)) return true;
+                }
+                return false;
+            });
+            if (hasFile && allRadioEls.some(el => el.checked)) return;
+        }
         // Remove individual radio entries, add one grouped entry
+        const checkedIdx = allRadioEls.findIndex(el => el.checked);
         radioGroups[name] = {
             tag: 'RADIO_GROUP', name: name, id: firstEl ? firstEl.id || '' : '',
             label: question || name,
-            type: 'radio', options: uniqueOpts.length >= 2 ? uniqueOpts : (radios.length >= 2 ? ['Yes', 'No'] : optionLabels),
+            type: 'radio', options: uniqueOpts.length >= 2 ? uniqueOpts : (allRadioEls.length >= 2 ? ['Yes', 'No'] : optionLabels),
             required: radios.some(r => r.required) || /\\*\\s*$/.test(question) || !!(fieldset && fieldset.nextElementSibling && /required/i.test(fieldset.nextElementSibling.textContent)),
-            selector: `input[name="${CSS.escape(name)}"]`,
-            value: radios.find(r => r.checked) ? radios.find(r => r.checked).label : '',
+            selector: 'input[name="' + escAttr(name) + '"]',
+            value: checkedIdx >= 0 ? optionLabels[checkedIdx] : '',
             placeholder: '', data_automation_id: '', role: 'radiogroup',
         };
     });
-    // Replace individual radios with grouped entries
+    // Replace individual radios with grouped entries; filter out skipped groups
     const finalFields = [];
     const groupedNames = new Set(Object.keys(radioGroups));
+    const skippedNames = new Set(radioNames);
+    Object.keys(radioGroups).forEach(n => skippedNames.delete(n));
     fields.forEach(f => {
+        if (f.type === 'radio' && f.name && skippedNames.has(f.name)) {
+            return; // skip individual radios from skipped groups (e.g. resume selection)
+        }
         if (f.type === 'radio' && f.name && groupedNames.has(f.name)) {
             if (!finalFields.find(ff => ff.name === f.name && ff.tag === 'RADIO_GROUP')) {
                 finalFields.push(radioGroups[f.name]);

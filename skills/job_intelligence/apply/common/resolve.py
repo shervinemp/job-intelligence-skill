@@ -262,18 +262,17 @@ def resolve(
 
     # Step 5: curated alias patterns → candidate profile keys.
     # Same-vocabulary matching can't bridge phrasing ("How did you learn..."
-    # vs how_did_you_hear). Candidates resolve unanimously: if multiple
-    # candidate keys exist with DIFFERENT values, we abstain (no guessing).
+    # vs how_did_you_hear). Candidates are in priority order — use the first
+    # that has a value. This handles cases like authorized_to_work="Yes" vs
+    # work_authorization="Yes, I am legally authorized..." where both are
+    # valid but the short answer is preferred for Yes/No radio questions.
     for pattern, candidates in _ALIAS_RULES:
         if not re.search(pattern, norm):
             continue
-        vals = []
         for ck in candidates:
             v = _find_ephemeral_value(ck, ephemeral)
             if v is not None and str(v) != "":
-                vals.append((ck, v))
-        if vals and all(str(v) == str(vals[0][1]) for _k, v in vals):
-            return Resolution(vals[0][1], vals[0][0], label, "alias")
+                return Resolution(v, ck, label, "alias")
 
     # Step 6: conservative form defaults for common optional questions where
     # "No" is the universally safe answer (marketing, alerts, current-employee).
@@ -290,10 +289,10 @@ def resolve(
 _ALIAS_RULES = [
     (r"^name$", ["full_name"]),
     (r"\bpreferred name\b", ["first_name"]),
-    (r"\bworked (at|for) .* before|have you ever worked|previously worked|been employed (at|by)\b",
+    (r"\bworked (at|for) .* (before|previously)|have you ever worked|previously worked|been employed (at|by)\b",
      ["previously_employed", "have_you_ever_been"]),
     (r"\bsponsorship\b", ["need_canada_sponsorship", "need_us_sponsorship", "visa_status"]),
-    (r"\bauthorized to work|legally eligible to work|work authorization\b",
+    (r"\bauthorized to work|legally eligible to work|eligible to work|work authorization\b",
      ["authorized_to_work", "work_authorization",
       "Are you legally eligible to work in the country that you are applying to?"]),
     (r"\bhow did you (hear|learn|find)\b",
@@ -310,6 +309,7 @@ _ALIAS_RULES = [
     (r"\brelocat", ["willing_to_relocate"]),
     (r"\bcommute\b", ["willing_to_commute"]),
     (r"\bhybrid role|comfortable with this|in (our |the )?office\b", ["office_preference"]),
+    (r"\bcity or location|enter city\b", ["location", "city"]),
 ]
 
 
