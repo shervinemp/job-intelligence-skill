@@ -130,7 +130,37 @@ def cmd_submit(jid, confirm=False, force=False):
                     if nxt["text"] == prev_next_text:
                         stuck_count += 1
                         if stuck_count >= 2:
-                            print(f"  Stuck on '{nxt['text']}' — looking for submit directly", file=sys.stderr)
+                            # Check which required fields are still empty
+                            empt_labels = page.evaluate("""() => {
+                                const d = document.querySelector('dialog, [role="dialog"]');
+                                if (!d) return [];
+                                // Only check visible fields in the dialog
+                                const visible = d.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea');
+                                const empt = [];
+                                for (const el of visible) {
+                                    // Skip if parent is display:none
+                                    let p = el;
+                                    let hidden = false;
+                                    for (let i = 0; i < 5 && p; i++) {
+                                        const s = getComputedStyle(p);
+                                        if (s.display === 'none') { hidden = true; break; }
+                                        p = p.parentElement;
+                                    }
+                                    if (hidden) continue;
+                                    if (el.required || el.getAttribute('aria-required') === 'true') {
+                                        if (el.type === 'radio') continue; // radio groups handled separately
+                                        if (!el.value || el.value === '') {
+                                            const lbl = el.getAttribute('aria-label') || el.placeholder || el.name || '';
+                                            empt.push(lbl.slice(0, 40));
+                                        }
+                                    }
+                                }
+                                return empt;
+                            }""")
+                            if empt_labels:
+                                print(f"  Cannot advance — required fields empty: {', '.join(empt_labels[:5])}", file=sys.stderr)
+                            else:
+                                print(f"  Stuck on '{nxt['text']}' — looking for submit directly", file=sys.stderr)
                             break
                     else:
                         stuck_count = 0

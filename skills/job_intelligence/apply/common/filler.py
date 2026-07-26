@@ -601,9 +601,19 @@ def fill_field(page, field: dict, ans: str) -> tuple[bool, str]:
     fr = _frame_for_sel(page, sel) or page
     label = field.get("label", "")
 
-    # Comboboxes: trust the filler's own verification (option poll + click).
+    # Comboboxes and Ashby Yes/No: trust the filler's own verification.
     # Read-back via value_reader races the DOM and can wipe real selections.
-    if _is_combobox(field):
+    # Ashby yesno: checkbox .checked may not update (widget uses button active class).
+    _is_ashby_yesno = False
+    if field.get("type") == "checkbox":
+        try:
+            _is_ashby_yesno = page.evaluate("""(sel) => {
+                const el = document.querySelector(sel);
+                return !!(el && el.closest('[class*="yesno"]'));
+            }""", sel)
+        except Exception:
+            pass
+    if _is_combobox(field) or _is_ashby_yesno:
         for filler in _FILLERS:
             if filler.can_handle(field):
                 if filler.fill(fr, field, ans):

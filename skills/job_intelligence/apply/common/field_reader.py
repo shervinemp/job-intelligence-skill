@@ -143,10 +143,15 @@ _READER_JS = """(config) => {
         if (el.type === 'file') return true;
         // Ashby Yes/No: hidden checkbox but visible button container
         if (el.type === 'checkbox' && el.closest('[class*="yesno"]')) return true;
-        const s = window.getComputedStyle(el);
-        if (s.display === 'none' || s.visibility === 'hidden') return false;
-        if (s.position === 'absolute' && parseInt(s.left) < -100) return false;
-        if (s.clip === 'rect(0px, 0px, 0px, 0px)' || s.clip === 'rect(0,0,0,0)') return false;
+        // Check element AND ancestors for display:none/visibility:hidden
+        // (LinkedIn Easy Apply hides non-current pages via parent display:none)
+        let node = el;
+        for (let i = 0; i < 10 && node; i++) {
+            const s = window.getComputedStyle(node);
+            if (s.display === 'none' || s.visibility === 'hidden') return false;
+            if (s.position === 'absolute' && parseInt(s.left) < -100) return false;
+            node = node.parentElement;
+        }
         return true;
     }
 
