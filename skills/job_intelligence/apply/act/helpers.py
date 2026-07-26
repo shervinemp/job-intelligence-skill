@@ -584,6 +584,7 @@ def _verify_with_ask_api(page, answers: dict) -> dict:
 
 
 def _detect_submit_button(page) -> str | None:
+    # Check iframes first (Greenhouse etc.)
     for fr in page.frames:
         if fr == page.main_frame:
             continue
@@ -596,10 +597,9 @@ def _detect_submit_button(page) -> str | None:
                 }));
             }""")
             for b in buttons:
-                if b.get("text") in ("submit", "submit application", "send", "send application") or b.get("type") == "submit":
-                    if b.get("text"):
-                        return b["text"]
-                    return "submit"
+                bt = b.get("text", "")
+                if bt in ("submit", "submit application", "send", "send application"):
+                    return bt
         except Exception:
             continue
     candidates = scan_actions(page, ["submit", "submit application", "send application"])
@@ -613,15 +613,24 @@ def _detect_submit_button(page) -> str | None:
                     return c.get("text", "")
     try:
         buttons = page.evaluate("""() => {
-            const all = document.querySelectorAll('button');
-            // Prefer buttons inside dialog/modal (native <dialog> or role=dialog)
-            const inDialog = Array.from(all).filter(b => b.offsetParent !== null && b.closest('dialog, [role="dialog"]'));
-            const onPage = Array.from(all).filter(b => b.offsetParent !== null && !b.closest('dialog, [role="dialog"]'));
-            for (const pool of [inDialog, onPage]) {
-                for (const b of pool) {
+            // LinkedIn Easy Apply uses native <dialog open> where children
+            // may have offsetParent === null. Just check all buttons inside
+            // dialog regardless of offsetParent.
+            const dlg = document.querySelector('dialog, [role="dialog"]');
+            if (dlg) {
+                const dlgBtns = dlg.querySelectorAll('button');
+                for (const b of dlgBtns) {
                     const t = b.textContent.trim().toLowerCase();
                     if (t === "submit" || t === "submit application" || t === "send" || t === "send application") return t;
                 }
+            }
+            // Fallback: check page-level buttons
+            const all = document.querySelectorAll('button');
+            for (const b of all) {
+                if (b.offsetParent === null) continue;
+                if (b.closest('dialog, [role="dialog"]')) continue;  // already checked
+                const t = b.textContent.trim().toLowerCase();
+                if (t === "submit" || t === "submit application" || t === "send" || t === "send application") return t;
             }
             return null;
         }""")

@@ -8,6 +8,7 @@ from apply.act.helpers import (
     _load_profile, chrome_session, _probe_form, _fill_with_playwright,
     _empty_required, _detect_submit_button, _dismiss_confirm_modal,
     _check_submit_success, _get_validation_errors,
+    _find_next_button, _click_action,
 )
 
 
@@ -96,6 +97,32 @@ def cmd_submit(jid, confirm=False, force=False):
                     print(f"  WARN: {empt} required field(s) still empty before submit", file=sys.stderr)
             except Exception as re_:
                 print(f"  Re-fill skipped: {re_}", file=sys.stderr)
+
+            # LinkedIn Easy Apply: navigate to review/submit page
+            if "linkedin.com" in (page.url or ""):
+                for _nav in range(10):
+                    has_dialog = page.evaluate("""() => !!document.querySelector('dialog, [role="dialog"]')""")
+                    if not has_dialog:
+                        break
+                    submit_btn = page.evaluate("""() => {
+                        const d = document.querySelector('dialog, [role="dialog"]');
+                        if (!d) return null;
+                        for (const b of d.querySelectorAll('button')) {
+                            const t = b.textContent.trim().toLowerCase();
+                            if (t === 'submit' || t === 'submit application') return t;
+                        }
+                        return null;
+                    }""")
+                    if submit_btn:
+                        print(f"  Found submit button on review page", file=sys.stderr)
+                        break
+                    nxt = _find_next_button(page)
+                    if not nxt:
+                        break
+                    print(f"  Review step — clicking '{nxt['text']}'", file=sys.stderr)
+                    if not _click_action(page, nxt["text"]):
+                        break
+                    time.sleep(2)
 
             submit_text = _detect_submit_button(page)
             clicked = False
