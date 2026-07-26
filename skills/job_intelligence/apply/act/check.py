@@ -59,7 +59,7 @@ def cmd_check(jid):
             tag_page(page, jid)
 
             # LinkedIn Easy Apply: reopen modal if not already open
-            if "linkedin.com" in (page.url or "") and not page.query_selector('[role="dialog"]'):
+            if "linkedin.com" in (page.url or "") and not page.query_selector('dialog, [role="dialog"]'):
                 ea_btn = page.locator('button:has-text("Easy Apply")').first
                 if ea_btn.count() > 0:
                     try:

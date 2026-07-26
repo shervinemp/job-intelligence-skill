@@ -159,7 +159,11 @@ def _find_next_button(page):
                     if (t === kw) score = Math.max(score, 4);
                     else if (t.startsWith(kw)) score = Math.max(score, 3);
                 }
-                if (score >= 3) out.push({text: t.slice(0, 30), score});
+                if (score >= 3) {
+                    // Boost buttons inside dialog/modal
+                    const inDlg = !!el.closest('dialog, [role="dialog"]');
+                    out.push({text: t.slice(0, 30), score: inDlg ? score + 10 : score});
+                }
             }
             out.sort((a, b) => b.score - a.score);
             return out;
@@ -610,13 +614,13 @@ def _detect_submit_button(page) -> str | None:
     try:
         buttons = page.evaluate("""() => {
             const all = document.querySelectorAll('button');
-            // Prefer buttons inside dialog/modal
+            // Prefer buttons inside dialog/modal (native <dialog> or role=dialog)
             const inDialog = Array.from(all).filter(b => b.offsetParent !== null && b.closest('dialog, [role="dialog"]'));
             const onPage = Array.from(all).filter(b => b.offsetParent !== null && !b.closest('dialog, [role="dialog"]'));
             for (const pool of [inDialog, onPage]) {
                 for (const b of pool) {
                     const t = b.textContent.trim().toLowerCase();
-                    if (t in ("submit", "submit application", "send", "send application")) return t;
+                    if (t === "submit" || t === "submit application" || t === "send" || t === "send application") return t;
                 }
             }
             return null;

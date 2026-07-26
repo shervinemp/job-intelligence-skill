@@ -263,7 +263,7 @@ def find_page(ctx, state):
     return None
 
 
-DEFAULT_EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse", "clear", "reset", "start over"}
+DEFAULT_EXCLUDED_BUTTONS = {"back", "cancel", "save", "edit", "delete", "remove", "upload", "browse", "clear", "reset", "start over", "skip to search", "skip to main content", "skip to primary content"}
 
 
 def scan_actions(page, keywords, exclude=None):
@@ -292,7 +292,7 @@ def scan_actions(page, keywords, exclude=None):
                     text: text.slice(0, 30), score: score, tag: el.tagName,
                     href: rawHref,
                     disabled: el.disabled || false,
-                    _inDialog: !!el.closest('dialog, [role="dialog"], [class*="modal"], [class*="easy-apply"]'),
+                    _inDialog: !!el.closest('dialog, [role="dialog"]'),
                 });
             }
         }
