@@ -217,7 +217,19 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 if not _click_action(page, nxt["text"]):
                     break
                 time.sleep(2)
-                _wait_for_fields(page, timeout=5)
+                has_dialog = page.evaluate("""() => !!document.querySelector('[role="dialog"], dialog')""")
+                if has_dialog:
+                    for _ in range(10):
+                        n = page.evaluate("""() => {
+                            const d = document.querySelector('[role="dialog"], dialog');
+                            if (!d) return 0;
+                            return d.querySelectorAll('input:not([type=hidden]):not([type=submit]), select, textarea').length;
+                        }""")
+                        if n:
+                            break
+                        time.sleep(1)
+                else:
+                    _wait_for_fields(page, timeout=5)
                 if handle_captcha(page, state):
                     emit_status("captcha", "CAPTCHA during multi-page navigation")
                     return 1

@@ -391,11 +391,16 @@ def _click_action(page, text):
         return bool(page.evaluate("""(t) => {
             const all = document.querySelectorAll('button, a, [role="button"]');
             const vis = Array.from(all).filter(el => el.offsetParent !== null && !el.disabled);
-            for (const el of vis) {
-                if ((el.textContent || '').trim().toLowerCase() === t) { el.click(); return true; }
-            }
-            for (const el of vis) {
-                if ((el.textContent || '').trim().toLowerCase().includes(t)) { el.click(); return true; }
+            // Prefer buttons inside dialog/modal (Easy Apply, etc.)
+            const inModal = vis.filter(el => el.closest('dialog, [role="dialog"], [class*="modal"], [class*=" Modal"], [data-test*="modal"], [class*="easy-apply"]'));
+            const onPage = vis.filter(el => !el.closest('dialog, [role="dialog"], [class*="modal"], [class*=" Modal"], [data-test*="modal"], [class*="easy-apply"]'));
+            for (const pool of [inModal, onPage]) {
+                for (const el of pool) {
+                    if ((el.textContent || '').trim().toLowerCase() === t) { el.click(); return true; }
+                }
+                for (const el of pool) {
+                    if ((el.textContent || '').trim().toLowerCase().includes(t)) { el.click(); return true; }
+                }
             }
             return false;
         }""", (text or "").strip().lower()))

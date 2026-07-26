@@ -458,10 +458,8 @@ class AutocompleteFiller(FieldFiller):
             if suggestion_clicked:
                 time.sleep(0.5)
                 return True
-            # No dropdown appeared — try pressing ArrowDown + Enter
-            el.press("ArrowDown")
-            time.sleep(0.3)
-            el.press("Enter")
+            # No dropdown appeared — press Tab to keep typed value without submitting
+            el.press("Tab")
             time.sleep(0.5)
             return True
         except Exception:

@@ -343,15 +343,10 @@ _READER_JS = """(config) => {
             placeholder: '', data_automation_id: '', role: 'radiogroup',
         };
     });
-    // Replace individual radios with grouped entries; filter out skipped groups
+    // Replace individual radios with grouped entries
     const finalFields = [];
     const groupedNames = new Set(Object.keys(radioGroups));
-    const skippedNames = new Set(radioNames);
-    Object.keys(radioGroups).forEach(n => skippedNames.delete(n));
     fields.forEach(f => {
-        if (f.type === 'radio' && f.name && skippedNames.has(f.name)) {
-            return; // skip individual radios from skipped groups (e.g. resume selection)
-        }
         if (f.type === 'radio' && f.name && groupedNames.has(f.name)) {
             if (!finalFields.find(ff => ff.name === f.name && ff.tag === 'RADIO_GROUP')) {
                 finalFields.push(radioGroups[f.name]);
