@@ -62,8 +62,11 @@ def cmd_check(jid):
             if "linkedin.com" in (page.url or "") and not page.query_selector('[role="dialog"]'):
                 ea_btn = page.locator('button:has-text("Easy Apply")').first
                 if ea_btn.count() > 0:
-                    ea_btn.click()
-                    time.sleep(3)
+                    try:
+                        ea_btn.click(timeout=5000)
+                        time.sleep(3)
+                    except Exception:
+                        pass  # Dialog may have opened during wait
 
             pr = _probe_form(page, reg, jid, allow_vision=False)
             fields = pr.fields or []

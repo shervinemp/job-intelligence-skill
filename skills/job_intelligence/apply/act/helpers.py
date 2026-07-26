@@ -600,17 +600,29 @@ def _detect_submit_button(page) -> str | None:
             continue
     candidates = scan_actions(page, ["submit", "submit application", "send application"])
     if candidates:
-        for c in candidates:
-            if not c.get("disabled") and c.get("tag") != "A":
-                return c.get("text", "")
+        # Prefer buttons inside dialog/modal (Easy Apply, etc.)
+        dialog_btns = [c for c in candidates if c.get("_inDialog")]
+        page_btns = [c for c in candidates if not c.get("_inDialog")]
+        for pool in [dialog_btns, page_btns]:
+            for c in pool:
+                if not c.get("disabled") and c.get("tag") != "A":
+                    return c.get("text", "")
     try:
         buttons = page.evaluate("""() => {
             const all = document.querySelectorAll('button');
-            return Array.from(all).filter(b => b.offsetParent !== null).map(b => b.textContent.trim().toLowerCase());
+            // Prefer buttons inside dialog/modal
+            const inDialog = Array.from(all).filter(b => b.offsetParent !== null && b.closest('dialog, [role="dialog"]'));
+            const onPage = Array.from(all).filter(b => b.offsetParent !== null && !b.closest('dialog, [role="dialog"]'));
+            for (const pool of [inDialog, onPage]) {
+                for (const b of pool) {
+                    const t = b.textContent.trim().toLowerCase();
+                    if (t in ("submit", "submit application", "send", "send application")) return t;
+                }
+            }
+            return null;
         }""")
-        for b in buttons:
-            if b in ("submit", "submit application", "send", "send application"):
-                return b
+        if buttons:
+            return buttons
     except Exception:
         pass
     return None

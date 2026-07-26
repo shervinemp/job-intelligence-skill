@@ -291,7 +291,8 @@ def scan_actions(page, keywords, exclude=None):
                 candidates.push({
                     text: text.slice(0, 30), score: score, tag: el.tagName,
                     href: rawHref,
-                    disabled: el.disabled || false
+                    disabled: el.disabled || false,
+                    _inDialog: !!el.closest('dialog, [role="dialog"], [class*="modal"], [class*="easy-apply"]'),
                 });
             }
         }
