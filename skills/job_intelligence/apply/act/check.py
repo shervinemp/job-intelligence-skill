@@ -58,6 +58,13 @@ def cmd_check(jid):
 
             tag_page(page, jid)
 
+            # LinkedIn Easy Apply: reopen modal if not already open
+            if "linkedin.com" in (page.url or "") and not page.query_selector('[role="dialog"]'):
+                ea_btn = page.locator('button:has-text("Easy Apply")').first
+                if ea_btn.count() > 0:
+                    ea_btn.click()
+                    time.sleep(3)
+
             pr = _probe_form(page, reg, jid, allow_vision=False)
             fields = pr.fields or []
             if not fields:
