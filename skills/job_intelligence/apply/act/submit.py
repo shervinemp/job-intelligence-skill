@@ -100,6 +100,8 @@ def cmd_submit(jid, confirm=False, force=False):
 
             # LinkedIn Easy Apply: navigate to review/submit page
             if "linkedin.com" in (page.url or ""):
+                prev_next_text = ""
+                stuck_count = 0
                 for _nav in range(10):
                     has_dialog = page.evaluate("""() => !!document.querySelector('dialog, [role="dialog"]')""")
                     if not has_dialog:
@@ -109,7 +111,12 @@ def cmd_submit(jid, confirm=False, force=False):
                         if (!d) return null;
                         for (const b of d.querySelectorAll('button')) {
                             const t = b.textContent.trim().toLowerCase();
-                            if (t === 'submit' || t === 'submit application') return t;
+                            if (t === 'submit' || t === 'submit application' || t === 'send application') return t;
+                        }
+                        // Fallback: any button with 'submit' in text
+                        for (const b of d.querySelectorAll('button')) {
+                            const t = b.textContent.trim().toLowerCase();
+                            if (t.includes('submit') && t.length < 30) return t;
                         }
                         return null;
                     }""")
@@ -119,6 +126,15 @@ def cmd_submit(jid, confirm=False, force=False):
                     nxt = _find_next_button(page)
                     if not nxt:
                         break
+                    # Detect stuck loop (same button text repeatedly)
+                    if nxt["text"] == prev_next_text:
+                        stuck_count += 1
+                        if stuck_count >= 2:
+                            print(f"  Stuck on '{nxt['text']}' — looking for submit directly", file=sys.stderr)
+                            break
+                    else:
+                        stuck_count = 0
+                        prev_next_text = nxt["text"]
                     print(f"  Review step — clicking '{nxt['text']}'", file=sys.stderr)
                     if not _click_action(page, nxt["text"]):
                         break
