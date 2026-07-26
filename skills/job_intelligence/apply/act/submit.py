@@ -11,7 +11,7 @@ from apply.act.helpers import (
 )
 
 
-def cmd_submit(jid, confirm=False):
+def cmd_submit(jid, confirm=False, force=False):
     db_row = get_conn().execute(
         "SELECT stage, state FROM jobs WHERE id=?", (jid,)
     ).fetchone()
@@ -38,6 +38,17 @@ def cmd_submit(jid, confirm=False):
         emit_status("hold", reason)
         emit_next("none", "review form in browser, then run submit with policy=live")
         return 0
+
+    # GATE: run check before submit unless --force
+    if not force:
+        from apply.act.check import cmd_check
+        print(f"  Pre-submit check...", file=sys.stderr)
+        check_rc = cmd_check(jid)
+        if check_rc != 0:
+            print(f"  CHECK FAILED — submit blocked. Use --force to override.", file=sys.stderr)
+            emit_status("check_failed", "run 'apply act --check' and fix errors first")
+            emit_next("check", "fix errors then resubmit (or --force to override)")
+            return 1
 
     state = load_state()
     if state.get("jid") != jid:

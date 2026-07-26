@@ -38,7 +38,8 @@ def run(args):
 
     elif cmd == "submit":
         from apply.act.submit import cmd_submit
-        return cmd_submit(jid, confirm=args.get("--confirm", False))
+        return cmd_submit(jid, confirm=args.get("--confirm", False),
+                         force=args.get("--force", False))
 
     elif cmd == "inspect":
         from apply.act.inspect import cmd_inspect

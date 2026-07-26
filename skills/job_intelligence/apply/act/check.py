@@ -228,13 +228,40 @@ def cmd_check(jid):
                         "reason": "Filled value doesn't match expected",
                     })
                 elif expected and not actual:
-                    issues.append({
-                        "label": label,
-                        "expected": str(expected),
-                        "actual": "(empty)",
-                        "severity": "ERROR",
-                        "reason": "Required field appears empty (may be React state — verify visually)",
-                    })
+                    # Check if this is a React-controlled field (Ashby autocomplete, custom widget)
+                    # that we can't read via DOM value attribute — don't false-positive
+                    is_react_widget = page.evaluate("""(args) => {
+                        const [sel] = args;
+                        const el = document.querySelector(sel);
+                        if (!el) return false;
+                        // Ashby autocomplete: parent has typeahead/combo class
+                        const parent = el.parentElement;
+                        if (parent && (parent.className.includes('ashby') || 
+                            parent.className.includes('autocomplete') ||
+                            parent.className.includes('combo') ||
+                            parent.className.includes('typeahead'))) return true;
+                        // React-controlled: value attribute empty but _valueTracker exists
+                        if (el._valueTracker !== undefined && el.value === '') return true;
+                        // Custom widget with hidden input
+                        if (el.type === 'hidden' || el.tabIndex === -1) return true;
+                        return false;
+                    }""", [sel])
+                    if is_react_widget:
+                        issues.append({
+                            "label": label,
+                            "expected": str(expected),
+                            "actual": "(unreadable)",
+                            "severity": "INFO",
+                            "reason": "React-controlled field — value not readable via DOM (verify visually)",
+                        })
+                    else:
+                        issues.append({
+                            "label": label,
+                            "expected": str(expected),
+                            "actual": "(empty)",
+                            "severity": "ERROR",
+                            "reason": "Required field appears empty",
+                        })
 
     except Exception as e:
         emit_error(f"check failed: {e}")
@@ -265,9 +292,11 @@ def cmd_check(jid):
             })
 
     # Output report
-    print(f"CHECK: {checked} fields verified, {len(issues)} issues found", file=sys.stderr)
     errors = [i for i in issues if i["severity"] == "ERROR"]
     warnings = [i for i in issues if i["severity"] == "WARN"]
+    infos = [i for i in issues if i["severity"] == "INFO"]
+
+    print(f"CHECK: {checked} fields verified, {len(errors)} errors, {len(warnings)} warnings, {len(infos)} unreadable", file=sys.stderr)
 
     if errors:
         print(f"\nERRORS ({len(errors)}) — DO NOT SUBMIT:", file=sys.stderr)
@@ -285,15 +314,18 @@ def cmd_check(jid):
             print(f"    actual:   {i['actual'][:50]}", file=sys.stderr)
             print(f"    reason:   {i['reason'][:60]}", file=sys.stderr)
 
-    if not issues:
-        emit_status("check_passed", f"{checked} fields verified, no contradictions")
-        emit_next_value("submit", "all fields verified — safe to submit")
-    elif errors:
+    if infos:
+        print(f"\nUNREADABLE ({len(infos)}) — React-controlled fields, verify visually:", file=sys.stderr)
+        for i in infos:
+            print(f"  i {i['label'][:50]}", file=sys.stderr)
+            print(f"    expected: {i['expected'][:50]}", file=sys.stderr)
+
+    if not errors:
+        emit_status("check_passed", f"{checked} fields verified, {len(warnings)} warnings, {len(infos)} unreadable")
+        emit_next_value("submit", "safe to submit" if not warnings else "review warnings then submit")
+    else:
         emit_status("check_failed", f"{len(errors)} error(s) — fix before submit")
         emit_next_value("act --fill", "fix errors with --answers then re-check")
-    else:
-        emit_status("check_warn", f"{len(warnings)} warning(s) — review before submit")
-        emit_next_value("submit", "review warnings, then submit if acceptable")
 
     return 0 if not errors else 1
 

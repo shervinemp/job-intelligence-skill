@@ -300,7 +300,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     if skyvern_result and skyvern_result.get("run_id"):
         emit_next("verify", "poll Skyvern fill progress")
     elif submit_visible or filled_all:
-        emit_next("submit")
+        emit_next("check", "run 'apply act --check' to validate before submit")
     else:
         emit_next("act --inspect", "no fillable fields and no Skyvern run")
     return 0

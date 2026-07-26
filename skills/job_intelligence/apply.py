@@ -45,7 +45,8 @@ def main():
     act_p.add_argument("jid", help="Job ID")
     act_p.add_argument("--fill", action="store_true", help="Fill the application form")
     act_p.add_argument("--next", action="store_true", help="Next page on multi-step form")
-    act_p.add_argument("--submit", action="store_true", help="Submit the application")
+    act_p.add_argument("--submit", action="store_true", help="Submit the application (runs --check first)")
+    act_p.add_argument("--force", action="store_true", help="Force submit, skipping pre-submit check")
     act_p.add_argument("--inspect", action="store_true", help="Analyze the page (screenshot, fields, buttons)")
     act_p.add_argument("--check", action="store_true", help="Pre-submit validation: flag contradictions before submitting")
     act_p.add_argument("--investigate", action="store_true", help="Deep-analyze unknown platform (Skyvern investigator)")
@@ -100,7 +101,8 @@ def main():
         run({"command": cmd, "jid": args.jid, "--answers": args.answers,
              "--no-verify": args.no_verify, "--max-pages": args.max_pages,
              "--quick": args.quick,
-             "--confirm": args.submit})
+             "--confirm": args.submit,
+             "--force": args.force})
     elif args.command == "verify":
         from apply.verify import run
         run(args.jid)
