@@ -290,6 +290,14 @@ _READER_JS = """(config) => {
         // and iterate (not by value, which may be absent).
         const allRadioEls = [...root.querySelectorAll('input[type="radio"][name="' + escAttr(name) + '"]')];
         const optionLabels = allRadioEls.map(el => {
+            // 0) Try label[for="el.id"] (Ashby pattern: sibling <label>)
+            if (el.id) {
+                const lbl = root.querySelector('label[for="' + el.id + '"]');
+                if (lbl) {
+                    const txt = (lbl.textContent || '').trim();
+                    if (txt && txt !== 'on' && txt.length < 100) return txt;
+                }
+            }
             // 1) Try parent <label> text (traditional forms)
             const parentLabel = el.closest('label');
             if (parentLabel) {
@@ -307,11 +315,10 @@ _READER_JS = """(config) => {
                     const pt = (p.textContent || '').trim();
                     if (pt.length > 0 && pt.length < 30 && pt !== question) return pt;
                 }
-                // 3) Fallback: radio container's aria-label (skip filenames)
                 const al = radioRole.getAttribute('aria-label');
                 if (al && al.length < 30 && !/\\.pdf$|\\.doc/i.test(al)) return al;
             }
-            // 4) Fallback: value attribute or id (skip default "on")
+            // 3) Fallback: value attribute or id (skip default "on")
             const v = el.value;
             return (v && v !== 'on') ? v : (el.id || '');
         });

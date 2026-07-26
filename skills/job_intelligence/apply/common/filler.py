@@ -212,10 +212,14 @@ class RadioFiller(FieldFiller):
                             matches.push({radio: r, label: lbl});
                         }
                     }
-                    // First: try exact full-answer match against option labels
-                    for (const m of matches) {
-                        if (m.label === ans || m.label.startsWith(ans) || ans.startsWith(m.label)) {
-                            m.radio.click(); return 'exact:' + m.label.slice(0, 40);
+                    // First: try exact full-answer match — but ONLY when ans is
+                    // more specific than just "yes"/"no". A generic "yes" with
+                    // multiple "Yes..." options needs location disambiguation.
+                    if (ans.length > ynPref.length + 1) {
+                        for (const m of matches) {
+                            if (m.label === ans || m.label.startsWith(ans) || ans.startsWith(m.label)) {
+                                m.radio.click(); return 'exact:' + m.label.slice(0, 40);
+                            }
                         }
                     }
                     if (matches.length === 1) {
@@ -237,8 +241,8 @@ class RadioFiller(FieldFiller):
                                 bestMatch = m;
                             }
                         }
-                        if (bestMatch && bestScore >= 0) {
-                            bestMatch.radio.click(); return true;
+                        if (bestMatch && bestScore > 0) {
+                            bestMatch.radio.click(); return 'loc:' + bestMatch.label.slice(0, 40) + ' score=' + bestScore;
                         }
                     }
                     // No country disambiguation — click first match

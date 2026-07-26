@@ -244,16 +244,31 @@ def cmd_check(jid):
                         const [sel] = args;
                         const el = document.querySelector(sel);
                         if (!el) return false;
-                        // Ashby autocomplete: parent has typeahead/combo class
+                        // Ashby autocomplete: parent has typeahead/combo/inputContainer class
                         const parent = el.parentElement;
-                        if (parent && (parent.className.includes('ashby') || 
-                            parent.className.includes('autocomplete') ||
-                            parent.className.includes('combo') ||
-                            parent.className.includes('typeahead'))) return true;
+                        if (parent) {
+                            const pc = parent.className || '';
+                            if (pc.includes('ashby') ||
+                                pc.includes('autocomplete') ||
+                                pc.includes('combo') ||
+                                pc.includes('typeahead') ||
+                                pc.includes('inputContainer') ||
+                                pc.includes('_inputContainer')) return true;
+                        }
+                        // Walk up 3 levels for Ashby autocomplete container
+                        let p = el;
+                        for (let i = 0; i < 3; i++) {
+                            p = p.parentElement;
+                            if (!p) break;
+                            const pc = p.className || '';
+                            if (pc.includes('inputContainer') || pc.includes('autocomplete') || pc.includes('ashby')) return true;
+                        }
                         // React-controlled: value attribute empty but _valueTracker exists
                         if (el._valueTracker !== undefined && el.value === '') return true;
                         // Custom widget with hidden input
                         if (el.type === 'hidden' || el.tabIndex === -1) return true;
+                        // Ashby autocomplete: placeholder "Start typing..." with no id/name
+                        if (el.placeholder === 'Start typing...' && !el.id && !el.name) return true;
                         return false;
                     }""", [sel])
                     if is_react_widget:
