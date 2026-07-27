@@ -56,6 +56,14 @@ def cmd_submit(jid, confirm=False, force=False):
         state = {"jid": jid}
     state["jid"] = jid
 
+    # GUARD: if we already clicked submit for this job, do NOT click again.
+    # Instead, investigate the page to determine the outcome.
+    # Only --force clears the flag (for manual retry after confirming
+    # the previous attempt truly failed).
+    submit_clicked = state.get("submit_clicked", False)
+    if submit_clicked and not force:
+        print(f"  GUARD: submit was already clicked — investigating page (no re-click)", file=sys.stderr)
+
     url = state.get("external_url") or state.get("url", "")
     if not url:
         emit_error("no external_url in state")
@@ -124,6 +132,55 @@ def cmd_submit(jid, confirm=False, force=False):
                     print(f"  WARN: {empt} required field(s) still empty before submit", file=sys.stderr)
             except Exception as re_:
                 print(f"  Re-fill skipped: {re_}", file=sys.stderr)
+
+            # GUARD investigation: if we already clicked submit, check the page
+            # state without clicking again. Look for success signals, already-
+            # applied text, or validation errors to determine the outcome.
+            if submit_clicked and not force:
+                from apply.common.signals import has_success_text
+                try:
+                    _ptxt = _pt(page) or ""
+                    if has_success_text(_ptxt):
+                        mark_applied(jid)
+                        emit_status("submitted", "success signal found on investigation")
+                        emit_next("verify")
+                        return 0
+                    # Check iframes (Greenhouse renders confirmation in iframe)
+                    for fr in page.frames:
+                        if fr == page.main_frame:
+                            continue
+                        try:
+                            ft = fr.evaluate("() => document.body.innerText") or ""
+                            if has_success_text(ft) or has_already_applied_text(ft):
+                                mark_applied(jid)
+                                emit_status("submitted", "success signal found in iframe")
+                                emit_next("verify")
+                                return 0
+                        except Exception:
+                            continue
+                    # Check for validation errors — form rejected, safe to retry
+                    errors = _get_validation_errors(page)
+                    if errors:
+                        print(f"  VALIDATION_ERRORS: {len(errors)} field(s) blocked submit", file=sys.stderr)
+                        state["submit_clicked"] = False
+                        save_state(state)
+                        emit_status("validation_error", f"{len(errors)} field(s) need fixing")
+                        emit_next("act --fill", "fix validation errors then resubmit")
+                        return 1
+                    # No success signal, no validation errors, no already-applied
+                    # text. The form likely went through but we can't confirm.
+                    # Mark as applied (conservative — prevents duplicate).
+                    print(f"  No validation errors — previous submit likely succeeded", file=sys.stderr)
+                    mark_applied(jid)
+                    emit_status("submitted", "no validation errors on re-investigation")
+                    emit_next("verify")
+                    return 0
+                except Exception as ie:
+                    print(f"  Investigation failed: {ie} — marking as applied (conservative)", file=sys.stderr)
+                    mark_applied(jid)
+                    emit_status("submitted", "investigation failed — conservative mark")
+                    emit_next("verify")
+                    return 0
 
             # LinkedIn Easy Apply: navigate to review/submit page
             if "linkedin.com" in (page.url or ""):
@@ -201,6 +258,11 @@ def cmd_submit(jid, confirm=False, force=False):
             clicked = False
             if submit_text:
                 print(f"  Found submit button: '{submit_text}'", file=sys.stderr)
+                # Record that we're about to click submit. If the click succeeds
+                # but success detection fails, the guard above ensures we
+                # investigate instead of clicking again on the next run.
+                state["submit_clicked"] = True
+                save_state(state)
                 try:
                     page.click(f'button:text("{submit_text}")', timeout=5000)
                     clicked = True
@@ -252,6 +314,15 @@ def cmd_submit(jid, confirm=False, force=False):
 
                 pages_before = {id(p) for p in ctx.pages}
                 success, success_page = _check_submit_success(ctx, page, pages_before)
+
+                # Retry success check for slow-loading confirmations
+                if not success:
+                    for _ in range(3):
+                        time.sleep(2)
+                        success, success_page = _check_submit_success(ctx, page, pages_before)
+                        if success:
+                            break
+
                 if success:
                     was_new = mark_applied(jid)
                     if was_new:
@@ -267,113 +338,21 @@ def cmd_submit(jid, confirm=False, force=False):
                     for e in errors[:5]:
                         print(f"    ! {e[:80]}", file=sys.stderr)
                     state["submit_errors"] = errors
+                    state["submit_clicked"] = False  # form rejected — safe to retry
                     save_state(state)
                     emit_status("validation_error", f"{len(errors)} field(s) need fixing")
                     emit_next("act --fill", "fix validation errors then resubmit")
                     return 1
 
-                # Multi-step: look for Next/Review/Continue (NOT submit — we already clicked that)
-                next_btn = None
-                try:
-                    nav_cands = page.evaluate("""() => {
-                        const kws = ['next', 'review', 'continue'];
-                        const all = document.querySelectorAll('button, [role="button"]');
-                        for (const el of all) {
-                            if (el.offsetParent === null || el.disabled) continue;
-                            if (!el.closest('dialog') && el.closest('nav, header, footer')) continue;
-                            const t = (el.textContent || '').trim().toLowerCase();
-                            if (kws.includes(t)) return t;
-                        }
-                        return null;
-                    }""")
-                    next_btn = nav_cands
-                except Exception:
-                    pass
-                last_btn = None
-                for _ in range(5):
-                    if not next_btn or next_btn == last_btn:
-                        break
-                    last_btn = next_btn
-                    print(f"  Review step — clicking '{next_btn}'", file=sys.stderr)
-                    try:
-                        page.click(f'button:text("{next_btn}")', timeout=5000)
-                    except Exception:
-                        try:
-                            page.evaluate(f"""() => {{
-                                const btn = [...document.querySelectorAll('button')].find(
-                                    b => b.textContent.trim().toLowerCase() === {json.dumps(next_btn.lower())}
-                                );
-                                if (btn) btn.click();
-                            }}""")
-                        except Exception:
-                            break
-                    time.sleep(2)
-                    try:
-                        page.wait_for_load_state("domcontentloaded", timeout=5000)
-                    except Exception:
-                        pass
-                    success, _ = _check_submit_success(ctx, page, pages_before)
-                    if success:
-                        mark_applied(jid)
-                        emit_status("submitted", "Playwright multi-step submit")
-                        emit_next("verify")
-                        return 0
-                    # Check for submit button on the new page
-                    submit_now = _detect_submit_button(page)
-                    if submit_now:
-                        try:
-                            page.click(f'button:text("{submit_now}")', timeout=5000)
-                        except Exception:
-                            page.evaluate(f"""() => {{
-                                const btn = [...document.querySelectorAll('button')].find(
-                                    b => b.textContent.trim().toLowerCase() === {json.dumps(submit_now.lower())}
-                                );
-                                if (btn) btn.click();
-                            }}""")
-                        time.sleep(3)
-                        success, _ = _check_submit_success(ctx, page, pages_before)
-                        if success:
-                            mark_applied(jid)
-                            emit_status("submitted", "Playwright review->submit")
-                            emit_next("verify")
-                            return 0
-                    # Look for next nav button
-                    try:
-                        next_btn = page.evaluate("""() => {
-                            const kws = ['next', 'review', 'continue'];
-                            const all = document.querySelectorAll('button, [role="button"]');
-                            for (const el of all) {
-                                if (el.offsetParent === null || el.disabled) continue;
-                                if (!el.closest('dialog') && el.closest('nav, header, footer')) continue;
-                                const t = (el.textContent || '').trim().toLowerCase();
-                                if (kws.includes(t)) return t;
-                            }
-                            return null;
-                        }""")
-                    except Exception:
-                        next_btn = None
-
-                try:
-                    from lib.ask_api import available, ask_bytes
-                    if available():
-                        from apply.common.inspect_lib import page_jpeg
-                        img = page_jpeg(page, full=False)
-                        reply, err = ask_bytes(
-                            img,
-                            "Did this job application submit successfully? "
-                            "Look for: confirmation message, thank you text, "
-                            "application ID, success indicator. "
-                            "Answer only YES or NO.",
-                        )
-                        if not err and (reply or "").strip().lower().startswith("yes"):
-                            mark_applied(jid)
-                            emit_status("submitted", "vision confirmed via ask_api")
-                            emit_next("verify")
-                            return 0
-                        if err:
-                            print(f"  VISION_SKIP: {err}", file=sys.stderr)
-                except Exception as ve:
-                    print(f"  VISION_SKIP: {ve}", file=sys.stderr)
+                # CRITICAL: if we clicked submit and no validation errors appeared,
+                # the form was accepted. Mark as applied to prevent duplicate
+                # submissions. Do NOT return "unknown" — that causes the
+                # orchestrator to retry, clicking submit again.
+                print(f"  Submit clicked, no validation errors — marking as applied", file=sys.stderr)
+                mark_applied(jid)
+                emit_status("submitted", "submit clicked, no validation errors")
+                emit_next("verify")
+                return 0
 
             if not clicked:
                 empt = _empty_required(page)
@@ -391,8 +370,9 @@ def cmd_submit(jid, confirm=False, force=False):
                     emit_next("verify")
                     return 0
 
-            emit_status("unknown", "submit attempts inconclusive — check manually")
-            emit_next("verify")
+            # Only reach here if we could not click submit at all
+            emit_status("submit_failed", "could not click submit button")
+            emit_next("act --inspect", "inspect page to find submit button")
             return 1
     except Exception as e:
         emit_error(f"submit failed: {e}")

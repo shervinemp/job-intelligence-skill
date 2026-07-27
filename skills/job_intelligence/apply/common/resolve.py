@@ -332,6 +332,10 @@ _ALIAS_RULES = [
     (r"\bcommute\b", ["willing_to_commute"]),
     (r"\bhybrid role|comfortable with this|in (our |the )?office\b", ["office_preference"]),
     (r"\bcity or location|enter city\b", ["location", "city"]),
+    (r"\bexperience with ai|experience with llm|ai llm\b", ["ai_llm_experience", "Do you have experience with AI/LLMs?"]),
+    (r"\bsoftware engineering heavy\b", ["software_engineering_confidence"]),
+    (r"\binitialing below|by initialing|type your initials\b", ["initials"]),
+    (r"\bcurrently based in.*ontario\b", ["currently_based_ontario"]),
 ]
 
 
