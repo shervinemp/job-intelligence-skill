@@ -91,7 +91,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 |------|-------------|
 | `detect [<jid>]` | Pre-flight: DB stage, PDF, classify type. Omit JID to auto-pick first tailored. Outputs `TYPE:` + `NEXT:`. |
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS. Auto-clicks "Apply now" on job listing pages. Prompts for login on auth wall — cookies persist via Chrome profile. |
-| `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
+| `act --fill <jid> [--answers '{}']` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
 | `act --submit <jid>` | Submit. Runs pre-submit check. Sets `submit_clicked` flag before clicking. Investigates (no re-click) on retry. `--force` clears guard. |
@@ -112,7 +112,7 @@ detect → Read the page. Classify the type. Do NOT fill anything.
           Output: TYPE: easy_apply / ats_direct / external / login_wall
 
 ─── PHASE 2: FIELD INVENTORY ───
-act --fill (dry-run) → Catalogs every field on the page.
+act --fill → Catalogs every field on the page.
                         Note fields resolved automatically (✅) vs.
                         fields needing your input (❓).
                         Do NOT provide --answers yet.
@@ -163,7 +163,7 @@ verify → Confirm the application was received.
 - Auth walls: navigate prompts for login. Log in via the open browser, press Enter to continue. Type `flag` to skip. Cookies persist via Chrome profile — same platform won't re-prompt.
 - `--answers` — normalized exact match (case/punctuation insensitive). Full label text.
 - `--candidate N` — picks from CANDIDATES list. Works on --fill/--next/--submit/--inspect.
-- `--dry-run` on `--fill` shows resolved answers without DOM modification. Validates field detection first.
+- Fill report shows resolved answers and field detection for each field.
 - Multi-page: fill → next → fill → ... until Submit appears or verify passes.
 - Guest apply: auto-clicks "continue without signing in" when available.
 - Pipeline cannot create accounts, remember passwords, or handle 2FA.

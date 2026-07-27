@@ -2,7 +2,7 @@
 """apply.py — Apply pipeline: detect, navigate, hybrid fill/submit.
 
 Usage:
-  python3 apply.py auto [--jid <jid>] [--dry-run] [--limit N] [--no-submit] [--quick]
+  python3 apply.py auto [--jid <jid>] [--limit N] [--no-submit] [--quick]
                          Run full pipeline for all tailored jobs
   python3 apply.py detect [<jid>]
   python3 apply.py navigate <jid>
@@ -53,7 +53,6 @@ def main():
 
     auto_p = sub.add_parser("auto", help="Run full pipeline for all tailored jobs")
     auto_p.add_argument("--jid", help="Process a single job")
-    auto_p.add_argument("--dry-run", action="store_true", help="List jobs without processing")
     auto_p.add_argument("--limit", type=int, help="Cap at N jobs")
     auto_p.add_argument("--no-submit", action="store_true", help="Stop after check passes")
     auto_p.add_argument("--quick", action="store_true", help="Deterministic-only (no vision/Skyvern)")
@@ -116,7 +115,7 @@ def main():
         run(args.jid or _auto_jid())
     elif args.command == "auto":
         from apply.auto import run as auto_run
-        return auto_run(jid=args.jid, limit=args.limit, dry_run=args.dry_run,
+        return auto_run(jid=args.jid, limit=args.limit,
                         quick=args.quick, max_pages=args.max_pages,
                         no_submit=args.no_submit)
     elif args.command == "navigate":

@@ -8,18 +8,18 @@ Continues to the next job regardless.
 Usage:
   python apply.py auto                    Process all tailored jobs
   python apply.py auto --jid <jid>        Process a single job
-  python apply.py auto --dry-run          List what would be processed
   python apply.py auto --limit N          Cap at N jobs
   python apply.py auto --no-submit        Stop after check passes
   python apply.py auto --quick            Deterministic-only (no vision/Skyvern)
   python apply.py auto --max-pages N      Max form pages (default 4)
+  python3 report.py candidates            Preview classification and counts
 """
 import os, sys, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
-def run(jid=None, limit=None, dry_run=False, quick=False, max_pages=4, no_submit=False):
+def run(jid=None, limit=None, quick=False, max_pages=4, no_submit=False):
     from lib.db import get_jobs_by_stage, get_job
 
     if jid:
@@ -40,22 +40,6 @@ def run(jid=None, limit=None, dry_run=False, quick=False, max_pages=4, no_submit
     N = len(jobs)
     print(f"\nAUTO: {N} job(s) to process (stage=tailored)", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
-
-    if dry_run:
-        from apply.detect import _classify
-        from apply.common.registry import resolve as resolve_registry
-        for i, (jid, job) in enumerate(jobs):
-            title = job.get("title", "?")
-            company = job.get("company", "?")
-            url = job.get("url", "")
-            ext_url = job.get("external_url") or ""
-            jtype, resolved_url = _classify(url, ext_url)
-            reg = resolve_registry(resolved_url or ext_url or url)
-            platform = reg.name if reg else ""
-            tag = f" -> {platform}" if platform else ""
-            print(f"  [{i+1}/{N}] {jid[:12]} {jtype}{tag} -- {title} @ {company}", file=sys.stderr)
-        print(f"\nDRY_RUN: {N} job(s) listed. Remove --dry-run to process.", file=sys.stderr)
-        return 0
 
     results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
 

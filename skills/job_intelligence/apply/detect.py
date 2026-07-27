@@ -34,7 +34,7 @@ def _classify(url: str, ext_url: str = "") -> tuple[str, str]:
     return "external", url  # assume external if we have a URL
 
 
-def run(jid, dry_run=False):
+def run(jid):
     conn = get_conn()
     row = conn.execute(
         "SELECT url, title, company, stage, state, external_url FROM jobs WHERE id=?",
@@ -88,7 +88,6 @@ def run(jid, dry_run=False):
              "title": title or "", "company": company or "", "type": job_type}
     if plat_name:
         state["platform"] = plat_name
-    if not dry_run:
-        from lib.config import atomic_write_json, STATE_PATH as _SP
-        atomic_write_json(_SP, state)
+    from lib.config import atomic_write_json, STATE_PATH as _SP
+    atomic_write_json(_SP, state)
     return 0

@@ -237,7 +237,7 @@ python3 tailor.py
 
 # 3. Auto-apply (optional, after tailoring)
 #    Autonomous — process all tailored jobs (recommended)
-python3 apply.py auto --dry-run              # preview
+python3 report.py candidates                 # preview classified breakdown
 python3 apply.py auto --limit 5 --quick     # deterministic-only
 python3 apply.py auto --no-submit           # fill only, review before submitting
 

@@ -86,6 +86,9 @@ def cmd_candidates(limit=None):
     (submit_clicked, no_apply_path, login_required) so the operator can
     decide what to run safely. Also shows the already-applied set for
     dedup reference."""
+    from apply.detect import _classify
+    from apply.common.registry import resolve as resolve_registry
+
     conn = get_conn()
 
     # Stage counts header
@@ -94,14 +97,35 @@ def cmd_candidates(limit=None):
         print(f"  {r['stage']}={r['n']}", end="")
     print()
 
+    # Classify every tailored job for the summary breakdown
+    all_tailored = conn.execute(
+        "SELECT id, url, external_url FROM jobs WHERE stage='tailored' AND state='active'"
+    ).fetchall()
+    types = {}  # "easy_apply" -> count, "ats_direct(Workday)" -> count, etc.
+    for r in all_tailored:
+        url = r["url"] or ""
+        ext_url = r["external_url"] or ""
+        jtype, resolved_url = _classify(url, ext_url)
+        if jtype == "ats_direct":
+            reg = resolve_registry(resolved_url or url)
+            label = f"ats_direct({reg.name})" if reg else "ats_direct(?)"
+        elif jtype == "external":
+            reg = resolve_registry(ext_url or resolved_url or url)
+            label = f"external({reg.name})" if reg else "external(?)"
+        else:
+            label = jtype
+        types[label] = types.get(label, 0) + 1
+    type_summary = ", ".join(f"{k}={v}" for k, v in sorted(types.items()))
+    print(f"\nTAILORED: {type_summary}")
+
     # Tailored with external URLs — candidates to apply
-    q = ("SELECT id, title, company, external_url, state FROM jobs "
+    q = ("SELECT id, title, company, url, external_url, state FROM jobs "
          "WHERE stage='tailored' AND external_url IS NOT NULL AND external_url != '' "
          "ORDER BY company")
     rows = conn.execute(q).fetchall()
     if limit:
         rows = rows[:limit]
-    print(f"\nCANDIDATES ({len(rows)} tailored with external_url):")
+    print(f"\nEXTERNAL ({len(rows)} — require Playwright pipeline):")
     for r in rows:
         state = r["state"] or ""
         flags = []
@@ -112,9 +136,33 @@ def cmd_candidates(limit=None):
         if "login_required" in state:
             flags.append("LOGIN_REQ")
         flag_str = "  [" + ", ".join(flags) + "]" if flags else ""
-        url = (r["external_url"] or "")[:52]
-        print(f"  {r['id'][:14]} {_clean(r['company'] or '')[:22]:22} "
-              f"{_clean(r['title'] or '')[:36]:36} {url}{flag_str}")
+        ext_url = r["external_url"] or ""
+        reg = resolve_registry(ext_url)
+        tag = f" ({reg.name})" if reg else ""
+        url_display = ext_url[:48]
+        print(f"  {r['id'][:14]} {_clean(r['company'] or '')[:20]:20} "
+              f"{_clean(r['title'] or '')[:34]:34} {url_display}{tag}{flag_str}")
+
+    # Tailored without external URL — LinkedIn Easy Apply
+    easy = conn.execute(
+        "SELECT id, title, company, state FROM jobs "
+        "WHERE stage='tailored' AND (external_url IS NULL OR external_url = '') AND state='active' "
+        "ORDER BY company"
+    ).fetchall()
+    if easy:
+        print(f"\nEASY_APPLY ({len(easy)} — LinkedIn modal):")
+        for r in easy[:20]:
+            state = r["state"] or ""
+            flags = []
+            if "submit_clicked" in state:
+                flags.append("SUBMIT_CLICKED")
+            if "no_apply_path" in state:
+                flags.append("NO_APPLY_PATH")
+            flag_str = "  [" + ", ".join(flags) + "]" if flags else ""
+            print(f"  {r['id'][:14]} {_clean(r['company'] or '')[:22]:22} "
+                  f"{_clean(r['title'] or '')[:40]}{flag_str}")
+        if len(easy) > 20:
+            print(f"  ... +{len(easy) - 20} more")
 
     # Already-applied set (dedup reference)
     applied = conn.execute(
