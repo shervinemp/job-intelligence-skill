@@ -418,11 +418,44 @@ def _handle_login_wall(page, jid, quick):
     if creds:
         print(f"  Auto-login: {creds['email']}", file=sys.stderr)
         try:
-            # Workday renders BOTH Sign In and Create Account forms on the
-            # same page (tabbed SPA). Use a single JS evaluation to find
-            # the *sign-in* form (the one with exactly 1 password field),
-            # fill it, and click its submit button — all in one atomic
-            # operation so we don't accidentally target the wrong form.
+            # Accept cookie banners that can intercept clicks (Workday, etc.)
+            for sel in [
+                '[data-automation-id="legalNoticeAcceptButton"]',
+                'button:has-text("Accept Cookies")',
+                'button:has-text("Accept")',
+            ]:
+                try:
+                    bn = page.locator(sel).first
+                    if bn.count() > 0 and bn.is_visible():
+                        bn.click(timeout=1500)
+                        time.sleep(1)
+                        print("  Cookies accepted", file=sys.stderr)
+                        break
+                except Exception:
+                    continue
+
+            # Workday defaults to the "Create Account" form with a "Sign
+            # In" link. Click it first so the sign-in form renders (the
+            # Create Account form has 2 password fields + a checkbox —
+            # filling that with saved creds always fails validation).
+            for sel in [
+                '[data-automation-id="signInLink"]',
+                'a:has-text("Sign In")',
+                'button:has-text("Sign In")',
+            ]:
+                try:
+                    link = page.locator(sel).first
+                    if link.count() > 0 and link.is_visible():
+                        link.click(timeout=3000)
+                        time.sleep(2)
+                        print("  Switched to Sign In form", file=sys.stderr)
+                        break
+                except Exception:
+                    continue
+
+            # Atomic fill+submit: find the sign-in form (1 password field),
+            # fill it, click submit — all in one JS call to avoid
+            # cross-form locator mismatches.
             result = page.evaluate("""(creds) => {
                 const forms = Array.from(document.querySelectorAll('form'));
                 for (const f of forms) {
@@ -431,7 +464,6 @@ def _handle_login_wall(page, jid, quick):
                     if (pws.length !== 1) continue;
                     const btn = f.querySelector('[data-automation-id="signInSubmitButton"]');
                     if (!btn) continue;
-                    // This is the Sign In form.
                     const email = f.querySelector('input[type="email"], input[type="text"]');
                     if (email) {
                         email.focus();
