@@ -396,6 +396,7 @@ async function ensureSidebar(page, open = true) {
 
 async function deleteChat(page) {
   try {
+    const convUrl = page.url();
     const convId = await page.evaluate(() => {
       const mGem = location.href.match(/\/gem\/[^\/]+\/([^\/\?]+)/);
       if (mGem) return mGem[1];
@@ -404,7 +405,6 @@ async function deleteChat(page) {
       const mMain = location.href.match(/\/c\/([^\/\?]+)/);
       return mMain ? mMain[1] : null;
     });
-    if (!convId) { log('deleteChat: exit@convId null'); return; }
 
     await page.goto(gemUrl(), { waitUntil: 'domcontentloaded', timeout: 15000 });
     await wait(5000);
@@ -412,26 +412,29 @@ async function deleteChat(page) {
     await ensureSidebar(page, true);
 
     let clicked = 'not_found';
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await wait(3000);
-      clicked = await page.evaluate((cid) => {
-        const convs = document.querySelectorAll('[data-test-id="conversation"]');
-        for (const c of convs) {
-          const link = c.querySelector('a');
-          const href = link ? (link.href || '') : '';
-          const lastSegment = href.split('/').pop().split('?')[0];
-          if (lastSegment !== cid) continue;
-          c.scrollIntoView({ block: 'center' });
-          const btn = c.querySelector('[data-test-id="actions-menu-button"]');
-          if (!btn) return 'no_button';
-          btn.click();
-          return 'ok';
-        }
-        return 'not_found';
-      }, convId);
-      if (clicked !== 'not_found') break;
+    if (convId) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) await wait(3000);
+        clicked = await page.evaluate((cid, fullUrl) => {
+          const convs = document.querySelectorAll('[data-test-id="conversation"]');
+          for (const c of convs) {
+            const link = c.querySelector('a');
+            const href = link ? (link.href || '') : '';
+            const lastSegment = href.split('/').pop().split('?')[0];
+            if (lastSegment !== cid && !href.includes(cid)) continue;
+            c.scrollIntoView({ block: 'center' });
+            const btn = c.querySelector('[data-test-id="actions-menu-button"]');
+            if (!btn) return 'no_button';
+            btn.click();
+            return 'ok';
+          }
+          return 'not_found';
+        }, convId, convUrl);
+        if (clicked !== 'not_found') break;
+      }
     }
-    if (clicked === 'not_found') { log('deleteChat: exit@not_found'); return; }
+
+    if (clicked === 'not_found') { log(`deleteChat: exit@not_found (convUrl=${convUrl})`); return; }
     if (clicked === 'no_button') { log('deleteChat: exit@no_button'); return; }
     await wait(1500);
 
