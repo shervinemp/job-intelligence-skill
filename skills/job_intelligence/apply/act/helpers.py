@@ -8,11 +8,10 @@ import json, os, re, sys, time
 from contextlib import contextmanager
 
 from lib.config import PROFILE_PATH, JI_HOME
-from apply.common.output import emit_next, emit_status, emit_error
+from apply.common.output import emit_error
 from apply.common.page_helpers import (
-    load_state, save_state, read_page, page_text, find_page,
-    tag_page, check_applied_signal, check_captcha, handle_captcha,
-    scan_actions, mark_applied, handle_session_timeout,
+    load_state, page_text, find_page,
+    check_applied_signal, scan_actions,
 )
 from apply.common.resolve import resolve, learn_mapping
 from apply.common.signals import has_success_text
@@ -144,7 +143,6 @@ def _wait_for_fields(page, timeout=8):
 
 
 def _find_next_button(page):
-    import json as _json
     try:
         cands = page.evaluate("""(kws) => {
             const out = [];

@@ -27,7 +27,7 @@ from apply.common.field_types import is_combobox as _is_combobox
 from apply.common.value_reader import read_value as _read_value
 from apply.common.output import emit_diag
 from apply.steps.probe import resolve_selector
-from apply.strategies import combobox, text, select, datepicker, contenteditable as ce
+from apply.strategies import combobox, text, select, contenteditable as ce
 
 
 # ─── Frame helpers ────────────────────────────────────────────────────

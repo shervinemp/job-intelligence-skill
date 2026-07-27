@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 def run(jid=None, limit=None, dry_run=False, quick=False, max_pages=4, no_submit=False):
-    from lib.db import get_jobs_by_stage, get_job, get_conn
+    from lib.db import get_jobs_by_stage, get_job
 
     if jid:
         job = get_job(jid)
@@ -92,7 +92,7 @@ def _process_one(jid, quick, max_pages, no_submit, results):
         return row["stage"] if row else ""
 
     # Step 1: detect
-    print(f"  detect...", file=sys.stderr, end=" ")
+    print("  detect...", file=sys.stderr, end=" ")
     rc = detect_run(jid)
     if rc != 0:
         results["skipped"].append((jid, "detect failed"))
@@ -108,19 +108,19 @@ def _process_one(jid, quick, max_pages, no_submit, results):
 
     if jtype in ("unknown", ""):
         results["skipped"].append((jid, "unknown type -- can't classify URL"))
-        print(f"  SKIP -- unknown type", file=sys.stderr)
+        print("  SKIP -- unknown type", file=sys.stderr)
         return
 
     # Step 2: navigate (only for external type)
     if jtype == "external":
-        print(f"  navigate...", file=sys.stderr)
+        print("  navigate...", file=sys.stderr)
         rc = navigate_run(jid)
         if rc != 0:
             results["skipped"].append((jid, "navigate failed"))
             return
 
     # Step 3: fill
-    print(f"  fill...", file=sys.stderr)
+    print("  fill...", file=sys.stderr)
     rc = cmd_fill(jid, answers=None, verify=not quick,
                   max_pages=max_pages, quick=quick)
     if rc != 0:
@@ -135,14 +135,14 @@ def _process_one(jid, quick, max_pages, no_submit, results):
         return
 
     # Step 4: check
-    print(f"  check...", file=sys.stderr)
+    print("  check...", file=sys.stderr)
     rc = cmd_check(jid)
     if rc != 0:
         results["stopped"].append((jid, "check failed -- supply answers and retry"))
-        print(f"  STOPPED -- check failed, orchestrator review needed", file=sys.stderr)
+        print("  STOPPED -- check failed, orchestrator review needed", file=sys.stderr)
         return
 
-    print(f"  check passed", file=sys.stderr)
+    print("  check passed", file=sys.stderr)
 
     # Step 5: submit
     if no_submit:
@@ -150,7 +150,7 @@ def _process_one(jid, quick, max_pages, no_submit, results):
         print(f"  READY -- --no-submit, run: python apply.py act --submit {jid}", file=sys.stderr)
         return
 
-    print(f"  submit...", file=sys.stderr)
+    print("  submit...", file=sys.stderr)
     rc = cmd_submit(jid, confirm=True)
     if rc != 0:
         if _stage() == "applied":
@@ -175,24 +175,24 @@ def _print_summary(results):
           f"{n_skip} skipped, {n_already} already applied", file=sys.stderr)
 
     if results["submitted"]:
-        print(f"\n  SUBMITTED:", file=sys.stderr)
+        print("\n  SUBMITTED:", file=sys.stderr)
         for jid, detail in results["submitted"]:
             print(f"    {jid[:12]} -- {detail}", file=sys.stderr)
 
     if results["stopped"]:
-        print(f"\n  STOPPED (orchestrator review needed):", file=sys.stderr)
+        print("\n  STOPPED (orchestrator review needed):", file=sys.stderr)
         for jid, detail in results["stopped"]:
             print(f"    {jid[:12]} -- {detail}", file=sys.stderr)
-        print(f"\n  To resolve: review fill output above, supply --answers, then:", file=sys.stderr)
-        print(f"    python apply.py act --fill <jid> --answers '{{...}}'", file=sys.stderr)
-        print(f"    python apply.py act --submit <jid>", file=sys.stderr)
+        print("\n  To resolve: review fill output above, supply --answers, then:", file=sys.stderr)
+        print("    python apply.py act --fill <jid> --answers '{...}'", file=sys.stderr)
+        print("    python apply.py act --submit <jid>", file=sys.stderr)
 
     if results["skipped"]:
-        print(f"\n  SKIPPED:", file=sys.stderr)
+        print("\n  SKIPPED:", file=sys.stderr)
         for jid, detail in results["skipped"]:
             print(f"    {jid[:12]} -- {detail}", file=sys.stderr)
 
     if results["already_applied"]:
-        print(f"\n  ALREADY APPLIED:", file=sys.stderr)
+        print("\n  ALREADY APPLIED:", file=sys.stderr)
         for jid, detail in results["already_applied"]:
             print(f"    {jid[:12]} -- {detail}", file=sys.stderr)

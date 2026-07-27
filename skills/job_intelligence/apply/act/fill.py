@@ -1,5 +1,5 @@
 """act/fill.py — Hybrid fill command: Playwright-first, Skyvern-fallback."""
-import json, os, sys, time
+import sys, time
 
 from lib.db import get_conn
 from apply.common.output import emit_next, emit_status, emit_error, emit_fill_report
@@ -20,7 +20,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     if not db_row:
         emit_error(f"job {jid} not found")
         return 1
-    stage, job_state = db_row["stage"], db_row["state"]
+    stage = db_row["stage"]
     if stage == "applied":
         emit_status("already applied")
         emit_next("verify")
@@ -134,7 +134,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                     ea_btn = page.locator('button:has-text("Easy Apply")').first
                     if ea_btn.count() > 0:
                         ea_btn.click()
-                        print(f"  Easy Apply: modal opened", file=sys.stderr)
+                        print("  Easy Apply: modal opened", file=sys.stderr)
                         time.sleep(3)
                     max_pages = max(max_pages, 6)
 
@@ -150,7 +150,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 apply_btn = page.locator('a:has-text("Apply"), button:has-text("Apply")').first
                 if apply_btn.count() > 0:
                     apply_btn.click()
-                    print(f"  Listing page: clicked Apply", file=sys.stderr)
+                    print("  Listing page: clicked Apply", file=sys.stderr)
                     time.sleep(3)
                     _wait_for_fields(page, timeout=10)
 
@@ -374,7 +374,7 @@ def _handle_login_wall(page, jid, quick):
                 except Exception:
                     submit.click(force=True, timeout=5000)
                 time.sleep(5)
-                print(f"  LOGIN: submitted", file=sys.stderr)
+                print("  LOGIN: submitted", file=sys.stderr)
             return True
         except Exception as e:
             print(f"  LOGIN_FAIL: {e}", file=sys.stderr)

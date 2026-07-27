@@ -8,14 +8,14 @@ It reads the current form state from the DOM and cross-references against:
 
 Output is a structured report the orchestrator reviews before deciding to submit.
 """
-import json, os, sys, time
+import sys, time
 
 from lib.db import get_conn
 from apply.common.output import emit_error, emit_status
-from apply.common.page_helpers import load_state, save_state, handle_captcha, tag_page
+from apply.common.page_helpers import load_state, tag_page
 from apply.act.helpers import (
-    _load_profile, _build_ans_dict, chrome_session, _host,
-    _probe_form, _fill_with_playwright, _field_key,
+    _load_profile, _build_ans_dict, chrome_session,
+    _probe_form,
 )
 from apply.common.registry import resolve as resolve_registry
 from apply.common.filler import _read_element_value
@@ -99,7 +99,7 @@ def cmd_check(jid):
                 # Read what's actually in the DOM
                 actual = _read_element_value(page, sel, ans=ans_dict.get(label, ""), field=f)
                 # Resolve what we expected to fill
-                from apply.common.resolve import resolve, normalize
+                from apply.common.resolve import resolve
                 res = resolve(label, profile, None,
                               autocomplete=f.get("autocomplete", ""),
                               field_name=f.get("name", ""),

@@ -24,7 +24,6 @@ from apply.act.helpers import (
 def _determine_outcome(page, ctx, pages_before, url_before, submit_text_before):
     """Multi-step confidence cascade. Tries everything before giving up."""
     from apply.common.signals import has_success_text, has_already_applied_text
-    from apply.common.page_helpers import page_text as _pt
 
     # 1. Success text signals (page + all iframes)
     for source, label in _all_text_sources(page):
@@ -145,7 +144,7 @@ def cmd_submit(jid, confirm=False, force=False):
     if not db_row:
         emit_error(f"job {jid} not found")
         return 1
-    stage, job_state = db_row["stage"], db_row["state"]
+    stage = db_row["stage"]
 
     if stage == "applied":
         emit_status("already applied")
@@ -169,10 +168,10 @@ def cmd_submit(jid, confirm=False, force=False):
     # GATE: run check before submit unless --force
     if not force:
         from apply.act.check import cmd_check
-        print(f"  Pre-submit check...", file=sys.stderr)
+        print("  Pre-submit check...", file=sys.stderr)
         check_rc = cmd_check(jid)
         if check_rc != 0:
-            print(f"  CHECK FAILED — submit blocked. Use --force to override.", file=sys.stderr)
+            print("  CHECK FAILED — submit blocked. Use --force to override.", file=sys.stderr)
             emit_status("check_failed", "run 'apply act --check' and fix errors first")
             emit_next("check", "fix errors then resubmit (or --force to override)")
             return 1
@@ -188,7 +187,7 @@ def cmd_submit(jid, confirm=False, force=False):
     # the previous attempt truly failed).
     submit_clicked = state.get("submit_clicked", False)
     if submit_clicked and not force:
-        print(f"  GUARD: submit was already clicked — investigating page (no re-click)", file=sys.stderr)
+        print("  GUARD: submit was already clicked — investigating page (no re-click)", file=sys.stderr)
 
     url = state.get("external_url") or state.get("url", "")
     if not url:
@@ -227,7 +226,7 @@ def cmd_submit(jid, confirm=False, force=False):
                     return d && d.open && d.offsetParent !== null;
                 }""")
                 if dialog_open:
-                    print(f"  Easy Apply: modal already open", file=sys.stderr)
+                    print("  Easy Apply: modal already open", file=sys.stderr)
                 else:
                     ea_btn = page.locator('button:has-text("Easy Apply")').first
                     if ea_btn.count() > 0:
@@ -235,7 +234,7 @@ def cmd_submit(jid, confirm=False, force=False):
                             ea_btn.click(timeout=5000)
                         except Exception:
                             ea_btn.click(force=True, timeout=5000)
-                        print(f"  Easy Apply: modal opened", file=sys.stderr)
+                        print("  Easy Apply: modal opened", file=sys.stderr)
                         time.sleep(3)
 
             try:
@@ -267,7 +266,7 @@ def cmd_submit(jid, confirm=False, force=False):
                     return 1
                 # uncertain — mark as applied (conservative, prevents duplicate)
                 # but flag for human review
-                print(f"  UNCERTAIN — marking as applied (conservative), flagging for review", file=sys.stderr)
+                print("  UNCERTAIN — marking as applied (conservative), flagging for review", file=sys.stderr)
                 mark_applied(jid)
                 emit_status("submitted", f"uncertain outcome — {reason}. Review recommended.")
                 emit_next("verify", "please verify this submission was received")
@@ -296,7 +295,7 @@ def cmd_submit(jid, confirm=False, force=False):
                         return null;
                     }""")
                     if submit_btn:
-                        print(f"  Found submit button on review page", file=sys.stderr)
+                        print("  Found submit button on review page", file=sys.stderr)
                         break
                     nxt = _find_next_button(page)
                     if not nxt:
@@ -374,7 +373,7 @@ def cmd_submit(jid, confirm=False, force=False):
                                 if btn.count() > 0:
                                     btn.click(timeout=5000)
                                     iframe_clicked = True
-                                    print(f"  Clicked submit inside iframe", file=sys.stderr)
+                                    print("  Clicked submit inside iframe", file=sys.stderr)
                                     break
                             except Exception:
                                 continue
@@ -390,7 +389,7 @@ def cmd_submit(jid, confirm=False, force=False):
                                 }}""")
                                 clicked = True
                             except Exception:
-                                print(f"  Could not click submit button via Playwright", file=sys.stderr)
+                                print("  Could not click submit button via Playwright", file=sys.stderr)
                                 # Click failed — don't leave submit_clicked set
                                 state["submit_clicked"] = False
                                 save_state(state)
@@ -445,7 +444,7 @@ def cmd_submit(jid, confirm=False, force=False):
 
                 # uncertain — click succeeded, no validation errors, no success signal
                 # Mark as applied (conservative — prevents duplicate) but flag for review
-                print(f"  UNCERTAIN — marking as applied (conservative), flagging for review", file=sys.stderr)
+                print("  UNCERTAIN — marking as applied (conservative), flagging for review", file=sys.stderr)
                 mark_applied(jid)
                 emit_status("submitted", f"uncertain outcome — {reason}. Review recommended.")
                 emit_next("verify", "please verify this submission was received")
@@ -458,7 +457,7 @@ def cmd_submit(jid, confirm=False, force=False):
                     emit_status("incomplete", f"{empt} required field(s) need answers")
                     emit_next("act --fill", "supply answers for empty fields, then resubmit")
                     return 1
-                print(f"  Playwright could not click submit — using Skyvern", file=sys.stderr)
+                print("  Playwright could not click submit — using Skyvern", file=sys.stderr)
                 from apply.common.skyvern_bridge import click_submit
                 result = click_submit(url=page.url, browser_session_id=browser_session_id, timeout=60)
                 if result.get("status") == "completed":
