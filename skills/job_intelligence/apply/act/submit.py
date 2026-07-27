@@ -472,7 +472,10 @@ def cmd_submit(jid, confirm=False, force=False):
                 # This catches expired jobs on any platform (LinkedIn, Workday,
                 # Ashby, etc.) where the page loaded but no form rendered.
                 from apply.common.page_state import has_any_form
-                if not has_any_form(page):
+                from apply.common.registry import resolve as _resolve_reg
+                _reg = _resolve_reg(page.url)
+                _cwd = _reg.widgets if _reg and hasattr(_reg, 'widgets') else None
+                if not has_any_form(page, custom_widget_selectors=_cwd):
                     print("  No form, dialog, or iframe form — Skyvern cannot help", file=sys.stderr)
                     state["status"] = "no_apply_path"
                     save_state(state)

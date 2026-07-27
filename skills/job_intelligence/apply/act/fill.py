@@ -179,7 +179,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             # and no iframe with form elements exist, the job is likely
             # expired or the page didn't load a form.
             from apply.common.page_state import has_any_form
-            if not has_any_form(page):
+            _cwd = reg.widgets if reg and hasattr(reg, 'widgets') else None
+            if not has_any_form(page, custom_widget_selectors=_cwd):
                 print("  WARN: no form, dialog, or iframe form found — job may be expired", file=sys.stderr)
                 state["status"] = "no_apply_path"
                 save_state(state)

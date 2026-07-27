@@ -41,11 +41,28 @@ def has_iframe_form(page) -> bool:
     return False
 
 
-def has_any_form(page) -> bool:
-    """True if form elements exist anywhere: main document, dialog, or
-    iframes. This is the conservative check for 'is there a form to
-    interact with?' used by no_apply_path detection."""
-    return has_form(page) or has_dialog(page) or has_iframe_form(page)
+def has_any_form(page, custom_widget_selectors=None) -> bool:
+    """True if form elements exist anywhere: main document, dialog,
+    iframes, or custom widget elements (e.g. Workday's
+    button[aria-haspopup='listbox']).
+
+    This is the conservative check for 'is there a form to interact
+    with?' used by no_apply_path detection.
+
+    Args:
+        custom_widget_selectors: dict of widget_type -> CSS selector
+            from registry config (e.g. {"dropdown": "button[aria-haspopup]"})
+    """
+    if has_form(page) or has_dialog(page) or has_iframe_form(page):
+        return True
+    if custom_widget_selectors:
+        try:
+            for selector in custom_widget_selectors.values():
+                if page.query_selector(selector):
+                    return True
+        except Exception:
+            pass
+    return False
 
 
 def find_buttons(page, keywords, scope="any"):

@@ -106,9 +106,14 @@ def _probe_standard(page):
     )
 
 
-def _probe_dialog(page):
-    """Depth 1: Dialog-scoped ΓÇö looks within [role="dialog"]."""
-    result = read_fields(page, scope="dialog")
+def _probe_dialog(page, registry_config=None):
+    """Depth 1: Dialog-scoped — looks within [role="dialog"].
+    Passes custom_widgets from registry config so custom dropdowns
+    (e.g. Workday's button[aria-haspopup='listbox']) are found."""
+    custom_widgets = {}
+    if registry_config and hasattr(registry_config, 'widgets'):
+        custom_widgets = registry_config.widgets or {}
+    result = read_fields(page, scope="dialog", custom_widgets=custom_widgets)
     return ProbeResult(
         fields=result["fields"],
         buttons=result["buttons"],
@@ -603,7 +608,7 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
         strategy_fn = dict(_PROBE_STRATEGIES).get(best_strategy)
         if strategy_fn:
             kw = {}
-            if best_strategy == "custom_widgets":
+            if best_strategy in ("custom_widgets", "dialog"):
                 kw["registry_config"] = registry_config
             result = strategy_fn(page, **kw)
             if result.field_count > 0:
@@ -620,7 +625,7 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
 
         if name == "iframe_navigate" and prev_result:
             result = strategy_fn(page, prev_result=prev_result)
-        elif name == "custom_widgets" and registry_config:
+        elif name in ("custom_widgets", "dialog") and registry_config:
             result = strategy_fn(page, registry_config=registry_config)
         else:
             result = strategy_fn(page)
