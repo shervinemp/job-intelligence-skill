@@ -244,6 +244,44 @@ def _set_files_any_frame(page, sel, path):
     return False
 
 
+def _try_filechooser_upload(page, label, path):
+    """Fallback: intercept file chooser dialog when SPA apps (Ashby,
+    Greenhouse) use an upload button instead of a visible <input type=file>.
+
+    Clicks the upload button, intercepts the native file chooser, and
+    sets the file programmatically. Returns True on success."""
+    lc = (label or "").lower()
+    upload_kws = []
+    if "resume" in lc or re.search(r'\bcv\b', lc):
+        upload_kws = ["resume", "cv", "upload resume", "attach resume", "attach cv"]
+    elif "cover" in lc:
+        upload_kws = ["cover", "cover letter", "attach cover", "upload cover"]
+    else:
+        upload_kws = ["upload", "attach", "browse"]
+    for kw in upload_kws:
+        for selector in [
+            f'button:has-text("{kw}")',
+            f'a:has-text("{kw}")',
+            f'[role="button"]:has-text("{kw}")',
+            f'label:has-text("{kw}")',
+        ]:
+            try:
+                btn = page.locator(selector).first
+                if btn.count() == 0:
+                    continue
+                with page.expect_file_chooser(timeout=5000) as fc_info:
+                    try:
+                        btn.click(timeout=3000)
+                    except Exception:
+                        btn.click(force=True, timeout=3000)
+                fc = fc_info.value
+                fc.set_files(path)
+                return True
+            except Exception:
+                continue
+    return False
+
+
 def _dismiss_confirm_modal(page):
     try:
         page.evaluate("""() => {
@@ -472,7 +510,10 @@ def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list
                             filled.append({"label": label, "key": _field_key(f)})
                             break
                     else:
-                        print(f"  UPLOAD_FAIL: {label}", file=sys.stderr)
+                        if _try_filechooser_upload(page, label, path):
+                            filled.append({"label": label, "key": _field_key(f)})
+                        else:
+                            print(f"  UPLOAD_FAIL: {label}", file=sys.stderr)
                 except Exception as ue:
                     print(f"  UPLOAD_FAIL: {label} — {str(ue)[:120]}", file=sys.stderr)
 

@@ -478,7 +478,9 @@ class FileFiller(FieldFiller):
                 return True
         except Exception:
             pass
-        return False
+        # Fallback: intercept file chooser (SPA upload button pattern)
+        from apply.act.helpers import _try_filechooser_upload
+        return _try_filechooser_upload(page, f.get("label", ""), path)
 
 
 class AutocompleteFiller(FieldFiller):
