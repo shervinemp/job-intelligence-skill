@@ -18,13 +18,13 @@ def run(jid):
     r = c.execute("SELECT url, title, company, stage, state, external_url FROM jobs WHERE id=?", (jid,)).fetchone()
     if not r:
         print(f"ERROR: job {jid} not found", file=sys.stderr)
-        sys.exit(1)
+        return 1
     url, title, company, stage, job_state, ext_url = (
         r["url"], r["title"], r["company"], r["stage"], r["state"], r["external_url"] or ""
     )
     if job_state != "active":
         print(f"ERROR: job {jid} is in state '{job_state}', not active", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     print(f"JOB: {title or '?'} @ {company or '?'}", file=sys.stderr)
 
@@ -56,3 +56,4 @@ def run(jid):
     atomic_write_json(_SP, state)
 
     emit_next("act --fill")
+    return 0

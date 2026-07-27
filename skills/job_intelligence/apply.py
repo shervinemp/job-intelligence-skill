@@ -2,6 +2,8 @@
 """apply.py — Apply pipeline: detect, navigate, hybrid fill/submit.
 
 Usage:
+  python3 apply.py auto [--jid <jid>] [--dry-run] [--limit N] [--no-submit] [--quick]
+                         Run full pipeline for all tailored jobs
   python3 apply.py detect [<jid>]
   python3 apply.py navigate <jid>
   python3 apply.py act --fill <jid> [--answers '{}'] [--max-pages N]
@@ -37,6 +39,14 @@ def main():
 
     detect_p = sub.add_parser("detect", help="Pre-flight classify")
     detect_p.add_argument("jid", nargs="?", help="Job ID (auto-pick first tailored if omitted)")
+
+    auto_p = sub.add_parser("auto", help="Run full pipeline for all tailored jobs")
+    auto_p.add_argument("--jid", help="Process a single job")
+    auto_p.add_argument("--dry-run", action="store_true", help="List jobs without processing")
+    auto_p.add_argument("--limit", type=int, help="Cap at N jobs")
+    auto_p.add_argument("--no-submit", action="store_true", help="Stop after check passes")
+    auto_p.add_argument("--quick", action="store_true", help="Deterministic-only (no vision/Skyvern)")
+    auto_p.add_argument("--max-pages", type=int, default=4, help="Max form pages (default 4)")
 
     nav_p = sub.add_parser("navigate", help="LinkedIn -> External ATS")
     nav_p.add_argument("jid", help="Job ID")
@@ -83,6 +93,11 @@ def main():
     if args.command == "detect":
         from apply.detect import run
         run(args.jid or _auto_jid())
+    elif args.command == "auto":
+        from apply.auto import run as auto_run
+        return auto_run(jid=args.jid, limit=args.limit, dry_run=args.dry_run,
+                        quick=args.quick, max_pages=args.max_pages,
+                        no_submit=args.no_submit)
     elif args.command == "navigate":
         from apply.navigate import run
         run(args.jid)
@@ -164,4 +179,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

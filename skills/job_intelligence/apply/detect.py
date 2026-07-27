@@ -42,18 +42,18 @@ def run(jid):
     ).fetchone()
     if not row:
         emit_error(f"job {jid} not found")
-        sys.exit(1)
+        return 1
 
     url, title, company, stage, job_state = row["url"], row["title"], row["company"], row["stage"], row["state"]
     ext_url = row["external_url"] or ""
     if job_state != "active":
         emit_error(f"job is in state '{job_state}', not active")
-        sys.exit(1)
+        return 1
 
     if stage == "applied":
         emit_type("already_applied")
         emit_next("none")
-        return
+        return 0
 
     print(f"JOB: {title or '?'} @ {company or '?'}", file=sys.stderr)
 
@@ -85,8 +85,9 @@ def run(jid):
         emit_next("none")
 
     state = {"jid": jid, "external_url": resolved_url or "", "url": url,
-             "title": title or "", "company": company or ""}
+             "title": title or "", "company": company or "", "type": job_type}
     if plat_name:
         state["platform"] = plat_name
     from lib.config import atomic_write_json, STATE_PATH as _SP
     atomic_write_json(_SP, state)
+    return 0
