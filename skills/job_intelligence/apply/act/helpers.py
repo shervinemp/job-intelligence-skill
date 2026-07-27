@@ -147,9 +147,15 @@ def _find_next_button(page):
         cands = page.evaluate("""(kws) => {
             const out = [];
             const all = document.querySelectorAll('button, a, [role="button"], input[type=submit]');
+            const inDlg = (el) => !!el.closest('dialog, [role="dialog"]');
+            const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
             for (const el of all) {
-                if (el.offsetParent === null || el.disabled) continue;
-                if (!el.closest('dialog') && el.closest('nav, header, footer, [role=navigation], [role=banner], [role=contentinfo]')) continue;
+                const dlg = inDlg(el);
+                // LinkedIn Easy Apply uses <dialog open> where children may have
+                // offsetParent === null. Skip offsetParent check for dialog buttons.
+                if (!dlg && el.offsetParent === null) continue;
+                if (isDisabled(el)) continue;
+                if (!dlg && el.closest('nav, header, footer, [role=navigation], [role=banner], [role=contentinfo]')) continue;
                 const t = ((el.textContent || el.value || '')).trim().toLowerCase().replace(/\\s+/g, ' ');
                 if (!t || t.length > 30) continue;
                 let score = 0;
@@ -158,9 +164,7 @@ def _find_next_button(page):
                     else if (t.startsWith(kw)) score = Math.max(score, 3);
                 }
                 if (score >= 3) {
-                    // Boost buttons inside dialog/modal
-                    const inDlg = !!el.closest('dialog, [role="dialog"]');
-                    out.push({text: t.slice(0, 30), score: inDlg ? score + 10 : score});
+                    out.push({text: t.slice(0, 30), score: dlg ? score + 10 : score});
                 }
             }
             out.sort((a, b) => b.score - a.score);
@@ -392,7 +396,14 @@ def _click_action(page, text):
     try:
         return bool(page.evaluate("""(t) => {
             const all = document.querySelectorAll('button, a, [role="button"]');
-            const vis = Array.from(all).filter(el => el.offsetParent !== null && !el.disabled);
+            const inDlg = (el) => !!el.closest('dialog, [role="dialog"]');
+            // LinkedIn Easy Apply <dialog open> children may have offsetParent === null.
+            // Don't filter by offsetParent for dialog buttons.
+            const vis = Array.from(all).filter(el => {
+                if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+                if (inDlg(el)) return true;
+                return el.offsetParent !== null;
+            });
             // Prefer buttons inside dialog/modal (Easy Apply, etc.)
             const inModal = vis.filter(el => el.closest('dialog, [role="dialog"], [class*="modal"], [class*=" Modal"], [data-test*="modal"], [class*="easy-apply"]'));
             const onPage = vis.filter(el => !el.closest('dialog, [role="dialog"], [class*="modal"], [class*=" Modal"], [data-test*="modal"], [class*="easy-apply"]'));

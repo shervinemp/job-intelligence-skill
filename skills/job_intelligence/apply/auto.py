@@ -140,7 +140,14 @@ def _process_one(jid, quick, max_pages, no_submit, results):
         if _stage() == "applied":
             results["already_applied"].append((jid, "already applied"))
             return
-        results["skipped"].append((jid, "fill failed"))
+        from apply.common.page_helpers import load_state
+        st = load_state()
+        if st.get("status") == "no_apply_path":
+            from lib.db import advance_job
+            advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
+            results["skipped"].append((jid, "no apply path (expired)"))
+        else:
+            results["skipped"].append((jid, "fill failed"))
         return
 
     if _stage() == "applied":
@@ -169,7 +176,15 @@ def _process_one(jid, quick, max_pages, no_submit, results):
         if _stage() == "applied":
             results["submitted"].append((jid, "submitted"))
             return
-        results["skipped"].append((jid, "submit failed"))
+        # Check if the failure was due to no apply path (expired job)
+        from apply.common.page_helpers import load_state
+        st = load_state()
+        if st.get("status") == "no_apply_path":
+            from lib.db import advance_job
+            advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
+            results["skipped"].append((jid, "no apply path (expired)"))
+        else:
+            results["skipped"].append((jid, "submit failed"))
         return
 
     if _stage() == "applied":

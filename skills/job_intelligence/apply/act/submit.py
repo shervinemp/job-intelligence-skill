@@ -382,10 +382,21 @@ def cmd_submit(jid, confirm=False, force=False):
                         else:
                             try:
                                 page.evaluate(f"""() => {{
-                                    const btn = [...document.querySelectorAll('button')].find(
-                                        b => b.textContent.trim().toLowerCase() === {json.dumps(submit_text.lower())}
-                                    );
-                                    if (btn) btn.click();
+                                    const target = {json.dumps(submit_text.lower())};
+                                    const inDlg = (el) => !!el.closest('dialog, [role="dialog"]');
+                                    const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
+                                    const all = Array.from(document.querySelectorAll('button'));
+                                    // Prefer dialog buttons (Easy Apply), don't filter by offsetParent
+                                    const sorted = all.sort((a, b) => (inDlg(b) ? 1 : 0) - (inDlg(a) ? 1 : 0));
+                                    for (const btn of sorted) {{
+                                        if (isDisabled(btn)) continue;
+                                        if ((btn.textContent || '').trim().toLowerCase() === target) {{ btn.click(); return true; }}
+                                    }}
+                                    for (const btn of sorted) {{
+                                        if (isDisabled(btn)) continue;
+                                        if ((btn.textContent || '').trim().toLowerCase().includes(target)) {{ btn.click(); return true; }}
+                                    }}
+                                    return false;
                                 }}""")
                                 clicked = True
                             except Exception:
@@ -457,6 +468,16 @@ def cmd_submit(jid, confirm=False, force=False):
                     emit_status("incomplete", f"{empt} required field(s) need answers")
                     emit_next("act --fill", "supply answers for empty fields, then resubmit")
                     return 1
+                # LinkedIn with no dialog/modal: Easy Apply never opened or expired
+                if "linkedin.com" in (page.url or "").lower():
+                    has_dialog = page.evaluate("""() => !!document.querySelector('dialog, [role="dialog"]')""")
+                    if not has_dialog:
+                        print("  No Easy Apply dialog and no submit button — job likely expired", file=sys.stderr)
+                        state["status"] = "no_apply_path"
+                        save_state(state)
+                        emit_status("no_apply_path", "no Easy Apply dialog or submit button — job may be expired")
+                        emit_next("none", "check if job is still active or apply via external URL")
+                        return 1
                 print("  Playwright could not click submit — using Skyvern", file=sys.stderr)
                 from apply.common.skyvern_bridge import click_submit
                 result = click_submit(url=page.url, browser_session_id=browser_session_id, timeout=60)

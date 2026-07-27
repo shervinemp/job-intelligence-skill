@@ -136,6 +136,13 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         ea_btn.click()
                         print("  Easy Apply: modal opened", file=sys.stderr)
                         time.sleep(3)
+                    else:
+                        print("  WARN: no Apply link and no Easy Apply button — job may be expired", file=sys.stderr)
+                        state["status"] = "no_apply_path"
+                        save_state(state)
+                        emit_status("no_apply_path", "no Easy Apply button or Apply link on LinkedIn page")
+                        emit_next("none", "job may be expired — skip or apply via external URL")
+                        return 1
                     max_pages = max(max_pages, 6)
 
             reg = resolve_registry(page.url) or resolve_registry(orig_url)
