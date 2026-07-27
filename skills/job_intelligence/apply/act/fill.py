@@ -455,17 +455,17 @@ def _handle_login_wall(page, jid, quick):
                 except Exception:
                     continue
 
-            # Try each password candidate until one succeeds (sign-in form
-            # disappears or URL changes).
-            tried_pw = ""
-            for tried_pw in creds["passwords"]:
+            # Try each password candidate until one succeeds.
+            # Strategy: if the first attempt is "uncertain" (SPA slow to
+            # transition), wait longer and re-check ONCE before concluding
+            # failure and trying the next candidate. This avoids double-
+            # submitting with wrong passwords on slow platforms.
+            for idx, tried_pw in enumerate(creds["passwords"]):
                 _fill_signin_form(page, creds["email"], tried_pw)
                 time.sleep(5)
-                # Did sign-in succeed? Heuristic: password field is gone
-                # OR URL changed OR a logged-in greeting appeared.
-                if _login_succeeded(page):
-                    print(f"  LOGIN: OK with password #{creds['passwords'].index(tried_pw)+1}", file=sys.stderr)
-                    # Record which password worked to make it primary
+                result = _login_check(page)
+                if result == "yes":
+                    print(f"  LOGIN: OK with password #{idx+1}", file=sys.stderr)
                     if tried_pw != creds["password"]:
                         try:
                             remaining = [p for p in creds["passwords"] if p != tried_pw]
@@ -474,10 +474,27 @@ def _handle_login_wall(page, jid, quick):
                         except Exception:
                             pass
                     return True
-                # Sign in failed — go back to sign-in form if needed.
+                if result == "uncertain":
+                    # SPA may be slow — wait longer and re-check once.
+                    time.sleep(5)
+                    if _login_check(page) in ("yes", "uncertain"):
+                        # If still uncertain, assume success (don't risk
+                        # trying more passwords and locking the account).
+                        print(f"  LOGIN: assuming OK (uncertain after extended wait) with password #{idx+1}", file=sys.stderr)
+                        if tried_pw != creds["password"]:
+                            try:
+                                remaining = [p for p in creds["passwords"] if p != tried_pw]
+                                save_creds(domain, creds["email"], tried_pw, passwords=remaining)
+                            except Exception:
+                                pass
+                        return True
+                    # Re-check said "no" — fall through to try next
+                # result == "no" — try next candidate
                 _re_open_signin_form(page)
             print(f"  LOGIN: all {len(creds['passwords'])} password(s) failed", file=sys.stderr)
-            return True
+            emit_status("login_failed", f"all {len(creds['passwords'])} password(s) rejected by {domain}")
+            emit_next("login", f"domain={domain} jid={jid} — update creds via 'apply.py creds set {domain} <email>'")
+            return False
         except Exception as e:
             print(f"  LOGIN_FAIL: {e}", file=sys.stderr)
             return True
@@ -533,6 +550,15 @@ def _handle_login_wall(page, jid, quick):
             email_input.fill(defaults["email"])
         for pwi in pw_inputs:
             pwi.fill(new_pw)
+        # Workday Create Account form has a mandatory checkbox
+        # (data-automation-id="createAccountCheckbox") — "I understand..."
+        try:
+            cb = page.locator('[data-automation-id="createAccountCheckbox"]').first
+            if cb.count() > 0 and not cb.is_checked():
+                cb.click(timeout=2000)
+                print("  Checked create-account acknowledgement", file=sys.stderr)
+        except Exception:
+            pass
         first_input = page.locator('input[name*="first" i], input[name*="given" i]').first
         if first_input.count() > 0:
             first_input.fill(defaults.get("first_name", ""))
@@ -546,21 +572,60 @@ def _handle_login_wall(page, jid, quick):
             except Exception:
                 submit.click(force=True, timeout=5000)
             time.sleep(5)
-            save_creds(domain, defaults["email"], new_pw)
-            # Also add to shared pool — future platforms can use it as a
-            # style example when generating their own passwords.
-            try:
-                from lib.credentials import add_shared_password
-                add_shared_password(new_pw)
-            except Exception:
-                pass
-            print(f"  ACCOUNT_CREATED: {defaults['email']} @ {domain} — creds saved (also added to shared pool)", file=sys.stderr)
-            return True
+            # Verify account creation succeeded before saving creds.
+            # Heuristic: Create Account form is gone (no createAccountSubmitButton
+            # visible) AND no error text about password/email mismatch.
+            create_result = _check_account_created(page)
+            if create_result in ("yes", "uncertain"):
+                save_creds(domain, defaults["email"], new_pw)
+                try:
+                    from lib.credentials import add_shared_password
+                    add_shared_password(new_pw)
+                except Exception:
+                    pass
+                print(f"  ACCOUNT_CREATED: {defaults['email']} @ {domain} — creds saved (also added to shared pool)", file=sys.stderr)
+                return True
+            else:
+                print(f"  CREATE_FAIL: account creation rejected ({create_result})", file=sys.stderr)
+                emit_status("login_required", f"account creation rejected at {domain}")
+                emit_next("login", f"domain={domain} jid={jid} — create account manually, then 'apply.py creds set {domain} {defaults.get('email','<email>')}'")
+                return False
     except Exception as e:
         print(f"  CREATE_FAIL: {e}", file=sys.stderr)
     emit_status("login_required", f"account creation failed at {domain}")
     emit_next("login", f"domain={domain} jid={jid}")
     return False
+
+
+def _check_account_created(page):
+    """Heuristic: did account creation succeed?
+
+    Returns 'yes', 'no', or 'uncertain' — same protocol as _login_check.
+    """
+    try:
+        result = page.evaluate("""() => {
+            const txt = (document.body.innerText || '').toLowerCase();
+            const createBtn = document.querySelector('[data-automation-id="createAccountSubmitButton"]');
+            const createVisible = createBtn && createBtn.offsetParent !== null;
+            const pws = Array.from(document.querySelectorAll('input[type="password"]'))
+                .filter(p => p.offsetParent !== null);
+
+            // Success indicators: form gone, greeting, next-step content
+            const greetings = /welcome|signed in|my account|log out|sign out|continue|step 2|personal information|my information|next step/im;
+            if (greetings.test(txt) && !createVisible) return 'yes';
+            if (!createVisible && pws.length === 0) return 'yes';
+
+            // Failure indicators: validation errors
+            const errors = /password.*do not match|passwords.*match|password.*weak|password.*requirement|email.*already|account.*exists|please enter|missing|incomplete|invalid email|check the box|must contain|at least/im;
+            if (errors.test(txt)) return 'no';
+
+            // Form still visible — could be loading
+            if (createVisible) return 'uncertain';
+            return 'uncertain';
+        }""")
+        return result or 'uncertain'
+    except Exception:
+        return 'uncertain'
 
 
 # ─── login helper functions used by _handle_login_wall ───────────────
@@ -620,34 +685,46 @@ def _fill_signin_form(page, email, password):
         pass
 
 
-def _login_succeeded(page):
-    """Heuristic: did the just-submitted sign-in form succeed?
+def _login_check(page):
+    """Three-way heuristic: did the just-submitted sign-in form succeed?
 
-    Treats any of these as success:
-    - No visible email field on a sign-in form
-    - Password field is gone (form closed/transformed)
-    - URL changed away from an explicit login-path
-    - Body text contains a logged-in greeting ("signed in as", "welcome",
-      "my account", "log out", "log out")
-    Treats remaining error text (invalid password, etc.) as NOT success.
+    Returns:
+      "yes"      — confidently logged in (password field gone, OR
+                   greeting text found, OR sign-in form disappeared)
+      "no"       — confidently failed (error text found)
+      "uncertain"— form still visible, no error, no greeting — could be
+                   slow SPA transition. Caller should wait and re-check.
     """
     try:
         result = page.evaluate("""() => {
             const txt = (document.body.innerText || '').toLowerCase();
-            const pws = document.querySelectorAll('input[type="password"]');
-            const visiblePws = Array.from(pws).filter(p => p.offsetParent !== null);
-            const signInForm = document.querySelector('[data-automation-id="signInSubmitButton"]');
-            const greetings = /signed in as|welcome back|my account|log out|sign out|sign out/im;
-            const errors = /invalid email|incorrect password|password incorr|account does not exist|no account found|account is locked|failed login/im;
-            if (visiblePws.length === 0) return 'yes';
+            const visiblePws = Array.from(document.querySelectorAll('input[type="password"]'))
+                .filter(p => p.offsetParent !== null);
+            const signInBtn = document.querySelector('[data-automation-id="signInSubmitButton"]');
+            const signInVisible = signInBtn && signInBtn.offsetParent !== null;
+            const createAcctBtn = document.querySelector('[data-automation-id="createAccountSubmitButton"]');
+            const createAcctVisible = createAcctBtn && createAcctBtn.offsetParent !== null;
+
+            // Greetings indicate success regardless of form state.
+            const greetings = /signed in as|welcome back|my account|log out|sign out|hi,\\s|hello,\\s/im;
             if (greetings.test(txt)) return 'yes';
+
+            // Error text indicates failure.
+            const errors = /invalid email|incorrect password|password incorr|account does not exist|no account found|account is locked|failed login|wrong password|email or password is incorrect/im;
             if (errors.test(txt)) return 'no';
-            if (signInForm && signInForm.offsetParent !== null) return 'uncertain';
+
+            // No password fields visible — form likely closed → success.
+            if (visiblePws.length === 0) return 'yes';
+
+            // Sign-in button gone but password still visible — ambiguous.
+            if (!signInVisible && !createAcctVisible) return 'uncertain';
+
+            // Sign-in form still visible — likely failed, but could be slow.
             return 'uncertain';
         }""")
-        return result == 'yes'
+        return result or 'uncertain'
     except Exception:
-        return False
+        return 'uncertain'
 
 
 def _re_open_signin_form(page):

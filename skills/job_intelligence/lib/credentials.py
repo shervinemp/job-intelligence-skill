@@ -45,10 +45,37 @@ _FALLBACK_PATH = os.path.join(
 )
 
 
+_MULTI_TENANT_SLD = {
+    "myworkdayjobs.com",
+    "myworkdaysite.com",
+    "icims.com",
+    "greenhouse.io",
+    "greenhouse.com",
+    "lever.co",
+    "comeet.co",
+    "jobvite.com",
+}
+
+
 def _domain_from_url(url):
+    """Extract a vault key from a URL.
+
+    For multi-tenant ATS platforms (Workday, iCIMS, Greenhouse, etc.),
+    the subdomain identifies the tenant — use the FULL hostname so each
+    company gets its own vault entry.
+
+    For corporate sites, use the registered domain + one subdomain
+    (last 3 parts) so that www.company.com and company.com collapse
+    to the same key.
+    """
     from urllib.parse import urlparse
     host = (urlparse(url).hostname or "").lower()
     parts = host.split(".")
+    if len(parts) < 2:
+        return host
+    registered = ".".join(parts[-2:])
+    if registered in _MULTI_TENANT_SLD:
+        return host  # full hostname — tenant is in the subdomain
     if len(parts) > 2:
         return ".".join(parts[-3:])
     return host
