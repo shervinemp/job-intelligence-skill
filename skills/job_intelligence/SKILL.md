@@ -94,7 +94,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | `act --fill <jid> [--answers '{}'] [--dry-run]` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". `--dry-run` previews without DOM changes. |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
-| `act --submit <jid>` | Submit. LinkedIn: handler on `--fill`. Other ATS: direct. |
+| `act --submit <jid>` | Submit. Runs pre-submit check. Sets `submit_clicked` flag before clicking. Investigates (no re-click) on retry. `--force` clears guard. |
 | `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 | `apply.py reject <jid>` | Skip permanently |
@@ -137,11 +137,24 @@ act --next → Advance to next page.
              If submission detected → routed to --submit.
              If validation errors → routed back to --fill.
 
-─── PHASE 5: VERIFY ───
-act --submit → Review provenance-grouped field listing.
-               Check for inconsistencies across pages.
+─── PHASE 5: SUBMIT (ONE-SHOT) ───
+act --submit → Pre-submit check runs automatically.
+              Submit is clicked ONCE. The pipeline records submit_clicked
+              before clicking. If the outcome is uncertain (no success
+              signal, no validation error), it marks as applied
+              conservatively and flags for review.
+              On the next run, if submit_clicked is set, the pipeline
+              INVESTIGATES the page — success text, URL change, form
+              disappearance, validation errors, vision API — it does
+              NOT click submit again.
+              Use --force only after human confirms the previous
+              attempt truly failed.
+
+─── PHASE 6: VERIFY ───
 verify → Confirm the application was received.
-          Never skip this step.
+          Never skip this step. If STATUS was "uncertain", verify
+          is especially important — check email for confirmation,
+          or visit the ATS page to check application status.
 ```
 
 ### Apply tips
@@ -171,16 +184,14 @@ verify → Confirm the application was received.
 9. **Autocomplete fields need clicks, not text.** Flag for user help.
 10. **Don't contradict profile answers.** Before filling any field, check the `Profile answers:` block. If what you're about to fill contradicts a profile answer, stop and fix it.
 11. **No custom submit scripts.** Use the pipeline. No `page.evaluate` clicks, no standalone scripts.
+12. **Submit is one-shot.** The pipeline sets `submit_clicked` before clicking. If success detection is uncertain, the next run *investigates* the page (success signals, URL change, form disappearance, validation errors, vision API) — it NEVER clicks submit again. Only `--force` (manual, after human confirms failure) or `undo` clears the guard.
+13. **When uncertain, investigate hard.** The outcome cascade tries: success text → already-applied text → `_check_submit_success` → URL change → form disappearance → validation errors → vision API screenshot. Only after ALL methods are exhausted does it mark as applied (conservative) and flag for human review.
+14. **Validation errors = safe to retry.** If the form rejected with validation errors, `submit_clicked` is cleared — the next run can fill the missing fields and re-submit.
+15. **Never submit blind.** `--fill --submit` together is BLOCKED. Always review the fill report between fill and submit. The orchestrator reads UNFILLED fields, supplies `--answers`, then submits.
 
 ## Platform quirks
 
-| Platform | Notes |
-|----------|-------|
-| Ashby | One-page HTML. Recaptcha textarea at bottom — ignore. Radios grouped by `name`. |
-| Greenhouse | No `<select>` — all custom autocomplete. Country = `<input>`. "Submit application" = real button ("Apply" = scroll trigger). |
-| Lever | 0 fields → follow apply-link → `/apply`. Labels: `<label><div>Text</div><div><input></div></label>`. No Select/Radio. |
-| Workday | 7-step SPA (Info → Experience → Questions → Disclosures → Review). DROPDOWN=`button[aria-haspopup]`. Phone: strip +1 prefix. Skills: type + Enter. Per-company login. |
-| LinkedIn | Easy Apply modal via `LinkedinHandler`. Ember.js: click+events, not nativeValueSetter. Resume names in `<span>` (labels empty). Upload via file chooser. External via legacy flow. |
+Platform-specific notes live in `apply/registry/*.yaml` under the `notes:` field — the single source of truth next to the detection rules and patterns they describe. Read the registry file for the ATS you're working on.
 
 ## Account & login notes
 

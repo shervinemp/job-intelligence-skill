@@ -1,5 +1,11 @@
 name: ashbyhq
-version: 1
+version: 2
+notes: |
+  Radios: <input> is hidden, <label for> triggers React onChange.
+  RadioFiller clicks label via Playwright native .click() (not page.evaluate).
+  Yes/No widget = <button> inside [class*="yesno"].
+  Labels are full sentences (up to 200 chars).
+
 detect:
   domains:
     - ashbyhq.com

@@ -1,8 +1,9 @@
 name: workday
-version: 2
+version: 3
 notes: |
-  Phone: strip +1 prefix when separate Country Phone Code field present.
-  Skills autocomplete: type skill then press Enter.
+  7-step SPA (Info → Experience → Questions → Disclosures → Review).
+  DROPDOWN = button[aria-haspopup]. Phone: strip +1 prefix.
+  Skills autocomplete: type skill then press Enter. Per-company login.
 
 detect:
   domains:

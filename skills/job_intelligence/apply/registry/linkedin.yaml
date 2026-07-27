@@ -23,5 +23,6 @@ properties:
 
 
 notes: |
-  LinkedIn Easy Apply: ephemeral modal overlay. Uses PlatformHandler interface.
-  Handler: LinkedinHandler in apply/handlers/linkedin.py.
+  Easy Apply modal via LinkedinHandler. Ember.js: click+events, not nativeValueSetter.
+  Resume names in <span> (labels empty). Upload via file chooser.
+  External via legacy flow. Uses <dialog open> not [role="dialog"].

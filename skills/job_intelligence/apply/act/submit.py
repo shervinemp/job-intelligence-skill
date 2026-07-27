@@ -12,6 +12,132 @@ from apply.act.helpers import (
 )
 
 
+# ─── Submit outcome detection cascade ─────────────────────────────────
+# Tries every available method to confidently determine whether the
+# submission succeeded or failed. Returns one of:
+#   "success"    — confidently submitted (success signal, URL change,
+#                  form disappeared, already-applied text)
+#   "rejected"   — form rejected (validation errors present)
+#   "uncertain"  — tried everything, could not determine confidently
+
+
+def _determine_outcome(page, ctx, pages_before, url_before, submit_text_before):
+    """Multi-step confidence cascade. Tries everything before giving up."""
+    from apply.common.signals import has_success_text, has_already_applied_text
+    from apply.common.page_helpers import page_text as _pt
+
+    # 1. Success text signals (page + all iframes)
+    for source, label in _all_text_sources(page):
+        if has_success_text(source):
+            return "success", f"success signal in {label}"
+        if has_already_applied_text(source):
+            return "success", f"already-applied text in {label}"
+
+    # 2. _check_submit_success (new pages, signals, iframes)
+    success, _ = _check_submit_success(ctx, page, pages_before)
+    if success:
+        return "success", "check_submit_success"
+
+    # 3. URL change — if we navigated away from the form URL, likely success
+    url_after = page.url or ""
+    if url_before and url_after and url_after != url_before:
+        if "about:blank" not in url_after and "chrome-error" not in url_after:
+            # Check if the new URL looks like a confirmation/thank-you page
+            url_lower = url_after.lower()
+            if any(w in url_lower for w in ("thank", "confirm", "success", "complete", "done")):
+                return "success", f"URL changed to confirmation: {url_after[:80]}"
+            # URL changed but no confirmation keyword — moderate confidence
+            # Check if the form is gone from the new page
+            if not _form_still_present(page):
+                return "success", f"URL changed and form gone: {url_after[:80]}"
+
+    # 4. Form disappeared — submit button gone, no form fields visible
+    if submit_text_before:
+        submit_now = _detect_submit_button(page)
+        if not submit_now:
+            # Submit button is gone — did the form get replaced?
+            if not _form_still_present(page):
+                return "success", "submit button and form disappeared"
+
+    # 5. Validation errors — form was rejected
+    errors = _get_validation_errors(page)
+    if errors:
+        return "rejected", f"{len(errors)} validation error(s)"
+
+    # 6. Vision API — screenshot and ask the LLM
+    try:
+        from lib.ask_api import available, ask_bytes
+        if available():
+            from apply.common.inspect_lib import page_jpeg
+            img = page_jpeg(page, full=False)
+            reply, err = ask_bytes(
+                img,
+                "Did this job application submit successfully? "
+                "Look for: confirmation message, thank you text, "
+                "application ID, success indicator, OR error messages "
+                "and validation errors. "
+                "Answer YES_SUBMITTED, YES_ALREADY_APPLIED, NO_REJECTED, or UNKNOWN.",
+            )
+            if not err and reply:
+                r = reply.strip().upper()
+                if r.startswith("YES_SUBMITTED") or r.startswith("YES_ALREADY"):
+                    return "success", f"vision API: {r[:30]}"
+                if r.startswith("NO_REJECTED"):
+                    return "rejected", f"vision API: {r[:30]}"
+                if r.startswith("UNKNOWN"):
+                    pass  # fall through to uncertain
+            if err:
+                print(f"  VISION_SKIP: {err}", file=sys.stderr)
+    except Exception as ve:
+        print(f"  VISION_SKIP: {ve}", file=sys.stderr)
+
+    # 7. Uncertain — tried everything
+    return "uncertain", "all detection methods exhausted"
+
+
+def _all_text_sources(page):
+    """Yield (text, source_label) for page + all iframes."""
+    from apply.common.page_helpers import page_text as _pt
+    try:
+        yield (_pt(page) or "", "page")
+    except Exception:
+        pass
+    for fr in page.frames:
+        if fr == page.main_frame:
+            continue
+        try:
+            yield (fr.evaluate("() => document.body.innerText") or "", "iframe")
+        except Exception:
+            continue
+
+
+def _form_still_present(page):
+    """Check if form fields are still visible on the page (or in iframes)."""
+    try:
+        has_fields = page.evaluate("""() => {
+            const els = document.querySelectorAll('input:not([type=hidden]), select, textarea');
+            return Array.from(els).filter(el => el.offsetParent !== null).length;
+        }""")
+        if has_fields and has_fields > 0:
+            return True
+    except Exception:
+        pass
+    # Check iframes
+    for fr in page.frames:
+        if fr == page.main_frame:
+            continue
+        try:
+            has_fields = fr.evaluate("""() => {
+                const els = document.querySelectorAll('input:not([type=hidden]), select, textarea');
+                return Array.from(els).filter(el => el.offsetParent !== null).length;
+            }""")
+            if has_fields and has_fields > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def cmd_submit(jid, confirm=False, force=False):
     db_row = get_conn().execute(
         "SELECT stage, state FROM jobs WHERE id=?", (jid,)
@@ -134,53 +260,32 @@ def cmd_submit(jid, confirm=False, force=False):
                 print(f"  Re-fill skipped: {re_}", file=sys.stderr)
 
             # GUARD investigation: if we already clicked submit, check the page
-            # state without clicking again. Look for success signals, already-
-            # applied text, or validation errors to determine the outcome.
+            # state without clicking again. Use the full confidence cascade.
             if submit_clicked and not force:
-                from apply.common.signals import has_success_text
-                try:
-                    _ptxt = _pt(page) or ""
-                    if has_success_text(_ptxt):
-                        mark_applied(jid)
-                        emit_status("submitted", "success signal found on investigation")
-                        emit_next("verify")
-                        return 0
-                    # Check iframes (Greenhouse renders confirmation in iframe)
-                    for fr in page.frames:
-                        if fr == page.main_frame:
-                            continue
-                        try:
-                            ft = fr.evaluate("() => document.body.innerText") or ""
-                            if has_success_text(ft) or has_already_applied_text(ft):
-                                mark_applied(jid)
-                                emit_status("submitted", "success signal found in iframe")
-                                emit_next("verify")
-                                return 0
-                        except Exception:
-                            continue
-                    # Check for validation errors — form rejected, safe to retry
-                    errors = _get_validation_errors(page)
-                    if errors:
-                        print(f"  VALIDATION_ERRORS: {len(errors)} field(s) blocked submit", file=sys.stderr)
-                        state["submit_clicked"] = False
-                        save_state(state)
-                        emit_status("validation_error", f"{len(errors)} field(s) need fixing")
-                        emit_next("act --fill", "fix validation errors then resubmit")
-                        return 1
-                    # No success signal, no validation errors, no already-applied
-                    # text. The form likely went through but we can't confirm.
-                    # Mark as applied (conservative — prevents duplicate).
-                    print(f"  No validation errors — previous submit likely succeeded", file=sys.stderr)
+                url_before = state.get("external_url") or state.get("url") or ""
+                submit_text_before = state.get("submit_text", "")
+                pages_before = {id(p) for p in ctx.pages}
+                outcome, reason = _determine_outcome(page, ctx, pages_before, url_before, submit_text_before)
+                print(f"  INVESTIGATE: {outcome} — {reason}", file=sys.stderr)
+
+                if outcome == "success":
                     mark_applied(jid)
-                    emit_status("submitted", "no validation errors on re-investigation")
+                    emit_status("submitted", f"investigation: {reason}")
                     emit_next("verify")
                     return 0
-                except Exception as ie:
-                    print(f"  Investigation failed: {ie} — marking as applied (conservative)", file=sys.stderr)
-                    mark_applied(jid)
-                    emit_status("submitted", "investigation failed — conservative mark")
-                    emit_next("verify")
-                    return 0
+                if outcome == "rejected":
+                    state["submit_clicked"] = False
+                    save_state(state)
+                    emit_status("validation_error", f"investigation: {reason}")
+                    emit_next("act --fill", "fix validation errors then resubmit")
+                    return 1
+                # uncertain — mark as applied (conservative, prevents duplicate)
+                # but flag for human review
+                print(f"  UNCERTAIN — marking as applied (conservative), flagging for review", file=sys.stderr)
+                mark_applied(jid)
+                emit_status("submitted", f"uncertain outcome — {reason}. Review recommended.")
+                emit_next("verify", "please verify this submission was received")
+                return 0
 
             # LinkedIn Easy Apply: navigate to review/submit page
             if "linkedin.com" in (page.url or ""):
@@ -256,12 +361,15 @@ def cmd_submit(jid, confirm=False, force=False):
 
             submit_text = _detect_submit_button(page)
             clicked = False
+            url_before_click = page.url or ""
+            submit_text_before = submit_text or ""
             if submit_text:
                 print(f"  Found submit button: '{submit_text}'", file=sys.stderr)
                 # Record that we're about to click submit. If the click succeeds
                 # but success detection fails, the guard above ensures we
                 # investigate instead of clicking again on the next run.
                 state["submit_clicked"] = True
+                state["submit_text"] = submit_text
                 save_state(state)
                 try:
                     page.click(f'button:text("{submit_text}")', timeout=5000)
@@ -297,6 +405,9 @@ def cmd_submit(jid, confirm=False, force=False):
                                 clicked = True
                             except Exception:
                                 print(f"  Could not click submit button via Playwright", file=sys.stderr)
+                                # Click failed — don't leave submit_clicked set
+                                state["submit_clicked"] = False
+                                save_state(state)
 
             if clicked:
                 time.sleep(3)
@@ -313,28 +424,30 @@ def cmd_submit(jid, confirm=False, force=False):
                 time.sleep(2)
 
                 pages_before = {id(p) for p in ctx.pages}
-                success, success_page = _check_submit_success(ctx, page, pages_before)
 
-                # Retry success check for slow-loading confirmations
-                if not success:
-                    for _ in range(3):
+                # Retry detection for slow-loading confirmations
+                outcome, reason = "uncertain", ""
+                for attempt in range(4):
+                    outcome, reason = _determine_outcome(
+                        page, ctx, pages_before, url_before_click, submit_text_before)
+                    if outcome != "uncertain":
+                        break
+                    if attempt < 3:
                         time.sleep(2)
-                        success, success_page = _check_submit_success(ctx, page, pages_before)
-                        if success:
-                            break
 
-                if success:
+                print(f"  OUTCOME: {outcome} — {reason}", file=sys.stderr)
+
+                if outcome == "success":
                     was_new = mark_applied(jid)
                     if was_new:
-                        emit_status("submitted", "Playwright clicked submit")
+                        emit_status("submitted", reason)
                     else:
                         emit_status("already applied")
                     emit_next("verify")
                     return 0
 
-                errors = _get_validation_errors(page)
-                if errors:
-                    print(f"  VALIDATION_ERRORS: {len(errors)} field(s) blocked submit", file=sys.stderr)
+                if outcome == "rejected":
+                    errors = _get_validation_errors(page)
                     for e in errors[:5]:
                         print(f"    ! {e[:80]}", file=sys.stderr)
                     state["submit_errors"] = errors
@@ -344,14 +457,12 @@ def cmd_submit(jid, confirm=False, force=False):
                     emit_next("act --fill", "fix validation errors then resubmit")
                     return 1
 
-                # CRITICAL: if we clicked submit and no validation errors appeared,
-                # the form was accepted. Mark as applied to prevent duplicate
-                # submissions. Do NOT return "unknown" — that causes the
-                # orchestrator to retry, clicking submit again.
-                print(f"  Submit clicked, no validation errors — marking as applied", file=sys.stderr)
+                # uncertain — click succeeded, no validation errors, no success signal
+                # Mark as applied (conservative — prevents duplicate) but flag for review
+                print(f"  UNCERTAIN — marking as applied (conservative), flagging for review", file=sys.stderr)
                 mark_applied(jid)
-                emit_status("submitted", "submit clicked, no validation errors")
-                emit_next("verify")
+                emit_status("submitted", f"uncertain outcome — {reason}. Review recommended.")
+                emit_next("verify", "please verify this submission was received")
                 return 0
 
             if not clicked:

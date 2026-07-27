@@ -34,3 +34,8 @@ properties:
   has_eeo: false
   has_progress_bar: false
   page_range: [1, 5]
+
+notes: |
+  No <select> — all custom autocomplete. Country = <input>.
+  "Submit application" = real button ("Apply" = scroll trigger).
+  Confirmation renders in iframe after submit.

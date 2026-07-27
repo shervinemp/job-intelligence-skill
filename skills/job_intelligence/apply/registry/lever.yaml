@@ -1,5 +1,10 @@
 name: lever
-version: 2
+version: 3
+notes: |
+  0 fields → follow apply-link → /apply.
+  Labels: <label><div>Text</div><div><input></div></label>.
+  No Select/Radio.
+
 detect:
   domains:
     - lever.co

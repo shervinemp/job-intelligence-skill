@@ -16,6 +16,8 @@
 - **LinkedIn:** `linkedin.py [--max N]` as alt entry point.
 - **Recovery:** auth → `gmail-cli auth add` | Chrome crash → `Start-Process ... --remote-debugging-port=9222` | FAILED → `retry` | SKIPPED → `retry-skipped`
 - **Output:** `~/.ji/results/{jid}/`
+- **Submit safety:** Submit is one-shot. `submit_clicked` flag prevents re-clicking. If outcome uncertain, pipeline investigates (success signals, URL change, form gone, validation errors, vision API) — never clicks twice. `--force` for manual retry only. `undo` clears the flag.
+- **When stuck:** Investigate (`act --inspect`) before retrying. Don't guess — read the page, check the HTML dump, analyze the screenshot. Only ask the human when all automated detection methods are exhausted.
 
 ## Tools & Automation
 - **Skills:** `SKILL.md`. Setup: `README.md` (Quick Start + Requirements).
