@@ -31,6 +31,12 @@ SUCCESS_STRICT = (
     "thank you for your application",
     "your application has been received",
     "your application has been submitted",
+    # French (Canadian job postings)
+    "votre candidature a \u00e9t\u00e9",
+    "candidature re\u00e7ue",
+    "candidature a \u00e9t\u00e9 soumise",
+    "merci d'avoir postul\u00e9",
+    "merci pour votre candidature",
 )
 
 # Pre-flight patterns: if these appear on the page BEFORE we click submit,
@@ -46,6 +52,10 @@ ALREADY_APPLIED = (
     "withdraw application",
     "withdraw your application",
     "applied \\d",  # "Applied 3 days ago"
+    # French (Canadian job postings)
+    "vous avez d\u00e9j\u00e0 postul\u00e9",
+    "retirer votre candidature",
+    "candidature a \u00e9t\u00e9 envoy\u00e9e",
 )
 
 

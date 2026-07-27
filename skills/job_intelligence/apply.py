@@ -124,10 +124,12 @@ def main():
     elif args.command == "reject":
         from lib.db import get_job, advance_job
         from lib.auth_walls import remove
+        from apply.common.apply_state import clear as _clear_state
         job = get_job(args.jid)
         if job:
             advance_job(args.jid, job.get("stage", "tailored"), state="rejected")
             remove(args.jid)
+            _clear_state(args.jid)
             print(f"REJECTED: {args.jid}", file=sys.stderr)
     elif args.command == "flag":
         from lib.db import get_conn, get_job
@@ -163,6 +165,7 @@ def main():
     elif args.command == "undo":
         from lib.db import get_job, advance_job
         from lib.auth_walls import remove
+        from apply.common.apply_state import clear as _clear_state
         job = get_job(args.jid)
         if job:
             stage = job.get("stage", "")
@@ -170,6 +173,7 @@ def main():
             new_stage = prev.get(stage, "tailored")
             advance_job(args.jid, new_stage, state="active", error=None)
             remove(args.jid)
+            _clear_state(args.jid)
             print(f"UNDO: {args.jid} {stage} -> {new_stage}", file=sys.stderr)
     elif args.command == "mappings":
         print("MAPPINGS: removed in Skyvern migration", file=sys.stderr)

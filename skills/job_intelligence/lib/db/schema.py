@@ -145,8 +145,9 @@ def _create_v3_tables():
     ]:
         try:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
     _import_legacy_auth_walls()
 
     for idx in [
@@ -158,8 +159,9 @@ def _create_v3_tables():
     ]:
         try:
             c.execute(idx)
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as e:
+            if "already exists" not in str(e).lower():
+                raise
     c.commit()
 
 

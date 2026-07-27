@@ -15,6 +15,8 @@ class SignalDetection(unittest.TestCase):
     def test_detects_success_case_insensitively(self):
         self.assertTrue(has_success_text("Your Application Has Been received."))
         self.assertTrue(has_success_text("Thank you for applying to Acme!"))
+        self.assertTrue(has_success_text("Votre candidature a \u00e9t\u00e9 re\u00e7ue."))
+        self.assertTrue(has_success_text("Merci d'avoir postul\u00e9!"))
 
     def test_no_false_positive_on_form_page(self):
         self.assertFalse(has_success_text("Fields marked * are required. Submit below."))
@@ -32,6 +34,7 @@ class AlreadyAppliedDetection(unittest.TestCase):
         self.assertTrue(has_already_applied_text("You've already applied to this job"))
         self.assertTrue(has_already_applied_text("Withdraw application"))
         self.assertTrue(has_already_applied_text("Applied 2 weeks ago"))
+        self.assertTrue(has_already_applied_text("Vous avez d\u00e9j\u00e0 postul\u00e9 \u00e0 ce poste"))
 
     def test_no_false_positive_on_fresh_form(self):
         self.assertFalse(has_already_applied_text("Fields marked * are required."))
