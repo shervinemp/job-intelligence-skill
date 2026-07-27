@@ -237,11 +237,18 @@ def resolve(
     # that appear inside the field label (e.g. profile:willing_to_relocate →
     # field:"Are you willing to relocate"). Match when profile key's keywords
     # are a strong subset of the field label's keywords.
+    # Guard: require at least one content word (not a stopword) in the key,
+    # otherwise generic question stems like "have you ever been" match any
+    # question containing those words (felony, disciplinary, etc.).
+    _STOPWORDS = {"have", "you", "ever", "been", "do", "are", "the", "a", "an",
+                  "of", "in", "to", "is", "what", "how", "did", "or", "as", "at",
+                  "by", "for", "if", "with", "from", "that", "this", "your"}
     _norm_words = set(norm.split())
     for key, (val, _source) in ephemeral.items():
         _key_words = set(normalize(key.replace("_", " ")).split())
         if len(_key_words) >= 2 and _key_words.issubset(_norm_words):
-            return Resolution(val, key, label, "ephemeral")
+            if _key_words - _STOPWORDS:
+                return Resolution(val, key, label, "ephemeral")
 
     # Step 3b: suffix-stripped match — profile keys like linkedin_url / github_url
     # end in _url, _path, _handle. The entity name (linkedin, github) appears in

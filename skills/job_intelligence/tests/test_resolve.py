@@ -161,6 +161,11 @@ class AttrMatchGuard(unittest.TestCase):
         r = resolve("Are you a protected veteran?", prof)
         self.assertIsNotNone(r.value)
 
+    def test_stopword_key_does_not_over_fire(self):
+        prof = dict(PROFILE, answers={**PROFILE["answers"], "have_you_ever_been": "No"})
+        r = resolve("Have you ever been convicted of a felony?", prof)
+        self.assertIsNone(r.value)
+
 
 if __name__ == "__main__":
     unittest.main()
