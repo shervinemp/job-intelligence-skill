@@ -56,8 +56,6 @@ def run(jid=None, limit=None, dry_run=False, quick=False, max_pages=4, no_submit
             print(f"  [{i+1}/{N}] {jid[:12]} {jtype}{tag} -- {title} @ {company}", file=sys.stderr)
         print(f"\nDRY_RUN: {N} job(s) listed. Remove --dry-run to process.", file=sys.stderr)
         return 0
-        print(f"\nDRY_RUN: {N} job(s) listed. Remove --dry-run to process.", file=sys.stderr)
-        return 0
 
     results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
 

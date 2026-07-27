@@ -160,14 +160,15 @@ class RadioFiller(FieldFiller):
             yn_prefix = "no"
         country = (f.get("_country") or "").lower()
         try:
-            clicked = page.evaluate("""(args) => {
+            # Step 1: find the matching radio's id via JS (no click — React
+            # doesn't pick up .click() from page.evaluate, only Playwright's
+            # native .click() goes through the full browser event pipeline).
+            result = page.evaluate("""(args) => {
                 const [sel, ans, ynPref, country] = args;
                 const radios = [...document.querySelectorAll(sel)];
-                if (!radios.length) return false;
+                if (!radios.length) return null;
 
-                // Helper: get a radio's visible label text
                 function radioLabel(r) {
-                    // Try label[for] by radio id (Ashby pattern: label is sibling of container)
                     if (r.id) {
                         const lbl = document.querySelector('label[for="' + r.id + '"]');
                         if (lbl) {
@@ -175,13 +176,11 @@ class RadioFiller(FieldFiller):
                             if (txt && txt !== 'on') return txt;
                         }
                     }
-                    // Try closest label (standard pattern)
                     const closest = r.closest('label');
                     if (closest) {
                         const txt = closest.textContent.replace(r.value || '', '').trim().toLowerCase();
                         if (txt) return txt;
                     }
-                    // LinkedIn Easy Apply: role="radio" container → <p> text
                     const radioRole = r.closest('[role="radio"]');
                     if (radioRole) {
                         const pEls = radioRole.querySelectorAll('p');
@@ -192,19 +191,16 @@ class RadioFiller(FieldFiller):
                         const al = radioRole.getAttribute('aria-label');
                         if (al && al.length < 30 && !/\\.pdf$|\\.doc/i.test(al)) return al.toLowerCase();
                     }
-                    // Walk up to the option container and find label sibling
                     let el = r;
                     for (let i = 0; i < 4; i++) {
                         el = el.parentElement;
                         if (!el) break;
-                        // Look for a sibling <label> within this option div
                         const lbl = el.querySelector('label');
                         if (lbl) {
                             const txt = lbl.textContent.trim().toLowerCase();
                             if (txt && txt !== 'on') return txt;
                         }
                     }
-                    // Sibling walk
                     let sib = r.nextElementSibling;
                     while (sib) {
                         const txt = sib.textContent.trim().toLowerCase();
@@ -214,19 +210,11 @@ class RadioFiller(FieldFiller):
                     return (r.value || '').toLowerCase();
                 }
 
-                // Helper: click radio and dispatch React-compatible events
-                function clickRadio(r) {
-                    r.click();
-                    r.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                    r.dispatchEvent(new Event('change', { bubbles: true }));
-                    r.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-
                 // Try 1: match by value (standard HTML)
                 for (const r of radios) {
-                    if (r.value && r.value.toLowerCase() === ans) { clickRadio(r); return true; }
+                    if (r.value && r.value.toLowerCase() === ans) return { id: r.id, match: 'value' };
                 }
-                // Try 1b: Yes/No prefix match — collect ALL matches, disambiguate
+                // Try 1b: Yes/No prefix match
                 if (ynPref) {
                     const matches = [];
                     for (const r of radios) {
@@ -235,20 +223,16 @@ class RadioFiller(FieldFiller):
                             matches.push({radio: r, label: lbl});
                         }
                     }
-                    // First: try exact full-answer match — but ONLY when ans is
-                    // more specific than just "yes"/"no". A generic "yes" with
-                    // multiple "Yes..." options needs location disambiguation.
                     if (ans.length > ynPref.length + 1) {
                         for (const m of matches) {
                             if (m.label === ans || m.label.startsWith(ans) || ans.startsWith(m.label)) {
-                                clickRadio(m.radio); return 'exact:' + m.label.slice(0, 40);
+                                return { id: m.radio.id, match: 'exact:' + m.label.slice(0, 40) };
                             }
                         }
                     }
                     if (matches.length === 1) {
-                        clickRadio(matches[0].radio); return 'single:' + matches[0].label.slice(0, 40);
+                        return { id: matches[0].radio.id, match: 'single:' + matches[0].label.slice(0, 40) };
                     }
-                    // Multiple matches — disambiguate by location words
                     if (matches.length > 1 && country) {
                         const locWords = country.split(',').map(w => w.trim()).filter(Boolean);
                         let bestMatch = null;
@@ -265,12 +249,11 @@ class RadioFiller(FieldFiller):
                             }
                         }
                         if (bestMatch && bestScore > 0) {
-                            clickRadio(bestMatch.radio); return 'loc:' + bestMatch.label.slice(0, 40) + ' score=' + bestScore;
+                            return { id: bestMatch.radio.id, match: 'loc:' + bestMatch.label.slice(0, 40) + ' score=' + bestScore };
                         }
                     }
-                    // No country disambiguation — click first match
                     if (matches.length > 0) {
-                        clickRadio(matches[0].radio); return 'first_match:' + matches[0].label.slice(0, 40);
+                        return { id: matches[0].radio.id, match: 'first_match:' + matches[0].label.slice(0, 40) };
                     }
                 }
                 // Try 2: match by associated <label> text
@@ -278,15 +261,10 @@ class RadioFiller(FieldFiller):
                     const lbl = r.closest('label');
                     if (lbl) {
                         const txt = lbl.textContent.replace(r.value || '', '').trim().toLowerCase();
-                        if (txt === ans || txt.startsWith(ans) || ans.startsWith(txt)) { clickRadio(r); return 'try2:' + txt.slice(0, 40); }
+                        if (txt === ans || txt.startsWith(ans) || ans.startsWith(txt)) return { id: r.id, match: 'try2:' + txt.slice(0, 40) };
                     }
                 }
                 // Try 3: walk up 4 levels and match text (LinkedIn pattern)
-                // Guard: txt must be non-empty and short (<100 chars) to avoid
-                // matching when we've walked up to a container that aggregates
-                // the question text + all options + location headings.
-                // Drop ans.startsWith(txt) — reverse-prefix clicks the wrong
-                // radio when parent text is short or empty.
                 for (const r of radios) {
                     let el = r;
                     for (let i = 0; i < 4; i++) {
@@ -294,26 +272,25 @@ class RadioFiller(FieldFiller):
                         if (!el) break;
                         const txt = el.textContent.trim().toLowerCase();
                         if (txt && txt.length < 100 && (txt === ans || txt.startsWith(ans + ' ') || txt.startsWith(ans + ','))) {
-                            clickRadio(r); return 'try3:' + txt.slice(0, 40);
+                            return { id: r.id, match: 'try3:' + txt.slice(0, 40) };
                         }
                     }
                 }
-                // Try 4: check next sibling text (label after radio)
+                // Try 4: check next sibling text
                 for (const r of radios) {
                     let sib = r.nextElementSibling;
                     while (sib) {
                         const txt = sib.textContent.trim().toLowerCase();
                         if (txt && (txt === ans || txt.startsWith(ans) || ans.startsWith(txt))) {
-                            clickRadio(r); return 'try4:' + txt.slice(0, 40);
+                            return { id: r.id, match: 'try4:' + txt.slice(0, 40) };
                         }
                         sib = sib.nextElementSibling;
                     }
                 }
-                // Try 5: normalized match for EEOC options (different phrasing)
-                // e.g. "I do not have a disability" vs "No, I don't have a disability"
+                // Try 5: normalized EEOC match
                 function normEEOC(s) {
                     return s.replace(/^(yes|no)[,\\s]+/i, '')
-                            .replace(/['\u2019]/g, '')
+                            .replace(/['\\u2019]/g, '')
                             .replace(/\\bdo not\\b/g, 'dont')
                             .replace(/[^a-z\\s]/g, '')
                             .trim();
@@ -326,14 +303,38 @@ class RadioFiller(FieldFiller):
                         const lblNorm = normEEOC(lbl);
                         if (lblNorm && lblNorm.length > 5) {
                             if (ansNorm === lblNorm || ansNorm.includes(lblNorm) || lblNorm.includes(ansNorm)) {
-                                clickRadio(r); return 'try5:norm:' + lbl.slice(0, 40);
+                                return { id: r.id, match: 'try5:norm:' + lbl.slice(0, 40) };
                             }
                         }
                     }
                 }
-                return 'no_match:radioCount=' + radios.length;
+                return null;
             }""", [sel, ans_lower, yn_prefix, country])
-            return bool(clicked) and clicked != "false" and not str(clicked).startswith("no_match")
+
+            if not result or not result.get("id"):
+                return False
+
+            # Step 2: use Playwright's native .click() on the label, which
+            # goes through the full browser event pipeline (focus, mousedown,
+            # mouseup, click) and properly triggers React's synthetic events.
+            radio_id = result["id"]
+            _esc_id = radio_id.replace('\\', '\\\\').replace('"', '\\"')
+            label_sel = f'label[for="{_esc_id}"]'
+            try:
+                label = page.locator(label_sel)
+                if label.count() > 0:
+                    label.click(timeout=3000)
+                    return True
+            except Exception:
+                pass
+            # Fallback: click the radio input directly with force
+            try:
+                radio_sel = f'input[id="{_esc_id}"]'
+                page.locator(radio_sel).click(timeout=3000, force=True)
+                return True
+            except Exception:
+                pass
+            return False
         except Exception:
             return False
 

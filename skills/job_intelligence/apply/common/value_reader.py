@@ -52,7 +52,8 @@ class StandardReader(FieldValueReader):
 class RadioReader(FieldValueReader):
     """Read radio group value by finding the checked radio's label text.
     LinkedIn radios all have value='on', so we walk up the DOM to find
-    the visible label (Yes/No) of the checked radio."""
+    the visible label (Yes/No) of the checked radio.
+    Ashby radios: label is a SIBLING (label[for=radio-id]), not a parent."""
     name = "radio"
 
     def read(self, page, sel, ans=None):
@@ -66,13 +67,21 @@ class RadioReader(FieldValueReader):
                 const radios = [...document.querySelectorAll('input[type=radio][name="' + _escN + '"]')];
                 const checked = radios.find(r => r.checked);
                 if (!checked) return '';
-                // Walk up to find label text (same logic as RadioFiller)
+                // Try label[for] by radio id (Ashby pattern: label is sibling)
+                if (checked.id) {{
+                    const lbl = document.querySelector('label[for="' + checked.id + '"]');
+                    if (lbl) {{
+                        const txt = lbl.textContent.trim();
+                        if (txt && txt.toLowerCase() !== 'on') return txt;
+                    }}
+                }}
+                // Walk up to find label text (LinkedIn pattern)
                 let el2 = checked;
                 for (let i = 0; i < 4; i++) {{
                     el2 = el2.parentElement;
                     if (!el2) break;
                     const txt = el2.textContent.trim();
-                    if (txt && txt.length < 30 && txt.toLowerCase() !== 'on') return txt;
+                    if (txt && txt.length < 200 && txt.toLowerCase() !== 'on') return txt;
                 }}
                 // Try <label> wrapper
                 const lbl = checked.closest('label');
