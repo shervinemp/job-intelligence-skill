@@ -18,11 +18,16 @@ Entry shape:
 
 Shared 'standard' passwords entry (key = "shared"):
     {
-      "email": "...",
       "passwords": ["pw A", "pw B", ...]
     }
 
 Account creation defaults sourced from profile.json.
+
+Safe password entry (no shell history, no echo):
+    python apply.py creds set <domain> <email>          # prompts via getpass
+    python apply.py creds add-pw <domain>               # prompts via getpass
+    python apply.py creds shared-add                     # prompts via getpass
+    python apply.py creds shared-set                     # prompts via getpass
 """
 import json
 import os
@@ -47,6 +52,28 @@ def _domain_from_url(url):
     if len(parts) > 2:
         return ".".join(parts[-3:])
     return host
+
+
+def _prompt_passwords():
+    """Get password(s) from user via getpass — no echo, no shell history.
+
+    Prompts for the primary password, then optionally more candidates.
+    Press Enter without typing to stop adding. Returns a list of
+    non-empty passwords (may be empty if user pressed Enter immediately).
+    """
+    import getpass
+    pws = []
+    try:
+        print("Enter passwords (blank line to finish). Input is hidden.", file=sys.stderr)
+        while True:
+            label = "  password" if not pws else f"  alt password #{len(pws)+1}"
+            pw = getpass.getpass(label + ": ")
+            if not pw:
+                break
+            pws.append(pw)
+    except (KeyboardInterrupt, EOFError):
+        print(file=sys.stderr)
+    return pws
 
 
 def _fallback_read():
@@ -560,22 +587,33 @@ def cmd_creds(args):
             print("  (not found)", file=sys.stderr)
         return
     if cmd == "set":
-        # creds set <domain> <email> <pw1> [<pw2> ...]
-        if len(args) < 4:
-            print("Usage: creds set <domain> <email> <password> [more passwords...]", file=sys.stderr)
+        # creds set <domain> <email> [pw1 pw2 ...]
+        # Passwords omitted → interactive getpass prompt (safe entry).
+        if len(args) < 3:
+            print("Usage: creds set <domain> <email> [password ...]  (prompts if omitted)", file=sys.stderr)
             return
         domain = args[1]
         email = args[2]
-        pws = args[3:]
+        pws = args[3:] if len(args) > 3 else _prompt_passwords()
+        if not pws:
+            print("  no passwords entered — aborting", file=sys.stderr)
+            return
         save_creds(domain, email, pws[0], passwords=pws)
         print(f"  saved {domain}: {email} ({len(pws)} password(s))", file=sys.stderr)
         return
     if cmd == "add-pw":
-        if len(args) < 3:
-            print("Usage: creds add-pw <domain> <password>", file=sys.stderr)
+        # creds add-pw <domain> [password]
+        if len(args) < 2:
+            print("Usage: creds add-pw <domain> [password]  (prompts if omitted)", file=sys.stderr)
             return
-        add_password(args[1], args[2])
-        print(f"  added password to {args[1]}", file=sys.stderr)
+        domain = args[1]
+        pws = args[2:] if len(args) > 2 else _prompt_passwords()
+        if not pws:
+            print("  no passwords entered — aborting", file=sys.stderr)
+            return
+        for pw in pws:
+            add_password(domain, pw)
+        print(f"  added {len(pws)} password(s) to {domain}", file=sys.stderr)
         return
     if cmd == "shared-list":
         pws = get_shared_passwords()
@@ -585,18 +623,22 @@ def cmd_creds(args):
             print(f"  [{i}] {p}")
         return
     if cmd == "shared-add":
-        if len(args) < 2:
-            print("Usage: creds shared-add <password>", file=sys.stderr)
+        # creds shared-add [password ...]
+        pws = args[1:] if len(args) > 1 else _prompt_passwords()
+        if not pws:
+            print("  no passwords entered — aborting", file=sys.stderr)
             return
-        add_shared_password(args[1])
+        for pw in pws:
+            add_shared_password(pw)
         print(f"  shared pool now has {len(get_shared_passwords())} password(s)", file=sys.stderr)
         return
     if cmd == "shared-set":
-        # creds shared-set <pw1> <pw2> ...
-        if len(args) < 2:
-            print("Usage: creds shared-set <password> [more...]", file=sys.stderr)
+        # creds shared-set [pw1 pw2 ...]  (interactive if omitted)
+        pws = args[1:] if len(args) > 1 else _prompt_passwords()
+        if not pws:
+            print("  no passwords entered — aborting", file=sys.stderr)
             return
-        set_shared_passwords(args[1:])
+        set_shared_passwords(pws)
         print(f"  shared pool set to {len(get_shared_passwords())} password(s)", file=sys.stderr)
         return
     if cmd == "delete":
