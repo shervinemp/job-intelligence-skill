@@ -379,9 +379,9 @@ def _probe_custom_widgets(page, registry_config=None):
     field_count = 0
     for widget_type, selector in custom_selectors.items():
         try:
-            count = page.evaluate(f"""(sel) => {{
+            count = page.evaluate("""(sel) => {
                 return document.querySelectorAll(sel).length;
-            }}""", selector)
+            }""", selector)
             field_count += count
         except Exception:
             pass
@@ -476,7 +476,6 @@ def _parse_vision_response(response: str, page) -> list[dict]:
     """Parse vision LLM's structured field list into field dicts.
     Expected format per line: label | type | options | required"""
     fields = []
-    import re
     for line in response.strip().splitlines():
         line = line.strip()
         if not line or "|" not in line:

@@ -152,17 +152,17 @@ def handle_captcha(page, state, wait_s=None, poll_s=3):
         return False
     # Cloudflare managed challenge auto-resolves — wait silently, don't alert
     if is_cloudflare_challenge(page):
-        print(f"  Cloudflare challenge detected — waiting for auto-resolution...", file=sys.stderr)
+        print("  Cloudflare challenge detected — waiting for auto-resolution...", file=sys.stderr)
         if wait_cloudflare(page, timeout=30):
-            print(f"  Cloudflare resolved.", file=sys.stderr)
+            print("  Cloudflare resolved.", file=sys.stderr)
             return False
-        print(f"  Cloudflare didn't resolve in 30s — escalating to user.", file=sys.stderr)
+        print("  Cloudflare didn't resolve in 30s — escalating to user.", file=sys.stderr)
     if wait_s is None:
         wait_s = int(os.environ.get("JI_CAPTCHA_TIMEOUT", "300"))
     url = page.url[:120]
-    print(f"\n*** CAPTCHA DETECTED ***", file=sys.stderr)
+    print("\n*** CAPTCHA DETECTED ***", file=sys.stderr)
     print(f"  URL: {url}", file=sys.stderr)
-    print(f"  Solve it in this Chrome window — resuming automatically once solved", file=sys.stderr)
+    print("  Solve it in this Chrome window — resuming automatically once solved", file=sys.stderr)
     print(f"  (waiting up to {wait_s}s, then aborting this step)", file=sys.stderr)
     try:
         page.bring_to_front()

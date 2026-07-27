@@ -2,7 +2,7 @@
 Finds the right page for a job, detects what happened after actions.
 Uses persistent DOM attribute (data-opencode-jid) for cross-process page identity."""
 
-import json, os, time
+import json
 from urllib.parse import urlparse
 
 from lib.config import REGISTRY_PATH, atomic_write_json

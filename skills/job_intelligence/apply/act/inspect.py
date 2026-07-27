@@ -36,7 +36,7 @@ def cmd_inspect(jid):
             print(f"    [{f.get('type','?')}] {f.get('label','?')}{opt_str}", file=sys.stderr)
 
         submit_candidates = scan_actions(page, ["submit", "send", "apply", "next", "continue"])
-        print(f"  BUTTONS:", file=sys.stderr)
+        print("  BUTTONS:", file=sys.stderr)
         for c in submit_candidates[:10]:
             print(f"    [{c.get('score',0)}] '{c.get('text','')}' ({c.get('tag','')})", file=sys.stderr)
 
@@ -65,7 +65,7 @@ def cmd_next(jid):
             emit_next("fill")
             return 0
 
-        print(f"  No Next button found via DOM — using Skyvern", file=sys.stderr)
+        print("  No Next button found via DOM — using Skyvern", file=sys.stderr)
         from apply.common.skyvern_bridge import click_next
         result = click_next(url=page.url, timeout=120)
         if result.get("status") == "completed":

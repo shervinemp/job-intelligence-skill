@@ -175,7 +175,7 @@ def _playwright_verify(page, jid, state):
             }"""
         )
         if any(b.lower() == "applied" for b in buttons):
-            print(f"  SIGNAL: Applied button found", file=sys.stderr)
+            print("  SIGNAL: Applied button found", file=sys.stderr)
             mark_applied(jid)
             emit_status("submitted (Applied button)")
             emit_next("none")

@@ -34,7 +34,6 @@ def field_format_hint(f, profile=None):
         hints.append("numeric, no commas")
     if "date" in label or f.get("datepicker"):
         hints.append("MM/DD/YYYY")
-    tag = (f.get("tag") or "").lower()
     ml = f.get("maxlength")
     if ml:
         hints.append(f"max {ml} chars")

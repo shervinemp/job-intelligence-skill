@@ -37,7 +37,7 @@ def cmd_investigate(jid):
     if _vision_available():
         from lib.ask_api import ask_bytes
         from apply.common.inspect_lib import form_jpeg
-        print(f"  DOM probe found nothing — analyzing with vision (1 LLM call)...", file=sys.stderr)
+        print("  DOM probe found nothing — analyzing with vision (1 LLM call)...", file=sys.stderr)
         try:
             img = form_jpeg(page)
             reply, err = ask_bytes(
@@ -65,7 +65,7 @@ def cmd_investigate(jid):
         except Exception as ve:
             print(f"  VISION_FAIL: {ve} — falling back to Skyvern", file=sys.stderr)
 
-    print(f"  Running Skyvern investigator (slow, 10-step agent)...", file=sys.stderr)
+    print("  Running Skyvern investigator (slow, 10-step agent)...", file=sys.stderr)
     from apply.common.skyvern_bridge import SkyvernExtraction
     report = SkyvernExtraction().investigate_form(url, timeout=300)
     if not report:

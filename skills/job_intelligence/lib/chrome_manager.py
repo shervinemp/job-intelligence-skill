@@ -178,7 +178,6 @@ def _read_port():
 
 
 def _write_port():
-    global CDP_PORT, CDP_URL
     try:
         with open(CHROME_CONFIG, "w") as f:
             json.dump({

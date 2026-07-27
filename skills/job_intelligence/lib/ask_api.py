@@ -8,7 +8,7 @@ Usage:
 
 On success prints the model reply. On failure prints the error."""
 
-import argparse, base64, json, os, sys, time, urllib.request, urllib.error
+import argparse, base64, json, os, time, urllib.request, urllib.error
 
 _PING_CACHE = os.path.join(os.environ.get("JI_HOME", os.path.expanduser("~/.ji")), ".ask_api_ping")
 

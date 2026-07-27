@@ -4,7 +4,7 @@ No Playwright. Skyvern navigates itself."""
 import os, sys, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
-from apply.common.output import emit_next, emit_error
+from apply.common.output import emit_next
 from apply.common.registry import resolve as resolve_registry
 
 STATE_PATH = os.path.join(
@@ -19,8 +19,8 @@ def run(jid):
     if not r:
         print(f"ERROR: job {jid} not found", file=sys.stderr)
         return 1
-    url, title, company, stage, job_state, ext_url = (
-        r["url"], r["title"], r["company"], r["stage"], r["state"], r["external_url"] or ""
+    url, title, company, job_state, ext_url = (
+        r["url"], r["title"], r["company"], r["state"], r["external_url"] or ""
     )
     if job_state != "active":
         print(f"ERROR: job {jid} is in state '{job_state}', not active", file=sys.stderr)
@@ -47,7 +47,7 @@ def run(jid):
         print(f"PLATFORM: {plat_name}", file=sys.stderr)
         reg.emit_notes()
     else:
-        print(f"PLATFORM: unknown", file=sys.stderr)
+        print("PLATFORM: unknown", file=sys.stderr)
 
     # Save state
     state = {"jid": jid, "external_url": target_url, "url": url,

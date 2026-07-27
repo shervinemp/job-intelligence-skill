@@ -18,8 +18,6 @@ import time
 import urllib.request
 import urllib.error
 
-from lib.config import RESULTS_DIR
-
 
 def _fmt_answers(answers: dict) -> str:
     lines = []
@@ -229,9 +227,9 @@ def click_submit(url: str, browser_session_id: str = "", timeout: int = 120) -> 
     """Use Skyvern to click the submit button on a form.
     Reuses an existing browser session if provided."""
     prompt = (
-        f"Click the Submit Application or Submit button on this job application form. "
-        f"If there is a Review step before Submit, click Review first, then Submit. "
-        f"Complete the submission process. Do NOT fill any new fields."
+        "Click the Submit Application or Submit button on this job application form. "
+        "If there is a Review step before Submit, click Review first, then Submit. "
+        "Complete the submission process. Do NOT fill any new fields."
     )
     return _run_submit_action(url, prompt, browser_session_id, timeout)
 
@@ -239,8 +237,8 @@ def click_submit(url: str, browser_session_id: str = "", timeout: int = 120) -> 
 def click_next(url: str, browser_session_id: str = "", timeout: int = 120) -> dict:
     """Use Skyvern to click Next/Continue on a multi-page form."""
     prompt = (
-        f"Click the Next or Continue button on this job application form "
-        f"to proceed to the next page. Do NOT fill any fields."
+        "Click the Next or Continue button on this job application form "
+        "to proceed to the next page. Do NOT fill any fields."
     )
     return _run_submit_action(url, prompt, browser_session_id, timeout)
 
@@ -283,10 +281,10 @@ class SkyvernExtraction:
         """Analyze a job application form and return structured field info.
         Used for the 'investigator mode' — understanding unknown platforms."""
         prompt = (
-            f"Analyze this job application form. List every visible form field "
-            f"with its label, type (text/select/combobox/checkbox/file/datepicker), "
-            f"whether it's required, and any dropdown options. "
-            f"Also identify: is this a multi-page form? What buttons exist (Next, Submit, etc.)?"
+            "Analyze this job application form. List every visible form field "
+            "with its label, type (text/select/combobox/checkbox/file/datepicker), "
+            "whether it's required, and any dropdown options. "
+            "Also identify: is this a multi-page form? What buttons exist (Next, Submit, etc.)?"
         )
         schema = {
             "type": "object",

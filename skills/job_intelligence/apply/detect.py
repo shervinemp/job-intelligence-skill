@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """detect.py — Pre-flight classify. Reads DB, detects type from URL.
 No Playwright. No Chrome. Just DB + URL patterns."""
-import os, sys, json
+import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
-from apply.common.output import emit_next, emit_type, emit_status, emit_error
+from apply.common.output import emit_next, emit_type, emit_error
 from apply.common.registry import resolve as resolve_registry
 
 STATE_PATH = os.path.join(
