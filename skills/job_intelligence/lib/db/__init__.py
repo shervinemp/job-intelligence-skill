@@ -23,6 +23,7 @@ from .jobs import (
     add_job,
     advance_job,
     failure_stats,
+    find_duplicate,
     get_failed_jobs,
     get_job,
     get_jobs_by_stage,

@@ -79,6 +79,35 @@ def _normalize_url(url):
         return url.strip("/")
 
 
+def find_duplicate(jid, title, company, conn=None):
+    """Find an existing active job with the same title+company (different JID).
+
+    Returns the duplicate job row (id, stage) or None.
+    Prefers jobs in more advanced stages (applied > tailored > described > extracted).
+    """
+    if not title or not company:
+        return None
+    if conn is None:
+        conn = get_conn()
+    norm_title = re.sub(r'\s+', ' ', title.strip()).lower()
+    norm_company = re.sub(r'\s+', ' ', company.strip()).lower()
+    row = conn.execute(
+        "SELECT id, stage FROM jobs "
+        "WHERE id != ? AND state = 'active' "
+        "AND title IS NOT NULL AND company IS NOT NULL "
+        "AND LOWER(TRIM(REPLACE(title, '  ', ' '))) = ? "
+        "AND LOWER(TRIM(REPLACE(company, '  ', ' '))) = ? "
+        "ORDER BY CASE stage "
+        "  WHEN 'applied' THEN 0 "
+        "  WHEN 'tailored' THEN 1 "
+        "  WHEN 'described' THEN 2 "
+        "  ELSE 3 END "
+        "LIMIT 1",
+        (jid, norm_title, norm_company),
+    ).fetchone()
+    return row
+
+
 def add_job(job_data):
     from .companies import company_upsert
     conn = get_conn()
@@ -95,6 +124,14 @@ def add_job(job_data):
             )
             conn.commit()
         return jid
+
+    title = job_data.get("title", "")
+    company = job_data.get("company", "")
+    if title and company:
+        dup = find_duplicate(jid, title, company, conn)
+        if dup:
+            return None
+
     _insert_job(jid,
         email_id=job_data.get("email_id", ""),
         title=job_data.get("title", ""),

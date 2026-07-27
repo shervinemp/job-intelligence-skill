@@ -85,11 +85,24 @@ def _process_one(jid, quick, max_pages, no_submit, results):
     from apply.act.check import cmd_check
     from apply.act.submit import cmd_submit
     from apply.common.page_helpers import load_state
-    from lib.db import get_conn
+    from lib.db import get_conn, find_duplicate, get_job
 
     def _stage():
         row = get_conn().execute("SELECT stage FROM jobs WHERE id=?", (jid,)).fetchone()
         return row["stage"] if row else ""
+
+    job = get_job(jid)
+    if job:
+        title = job.get("title", "")
+        company = job.get("company", "")
+        if title and company:
+            dup = find_duplicate(jid, title, company)
+            if dup and dup["stage"] == "applied":
+                results["already_applied"].append(
+                    (jid, f"duplicate of applied {dup['id'][:12]}"))
+                print(f"  SKIP -- duplicate of already-applied {dup['id'][:12]}",
+                      file=sys.stderr)
+                return
 
     # Step 1: detect
     print("  detect...", file=sys.stderr, end=" ")

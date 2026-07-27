@@ -91,5 +91,41 @@ class AutoProcessOne(unittest.TestCase):
         self.assertEqual(len(results["submitted"]), 0)
 
 
+class AutoDedupGuard(unittest.TestCase):
+    def test_duplicate_applied_skips(self):
+        results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
+        job = {"title": "Senior Engineer", "company": "Acme", "url": "https://example.com"}
+        dup = {"id": "existing1234567", "stage": "applied"}
+        with patch("lib.db.get_job", return_value=job), \
+             patch("lib.db.find_duplicate", return_value=dup):
+            _process_one("testjid", False, 4, False, results)
+        self.assertEqual(len(results["already_applied"]), 1)
+        self.assertIn("duplicate", results["already_applied"][0][1])
+        self.assertEqual(len(results["submitted"]), 0)
+
+    def test_duplicate_not_applied_continues(self):
+        results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
+        job = {"title": "Senior Engineer", "company": "Acme", "url": "https://example.com"}
+        dup = {"id": "existing1234567", "stage": "tailored"}
+        with patch("lib.db.get_job", return_value=job), \
+             patch("lib.db.find_duplicate", return_value=dup), \
+             patch("apply.detect.run", return_value=1), \
+             patch("apply.common.page_helpers.load_state", return_value={}):
+            _process_one("testjid", False, 4, False, results)
+        self.assertEqual(len(results["already_applied"]), 0)
+        self.assertEqual(len(results["skipped"]), 1)
+
+    def test_no_title_skips_dedup(self):
+        results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
+        job = {"title": "", "company": "", "url": "https://example.com"}
+        with patch("lib.db.get_job", return_value=job), \
+             patch("lib.db.find_duplicate", return_value=None) as fd_mock, \
+             patch("apply.detect.run", return_value=1), \
+             patch("apply.common.page_helpers.load_state", return_value={}):
+            _process_one("testjid", False, 4, False, results)
+        fd_mock.assert_not_called()
+        self.assertEqual(len(results["skipped"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

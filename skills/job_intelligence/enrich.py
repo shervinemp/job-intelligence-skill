@@ -188,10 +188,23 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
     # First, auto-admit all pending LinkedIn jobs (pre-scraped descriptions, no review needed)
     linkedin = [(jid, e) for jid, e in pending if e.get("source") == "LinkedIn"]
     if linkedin:
+        from lib.db import find_duplicate
+        skipped_dups = 0
         for jid, entry in linkedin:
+            title = entry.get("title", "")
+            company = entry.get("company", "")
+            if title and company:
+                dup = find_duplicate(jid, title, company)
+                if dup:
+                    advance(entry, "described", state="rejected",
+                           error=f"duplicate of {dup['id']}")
+                    skipped_dups += 1
+                    continue
             advance(entry, "described")
         get_conn().commit()
-        print(f"AUTO_ADMIT: {len(linkedin)} LinkedIn jobs", file=sys.stderr)
+        if skipped_dups:
+            print(f"DEDUP: skipped {skipped_dups} LinkedIn duplicate(s)", file=sys.stderr)
+        print(f"AUTO_ADMIT: {len(linkedin) - skipped_dups} LinkedIn jobs", file=sys.stderr)
         state = load()  # reload after advances
         pending = [(jid, e) for jid, e in state["jobs"].items()
                    if e.get("stage") == stage and e.get("state") == "active" and (force or not desc_exists(jid))]
@@ -235,6 +248,20 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
             vals.append(jid)
             conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
             conn.commit()
+
+        final_title = entry.get("title", "")
+        final_company = entry.get("company", "")
+        if final_title and final_company:
+            from lib.db import find_duplicate
+            dup = find_duplicate(jid, final_title, final_company, conn)
+            if dup:
+                advance(entry, entry.get("stage"), state="rejected",
+                        error=f"duplicate of {dup['id']}")
+                conn.commit()
+                print(f"DEDUP: {jid} is a duplicate of {dup['id']} "
+                      f"({final_title[:40]} @ {final_company[:20]})", file=sys.stderr)
+                return
+
         limit = 2000 if verbose else 500
         snippet = re.sub(r'\s+', ' ', result[:limit].replace('\r', '')).strip()
         print(f"DESC:{jid}:{snippet}")
