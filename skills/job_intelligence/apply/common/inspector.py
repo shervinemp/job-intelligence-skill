@@ -13,6 +13,7 @@ Probe strategies:
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from apply.common.field_reader import read_fields
 from lib.config import SNAPSHOTS_DIR
@@ -590,8 +591,84 @@ def _merge_with_widgets(result, registry_config, page):
     ), True
 
 
+def _build_registry_widgets(registry_config, capability_profile=None):
+    """Resolve widget selectors for `read_fields(custom_widgets=...)`.
+
+    Priority:
+      1. YAML `probe.widgets` (authoritative — don't second-guess humans
+         who've reviewed the platform's DOM)
+      2. Capability-scan auto-discovery (ARIA patterns observed on the
+         live page) — used when no YAML or YAML omits widgets
+      Both are joined so an unknown platform still benefits from
+      ARIA hints even if its YAML stays minimal.
+    """
+    widgets = {}
+    if registry_config and hasattr(registry_config, 'widgets'):
+        widgets = dict(registry_config.widgets or {})
+    if capability_profile is not None:
+        try:
+            from apply.common.capabilities import discover_widgets
+            autod = discover_widgets(capability_profile, None)
+            for k, v in autod.items():
+                # Registry wins for any key conflict — its selector is
+                # hand-tuned for the platform's specific DOM names.
+                widgets.setdefault(k, v)
+        except Exception:
+            pass
+    return widgets
+
+
+def _try_strategy(name, page, registry_config=None, prev_result=None, capability_profile=None):
+    """Run a single probe strategy, passing the appropriate kwargs.
+
+    Used by the probe router for the prioritised first attempt AND by
+    the cascade loop. Same logic both places ensures the observation's
+    winning strategy is replayed identically.
+    """
+    strategy_fn = dict(_PROBE_STRATEGIES).get(name)
+    if not strategy_fn:
+        return None
+    # For custom_widgets, prefer capability-discovered widgets if the
+    # registry didn't supply any — they're what made the strategy win
+    # in prior runs (captured in the observation's winning_widgets).
+    if name == "custom_widgets":
+        # Build a transient RegistryConfig-like object so the strategy
+        # sees the discovered widgets without us mutating the input.
+        widgets = _build_registry_widgets(registry_config, capability_profile)
+        if widgets and not (registry_config and registry_config.widgets):
+            # Need to wrap so _probe_custom_widgets can read .widgets
+            class _Transient:
+                pass
+            t = _Transient()
+            t.widgets = widgets
+            return strategy_fn(page, registry_config=t)
+        return strategy_fn(page, registry_config=registry_config)
+    if name == "dialog":
+        return strategy_fn(page, registry_config=registry_config)
+    if name == "iframe_navigate" and prev_result is not None:
+        return strategy_fn(page, prev_result=prev_result)
+    return strategy_fn(page)
+
+
 def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=True, jid=None):
     """Run the probe cascade. Returns the first successful ProbeResult.
+
+    The cascade is the contract — observations only reorder the
+    starting point. Every registered strategy remains reachable.
+
+    Route order (highest priority first):
+      1. YAML `best_strategy` (authoritative — hand-tuned DOM knowledge)
+      2. Confirmed observation for the live capability profile
+         (learned from ≥3 consistent runs of the same page shape)
+      3. Most-frequent candidate observation (soft hint, <3 wins)
+      4. Capability-scan suggestion (ARIA/dialog/iframe signals at scan
+         time — cheap, generic, recoverable)
+      5. Full cascade in declaration order (the safety net)
+
+    On success: the winning strategy is recorded as an observation
+    for the capability profile hash. On full cascade miss: the failure
+    is recorded (demoting any confirmed observation that drift-
+    detected), and DIAG/REGISTRY_UNKNOWN signals are emitted.
 
     Args:
         page: Playwright page object
@@ -601,50 +678,198 @@ def probe(page, domain=None, registry_config=None, deep=False, snapshot_on_fail=
         snapshot_on_fail: If True and all strategies fail, save DOM snapshot
         jid: Job ID for snapshot naming
     """
-    # Try best_strategy from YAML config before full cascade
-    best_strategy = getattr(registry_config, 'best_strategy', None) if registry_config else None
-    best_strategy_failed = False
-    if best_strategy:
-        strategy_fn = dict(_PROBE_STRATEGIES).get(best_strategy)
-        if strategy_fn:
-            kw = {}
-            if best_strategy in ("custom_widgets", "dialog"):
-                kw["registry_config"] = registry_config
-            result = strategy_fn(page, **kw)
-            if result.field_count > 0:
-                if best_strategy != "custom_widgets":
-                    result, _ = _merge_with_widgets(result, registry_config, page)
-                return result
-            best_strategy_failed = True
+    # ── Capability profile: cheap single page.evaluate ────────────
+    capability_profile = None
+    try:
+        from apply.common.capabilities import scan as _cap_scan, summarize as _cap_sum
+        capability_profile = _cap_scan(page)
+        if capability_profile:
+            print(f"CAPABILITY: {_cap_sum(capability_profile)}", file=sys.stderr)
+    except Exception as e:
+        print(f"CAPABILITY_SCAN_FAIL: {e}", file=sys.stderr)
 
-    # Full cascade: track previous result for iframe_navigate
+    # ── Observation lookup (capability-keyed, not domain-keyed) ──
+    observation = None
+    try:
+        from apply.common.observations import lookup as _obs_lookup
+        observation = _obs_lookup(capability_profile)
+    except Exception:
+        pass
+
+    # ── Decide first strategy to try ──────────────────────────────
+    # Priority chain. registry_strategy wins; then confirmed obs; then
+    # candidate (soft); then capability suggestion; else None (cascade).
+    registry_strategy = getattr(registry_config, 'best_strategy', None) if registry_config else None
+    first_strategy = registry_strategy
+    if not first_strategy and observation:
+        if observation.get("confirmed") and observation.get("winning_strategy"):
+            first_strategy = observation["winning_strategy"]
+        elif observation.get("candidate_strategies"):
+            first_strategy = observation["candidate_strategies"][0]
+    if not first_strategy:
+        try:
+            from apply.common.capabilities import suggest_strategy as _suggest
+            first_strategy = _suggest(capability_profile)
+        except Exception:
+            first_strategy = None
+
+    # ── Try the prioritised first strategy ────────────────────────
+    # This is the *only* strategy tried before the cascade. If it
+    # returns 0 fields, we fall through to the complete cascade
+    # (which will re-try the same strategy in its declaration-order
+    # position — wasteful but cheap, and keeps the contract that
+    # every strategy is always reachable).
+    best_strategy_failed = False
+    tried_strategies = set()
     prev_result = None
+    if first_strategy:
+        result = _try_strategy(first_strategy, page, registry_config=registry_config,
+                                capability_profile=capability_profile)
+        tried_strategies.add(first_strategy)
+        if result and result.field_count > 0:
+            if first_strategy != "custom_widgets":
+                result, _ = _merge_with_widgets(result, registry_config, page)
+            _record_observation(page, capability_profile, first_strategy, result,
+                                 registry_config)
+            return result
+        if first_strategy == registry_strategy:
+            # YAML's best_strategy went stale — surface so YAML can be updated
+            print(f"CONFIG_STALE: {first_strategy} returned 0 fields, "
+                  f"falling through to cascade", file=sys.stderr)
+        best_strategy_failed = bool(registry_strategy and first_strategy == registry_strategy)
+        prev_result = result
+
+    # ── Full cascade ──────────────────────────────────────────────
+    # We don't skip tried_strategies — re-trying is cheap and keeps
+    # the contract. The cascade is the safety net.
     for name, strategy_fn in _PROBE_STRATEGIES:
         if not deep and name in _DEEP_ONLY:
             continue
 
-        if name == "iframe_navigate" and prev_result:
-            result = strategy_fn(page, prev_result=prev_result)
-        elif name in ("custom_widgets", "dialog") and registry_config:
-            result = strategy_fn(page, registry_config=registry_config)
-        else:
-            result = strategy_fn(page)
+        # Use the unified _try_strategy helper so custom_widgets
+        # strategy gets capability-discovered widgets when YAML has none
+        result = _try_strategy(name, page, registry_config=registry_config,
+                               prev_result=prev_result,
+                               capability_profile=capability_profile)
+        if result is None:
+            continue
         prev_result = result
         if result.field_count > 0:
-            if best_strategy_failed:
-                print(f"CONFIG_STALE: {best_strategy} returned 0 fields, cascade found {name} with {result.field_count} fields", file=sys.stderr)
+            if best_strategy_failed and name != (registry_strategy or ""):
+                # Already logged CONFIG_STALE above when first_strategy was the
+                # registry strategy. If the cascade found a different strategy,
+                # the user should know which one — but only if it wasn't already
+                # the registry's choice (which we already logged about).
+                print(f"CONFIG_STALE_FALLBACK: cascade found {name} with {result.field_count} fields", file=sys.stderr)
             if name != "custom_widgets":
                 result, _ = _merge_with_widgets(result, registry_config, page)
+            _record_observation(page, capability_profile, name, result, registry_config)
             return result
 
-    # All strategies failed
+    # ── All strategies failed ─────────────────────────────────────
     snapshot_path = None
     if snapshot_on_fail:
         snapshot_path = _snapshot_dom(page, jid)
 
+    # Capture failure artifacts (DOM + capability profile) so the next
+    # CI corpus run or human review can reproduce. Records a drift event
+    # on the observation store, demoting any confirmed observation that
+    # no longer applies.
+    failure_path = _capture_failure(page, capability_profile, jid)
+    _record_failure_observation(page, capability_profile)
+
+    # Surface a distinguishable signal so the orchestrator knows this is
+    # a true unknown (not a transient fill error the cascade handled).
+    try:
+        from apply.common.capabilities import profile_hash as _ph, summarize as _cs
+        print(f"REGISTRY_UNKNOWN: profile={_ph(capability_profile)[:8]} "
+              f"caps={_cs(capability_profile)} failure={failure_path or 'none'}", file=sys.stderr)
+    except Exception:
+        pass
+
     result = ProbeResult(strategy="failed", field_count=0, page_type="unknown", url=page.url)
     result.snapshot_path = snapshot_path
+    result.failure_path = failure_path
     return result
+
+
+def _record_observation(page, capability_profile, strategy, result, registry_config):
+    """Persist a successful probe observation. Best-effort — never
+    lets a write failure abort the probe."""
+    try:
+        from apply.common.observations import record_success
+        # Capture the widget selectors that *this* successful probe used
+        # (registry's if YAML-dictd, else the capability-discovered ones).
+        widgets_used = {}
+        if registry_config and hasattr(registry_config, "widgets"):
+            widgets_used = dict(registry_config.widgets or {})
+        if capability_profile:
+            from apply.common.capabilities import discover_widgets
+            for k, v in (discover_widgets(capability_profile, None) or {}).items():
+                widgets_used.setdefault(k, v)
+        record_success(capability_profile, page.url, strategy, widgets_used=widgets_used)
+    except Exception:
+        pass
+    # Capture a corpus snapshot on first encounter of this profile hash.
+    # First-wins: subsequent runs with the same hash don't overwrite.
+    try:
+        from apply.common.corpus import capture
+        from apply.common.capabilities import profile_hash as _ph
+        h = _ph(capability_profile)
+        platform_name = ""
+        if registry_config and hasattr(registry_config, "name"):
+            platform_name = registry_config.name
+        capture(page, capability_profile, h, strategy,
+                platform_name=platform_name or "")
+    except Exception:
+        pass
+
+
+def _record_failure_observation(page, capability_profile):
+    """Record a cascade-miss to the observation store (drift detection)."""
+    try:
+        from apply.common.observations import record_failure
+        record_failure(capability_profile, page.url)
+    except Exception:
+        pass
+
+
+def _capture_failure(page, capability_profile, jid):
+    """Save DOM HTML + capability profile to ~/.ji/registry-failures/.
+    Returns the path to the JSON sidecar (or None on failure)."""
+    try:
+        from datetime import datetime
+        from lib.config import JI_HOME
+        from apply.common.capabilities import profile_hash as _ph, summarize as _cs
+        failures_dir = Path(JI_HOME) / "registry-failures"
+        failures_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        jid_part = f"_{jid}" if jid else ""
+        prefix = f"{ts}{jid_part}_{_ph(capability_profile)[:8]}"
+        try:
+            html = page.evaluate("() => document.documentElement.outerHTML")
+            (failures_dir / f"{prefix}_dom.html").write_text(html, encoding="utf-8")
+        except Exception:
+            pass
+        sidecar = {
+            "url": page.url,
+            "timestamp": ts,
+            "jid": jid,
+            "profile_hash": _ph(capability_profile),
+            "capability_summary": _cs(capability_profile),
+            "capability_profile": capability_profile,
+        }
+        json_path = failures_dir / f"{prefix}_probe.json"
+        json_path.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+        # Retention: keep most recent 25 failures
+        snaps = sorted(failures_dir.glob("*_dom.html"))
+        while len(snaps) > 25:
+            oldest = snaps.pop(0)
+            oldest.unlink(missing_ok=True)
+            oldest.with_suffix(".json").with_stem(oldest.stem.replace("_dom", "_probe")).unlink(missing_ok=True)
+        return str(json_path)
+    except Exception:
+        return None
 
 
 def probe_all(page, domain=None, registry_config=None):

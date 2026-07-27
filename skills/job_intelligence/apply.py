@@ -16,6 +16,16 @@ Usage:
   python3 apply.py flag <jid>           Toggle auth wall
   python3 apply.py retry [<jid>]        Re-attempt failed
   python3 apply.py undo <jid>           Move back one stage
+  python3 apply.py registry candidates  List unconfirmed probe observations
+  python3 apply.py registry confirm <h> Manually promote an observation
+  python3 apply.py registry clear <h>   Delete an observation
+  python3 apply.py registry corpus      List captured DOM snapshots
+  python3 apply.py registry failures    List cascade-miss artifacts
+
+The probe router adapts automatically: it learns which strategy works
+for each capability profile (capability-keyed, not domain-keyed), and
+reverts on drift. The full 9-level cascade always runs as a backstop.
+Use `registry` to inspect or override the learned state.
 """
 import os, sys
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -87,6 +97,13 @@ def main():
 
     creds_p = sub.add_parser("creds", help="Credential vault for ATS sites")
     creds_p.add_argument("args", nargs="+", help="list | get <domain> | set <domain> <email> <password> | delete <domain>")
+
+    reg_p = sub.add_parser("registry", help="Probe observation + corpus management")
+    reg_p.add_argument("action", choices=["candidates", "confirm", "clear", "corpus", "failures"],
+                       help="candidates (list unconfirmed obs) | confirm <hash> (manual promote) | "
+                            "clear <hash> (delete an obs) | corpus (list snapshots) | "
+                            "failures (list captured cascade-miss failures)")
+    reg_p.add_argument("hash", nargs="?", help="Profile hash (for confirm/clear)")
 
     args = parser.parse_args()
 
@@ -166,6 +183,7 @@ def main():
         from lib.db import get_job, advance_job
         from lib.auth_walls import remove
         from apply.common.apply_state import clear as _clear_state
+        from apply.common.page_helpers import load_state, save_state
         job = get_job(args.jid)
         if job:
             stage = job.get("stage", "")
@@ -174,12 +192,20 @@ def main():
             advance_job(args.jid, new_stage, state="active", error=None)
             remove(args.jid)
             _clear_state(args.jid)
+            # Clear submit_clicked from global state if it belongs to this job
+            _st = load_state()
+            if _st.get("jid") == args.jid and _st.get("submit_clicked"):
+                _st["submit_clicked"] = False
+                save_state(_st)
             print(f"UNDO: {args.jid} {stage} -> {new_stage}", file=sys.stderr)
     elif args.command == "mappings":
         print("MAPPINGS: removed in Skyvern migration", file=sys.stderr)
     elif args.command == "creds":
         from lib.credentials import cmd_creds
         cmd_creds(args.args)
+    elif args.command == "registry":
+        from apply.common.registry_cli import cmd_registry
+        cmd_registry(args.action, args.hash)
 
 
 if __name__ == "__main__":
