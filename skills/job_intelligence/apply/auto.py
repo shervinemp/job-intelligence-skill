@@ -42,22 +42,20 @@ def run(jid=None, limit=None, dry_run=False, quick=False, max_pages=4, no_submit
     print(f"{'='*60}", file=sys.stderr)
 
     if dry_run:
-        from apply.detect import run as detect_run
-        from apply.common.page_helpers import load_state
+        from apply.detect import _classify
+        from apply.common.registry import resolve as resolve_registry
         for i, (jid, job) in enumerate(jobs):
             title = job.get("title", "?")
             company = job.get("company", "?")
-            rc = detect_run(jid)
-            state = load_state()
-            jtype = state.get("type", "?")
-            platform = state.get("platform", "")
+            url = job.get("url", "")
+            ext_url = job.get("external_url") or ""
+            jtype, resolved_url = _classify(url, ext_url)
+            reg = resolve_registry(resolved_url or ext_url or url)
+            platform = reg.name if reg else ""
             tag = f" -> {platform}" if platform else ""
-            status = "  "
-            if jtype == "already_applied":
-                status = "ok"
-            elif jtype == "unknown":
-                status = "??"
-            print(f"  [{i+1}/{N}] {status} {jid[:12]} {jtype}{tag} -- {title} @ {company}", file=sys.stderr)
+            print(f"  [{i+1}/{N}] {jid[:12]} {jtype}{tag} -- {title} @ {company}", file=sys.stderr)
+        print(f"\nDRY_RUN: {N} job(s) listed. Remove --dry-run to process.", file=sys.stderr)
+        return 0
         print(f"\nDRY_RUN: {N} job(s) listed. Remove --dry-run to process.", file=sys.stderr)
         return 0
 

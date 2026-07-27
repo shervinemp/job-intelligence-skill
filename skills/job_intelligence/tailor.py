@@ -173,7 +173,7 @@ def cmd_craft(auto=False):
     try:
         success, result = generate_tailored_docs(entry)
         if success and os.environ.get("JI_TAILOR", "agent") == "agent":
-            print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'", file=sys.stderr)
+            print(f"  PROMPT_READY {jid} — review prompt.txt, create resume.json, then run 'tailor.py build {jid} && tailor.py admit {jid}'", file=sys.stderr)
         elif success:
             print(f"  COMPLETE {jid} — run 'tailor.py review --jid {jid}'", file=sys.stderr)
         else:
@@ -211,7 +211,7 @@ def craft_jid(jid):
     success, result = generate_tailored_docs(entry)
     if success:
         mode = os.environ.get("JI_TAILOR", "agent")
-        print(f"  PROMPT_READY {jid} — write script.py then run 'admit {jid} --pdf <path>'" if mode == "agent" else f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check", file=sys.stderr)
+        print(f"  PROMPT_READY {jid} — review prompt.txt, create resume.json, then run 'tailor.py build {jid} && tailor.py admit {jid}'" if mode == "agent" else f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check", file=sys.stderr)
     else:
         err_str = str(result)[:120]
         if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):

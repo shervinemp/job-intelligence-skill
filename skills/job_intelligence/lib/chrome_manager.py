@@ -22,10 +22,27 @@ from .config import JI_HOME, CHROME_PROFILE, CHROME_CONFIG
 
 _LOCK_PATH = Path(JI_HOME) / "pipeline.lock"
 
-CHROME_PATH = os.environ.get("CHROME_PATH") or (
-    shutil.which("google-chrome") or shutil.which("chromium-browser")
-    or shutil.which("chrome") or "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-)
+def _find_chrome():
+    """Find Chrome executable. Checks env, PATH, and common Windows install locations."""
+    env_path = os.environ.get("CHROME_PATH")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+    for name in ("google-chrome", "chromium-browser", "chrome"):
+        p = shutil.which(name)
+        if p:
+            return p
+    win_candidates = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+    ]
+    for p in win_candidates:
+        if p and os.path.isfile(p):
+            return p
+    return win_candidates[0]  # fall back to default path (will fail with clear error)
+
+
+CHROME_PATH = _find_chrome()
 CDP_PORT = int(os.environ.get("CDP_PORT", "9222"))
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 

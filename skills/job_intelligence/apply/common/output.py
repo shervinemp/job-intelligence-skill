@@ -110,16 +110,11 @@ def emit_fill_report(filled, unfilled, page_num, profile=None):
             extra = f"  fmt={fmt}" if fmt else ""
             print(f"  [{tag}] {label}{extra}", file=sys.stderr)
     if unfilled and profile:
-        pk = sorted(k for k in profile.keys() if k != "common_answers")
-        if pk:
-            print(f"  Profile keys: {json.dumps(pk)}", file=sys.stderr)
-        # Surface profile.answers keys so the LLM knows what preferences exist
-        # (willing_to_relocate, work_authorization, etc.) without reading profile.json
         pa = profile.get("answers", {})
         if pa:
             _answer_hints = {k: (str(v)[:30] + "..." if len(str(v)) > 30 else str(v))
                            for k, v in sorted(pa.items())}
-            print(f"  Profile answers: {json.dumps(_answer_hints, indent=2)}", file=sys.stderr)
+            print(f"  Profile answers: {json.dumps(_answer_hints)}", file=sys.stderr)
 
 
 def emit_candidates(cands, max_show=8):

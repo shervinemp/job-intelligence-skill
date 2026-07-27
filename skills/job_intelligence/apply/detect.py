@@ -27,14 +27,14 @@ def _classify(url: str, ext_url: str = "") -> tuple[str, str]:
     # LinkedIn with no external URL = Easy Apply modal
     if "linkedin.com/jobs" in ul and not eul:
         return "easy_apply", ""
-    # Direct ATS URL
-    if any(d in ul for d in ["greenhouse.io", "lever.co", "myworkdayjobs.com",
-                              "ashbyhq.com", "icims.com", "jobvite.com"]):
+    # Direct ATS URL — consult registry as single source of truth
+    from apply.common.registry import resolve as resolve_registry
+    if resolve_registry(url):
         return "ats_direct", url
     return "external", url  # assume external if we have a URL
 
 
-def run(jid):
+def run(jid, dry_run=False):
     conn = get_conn()
     row = conn.execute(
         "SELECT url, title, company, stage, state, external_url FROM jobs WHERE id=?",
@@ -88,6 +88,7 @@ def run(jid):
              "title": title or "", "company": company or "", "type": job_type}
     if plat_name:
         state["platform"] = plat_name
-    from lib.config import atomic_write_json, STATE_PATH as _SP
-    atomic_write_json(_SP, state)
+    if not dry_run:
+        from lib.config import atomic_write_json, STATE_PATH as _SP
+        atomic_write_json(_SP, state)
     return 0

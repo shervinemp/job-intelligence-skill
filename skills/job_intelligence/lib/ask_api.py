@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys; sys.stdout.reconfigure(encoding="utf-8", errors="replace"); del sys
 
-"""lib/ask_api.py ΓÇö Send image + prompt to an OpenAI-compatible LLM endpoint.
+"""lib/ask_api.py — Send image + prompt to an OpenAI-compatible LLM endpoint.
 
 Usage:
     python3 lib/ask_api.py --img screenshot.jpg --prompt "Describe this page"
@@ -22,7 +22,7 @@ def _load_config():
 
 def available():
     """Check if the vision endpoint is reachable. Uses cached ping (5 min TTL).
-    Lightweight GET /v1/models ΓÇö no model inference."""
+    Lightweight GET /v1/models — no model inference."""
     cfg = _load_config()
     if not cfg["url"]:
         return False
@@ -70,7 +70,7 @@ def ask(image_path, prompt, temperature=0.3, max_tokens=2048):
             except ImportError:
                 pass
         if not rendered:
-            return None, "PDF rendering requires pdf2image or PyMuPDF ΓÇö install one"
+            return None, "PDF rendering requires pdf2image or PyMuPDF — install one"
     try:
         with open(image_path, "rb") as f:
             image_data = f.read()
@@ -130,7 +130,7 @@ def ask_chunked(image_data, prompt, temperature=0.3, max_tokens=2048,
         final, err = _text(consol, temperature, min(max_tokens, 1024), cfg)
         if err:
             partials = "\n".join(f"Section {i+1}: {r[:200]}" for i, r in enumerate(chunks))
-            return (f"CONSOLIDATION_FAILED ΓÇö partial results:\n{partials}", None)
+            return (f"CONSOLIDATION_FAILED — partial results:\n{partials}", None)
         return (final, None)
     except ImportError:
         return _vision(image_data, prompt, temperature, max_tokens, cfg)
@@ -217,7 +217,7 @@ if __name__ == "__main__":
         prog="lib/ask_api.py",
         description="Send image + prompt to an OpenAI-compatible LLM endpoint.",
     )
-    parser.add_argument("--img", help="Path to image file (optional ΓÇö text-only if omitted)")
+    parser.add_argument("--img", help="Path to image file (optional — text-only if omitted)")
     parser.add_argument("--prompt", required=True, help="Question about the image")
     parser.add_argument("--temperature", type=float, default=0.3)
     args = parser.parse_args()

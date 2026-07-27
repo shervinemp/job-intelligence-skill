@@ -1,7 +1,6 @@
 """apply/common/page_helpers.py — Shared page reading, state persistence, page finding,
 Playwright-first field reading, and success signal detection."""
 import json, os, sys, time
-import webbrowser
 
 from lib.config import STATE_PATH
 
@@ -148,7 +147,7 @@ def wait_cloudflare(page, timeout=30):
     return not is_cloudflare_challenge(page)
 
 
-def handle_captcha(page, state, wait_s=300, poll_s=3):
+def handle_captcha(page, state, wait_s=None, poll_s=3):
     if not check_captcha(page):
         return False
     # Cloudflare managed challenge auto-resolves — wait silently, don't alert
@@ -158,17 +157,15 @@ def handle_captcha(page, state, wait_s=300, poll_s=3):
             print(f"  Cloudflare resolved.", file=sys.stderr)
             return False
         print(f"  Cloudflare didn't resolve in 30s — escalating to user.", file=sys.stderr)
+    if wait_s is None:
+        wait_s = int(os.environ.get("JI_CAPTCHA_TIMEOUT", "300"))
     url = page.url[:120]
     print(f"\n*** CAPTCHA DETECTED ***", file=sys.stderr)
     print(f"  URL: {url}", file=sys.stderr)
-    print(f"  Solve it in your Chrome browser — resuming automatically once solved", file=sys.stderr)
+    print(f"  Solve it in this Chrome window — resuming automatically once solved", file=sys.stderr)
     print(f"  (waiting up to {wait_s}s, then aborting this step)", file=sys.stderr)
     try:
         page.bring_to_front()
-    except Exception:
-        pass
-    try:
-        webbrowser.open(url)
     except Exception:
         pass
     waited = 0
