@@ -3,6 +3,7 @@
 Usage:
   python3 report.py shell                     Open SQLite shell
   python3 report.py stats                     Pipeline statistics
+  python3 report.py candidates [--limit N]    Tailored jobs ready to apply (with guard flags)
   python3 report.py inspect <jid>             Full job details
   python3 report.py search <query>            Search jobs
   python3 report.py export json [--stage S]   Export jobs as JSON
@@ -78,6 +79,52 @@ def cmd_stats():
     tailored = by_stage.get("tailored", 0)
     print(f"Need tailoring: {described}")
     print(f"Ready to apply: {tailored}")
+
+
+def cmd_candidates(limit=None):
+    """List tailored jobs ready to apply, surfacing guard-state flags
+    (submit_clicked, no_apply_path, login_required) so the operator can
+    decide what to run safely. Also shows the already-applied set for
+    dedup reference."""
+    conn = get_conn()
+
+    # Stage counts header
+    print("STAGES:", end="")
+    for r in conn.execute("SELECT stage, COUNT(*) n FROM jobs GROUP BY stage ORDER BY n DESC").fetchall():
+        print(f"  {r['stage']}={r['n']}", end="")
+    print()
+
+    # Tailored with external URLs — candidates to apply
+    q = ("SELECT id, title, company, external_url, state FROM jobs "
+         "WHERE stage='tailored' AND external_url IS NOT NULL AND external_url != '' "
+         "ORDER BY company")
+    rows = conn.execute(q).fetchall()
+    if limit:
+        rows = rows[:limit]
+    print(f"\nCANDIDATES ({len(rows)} tailored with external_url):")
+    for r in rows:
+        state = r["state"] or ""
+        flags = []
+        if "submit_clicked" in state:
+            flags.append("SUBMIT_CLICKED")
+        if "no_apply_path" in state:
+            flags.append("NO_APPLY_PATH")
+        if "login_required" in state:
+            flags.append("LOGIN_REQ")
+        flag_str = "  [" + ", ".join(flags) + "]" if flags else ""
+        url = (r["external_url"] or "")[:52]
+        print(f"  {r['id'][:14]} {_clean(r['company'] or '')[:22]:22} "
+              f"{_clean(r['title'] or '')[:36]:36} {url}{flag_str}")
+
+    # Already-applied set (dedup reference)
+    applied = conn.execute(
+        "SELECT title, company FROM jobs WHERE stage='applied' ORDER BY company"
+    ).fetchall()
+    print(f"\nALREADY APPLIED ({len(applied)}) — dedup reference:")
+    for r in applied[:12]:
+        print(f"  {_clean(r['company'] or '')[:22]:22} {_clean(r['title'] or '')[:40]}")
+    if len(applied) > 12:
+        print(f"  ... +{len(applied) - 12} more")
 
 
 
@@ -278,6 +325,13 @@ def main():
         cmd_shell()
     elif cmd == "stats":
         cmd_stats()
+    elif cmd == "candidates":
+        lim = None
+        if "--limit" in args:
+            i = args.index("--limit")
+            if i + 1 < len(args):
+                lim = int(args[i + 1])
+        cmd_candidates(limit=lim)
     elif cmd == "inspect":
         if not args:
             print("Usage: python3 report.py inspect <jid>", file=sys.stderr)
