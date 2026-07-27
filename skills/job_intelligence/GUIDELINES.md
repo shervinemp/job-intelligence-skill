@@ -39,11 +39,13 @@ YAML `probe.widgets` wins; ARIA auto-discovery fills the gaps via
 | Failure capture | `inspector.py:_capture_failure` | Cascade-miss → save DOM + capability profile. Prunes to 25 most recent. | `~/.ji/registry-failures/<ts>_<hash>_{dom.html,probe.json}` |
 | CorpusPage test harness | `apply/common/mock_page.py` | jsdom-backed page that runs real `_SCAN_JS` / `_READER_JS` against saved HTML via node subprocess. No browser needed. Skip-when-jsdom-missing. | Bridge in `$TEMP/corpus_*_bridge.js` |
 
-## Test coverage (129 pass + 63 subtests, zero pyflakes)
+## Test coverage (144 pass + 64 subtests, zero pyflakes)
 
 | File | Covers |
 |------|--------|
-| `tests/test_corpus.py` | Real `_SCAN_JS` + `_READER_JS` vs synthetic fixtures (login-wall, Workday-like with dialog+listbox-button+combobox+file+radio+progress, Ashby-like bare form, Greenhouse-like with `<select>`, empty/expired). Skips if jsdom unavailable. |
+| `tests/test_corpus.py` | Real `_SCAN_JS` + `_READER_JS` vs synthetic fixtures — 5 canonical shapes (login-wall, Workday-like, Ashby-like, Greenhouse-like, expired) + 5 curveballs (cookie overlay, honeypot-in-dialog, conditional reveal, obfuscated React label, login+honeypot compound) + 3 alert-popup curveballs (confirm modal mid-fill, leave-page modal, success modal post-submit). Skips if jsdom unavailable. |
+| `tests/test_probe_router.py` | Capability hash stability/variance, observation confirm/demote flow, widget merge priority, failure capture artifact + pruning, `_build_registry_widgets` YAML-wins-then-auto chain. |
+| `tests/test_*.py` (existing) | 96 baseline. |
 | `tests/test_probe_router.py` | Capability hash stability/variance, observation confirm/demote flow, widget merge priority, failure capture artifact + pruning, `_build_registry_widgets` YAML-wins-then-auto chain. |
 | `tests/test_*.py` (existing) | 96 baseline + 33 new = 129 tests. |
 
@@ -58,7 +60,49 @@ apply.py registry confirm <hash>     # manual promote (accepts 8-char prefix)
 apply.py registry clear <hash>       # delete observation
 apply.py registry corpus             # list captured DOM snapshots
 apply.py registry failures           # list cascade-miss artifacts
+apply.py registry drift [--dry-run]  # self-test all corpus snapshots
 ```
+
+## Alert / popup handling
+
+Two flavors, handled at different layers:
+
+**Native browser dialogs** (`window.alert`, `confirm`, `prompt`) — handled
+at the Playwright level by `helpers.py:_wire_dialogs`:
+  - `alert()` → `d.accept()`
+  - `confirm()` → `d.accept()` (says "Yes/OK" — we want to proceed)
+  - `prompt()` → `d.dismiss()` (we don't fill arbitrary prompts)
+
+Installed once per page load via `_wire_dialogs(page)` in
+`chrome_session()` — before any clicks fire. The capability scanner
+cannot see native dialogs (they're not in the DOM) and we don't try;
+documented limitation.
+
+**HTML modal popups** (`[role="dialog"]` without form inputs) — detected
+by the capability scanner via three new signals:
+  - `confirm_modal_signals: int` — visible modal with OK/confirm/submit
+    button text (NOT form dialogs with inputs)
+  - `success_modal_text: bool` — visible modal text matches "submitted
+    successfully" / "thank you for applying"
+  - `error_modal_text: bool` — visible modal text says "please fix..."
+
+Detection at scan-time:
+  - Form dialog (has inputs) → confirm_modal_signals=0 (key guard)
+  - Confirm popup ("Please confirm your email" with OK button) → 1
+  - Leave-page modal ("Stay" / "Leave Anyway") → 1 (Stay/Leave trigger kw)
+  - Success modal → confirm_modal_signals=1 (Continue button)
+    + success_modal_text=True
+
+Dismissal at fill time:
+  - `helpers.py:_dismiss_confirm_modal(page)` clicks OK/confirm/submit
+    buttons inside visible modals. Currently called only at submit
+    time (submit.py:419).
+  - Workday cookie banner: `fill.py:_handle_login_wall` clicks
+    `legalNoticeAcceptButton` before login flow.
+  - `confirm_modal_signals` is a stable capability hash key — a
+    platform that reliably shows mid-fill confirms hashes distinctly
+    from the bare form. The drift detector can flag when a platform
+    stops showing the confirm popup (or adds one).
 
 ## Other live state (carry-over from prior sessions)
 
@@ -83,7 +127,10 @@ apply.py registry failures           # list cascade-miss artifacts
 - ~100 active LinkedIn Easy Apply jobs waiting on `apply.py auto`
 - 13 active jobs with external ATS URLs (Harvey/Ashby, Scribd, TRM Labs, Narvar/Greenhouse, Lyft/CareerPuck, Behaviour ×2, LTM/Ripplehire)
 - CrowdStrike Workday needs shared password pool population (`creds shared-set`)
-- yaml `best_strategy` self-test command (drift detector) — wired via `apply.py registry drift` is *NOT* implemented yet; only candidates/confirm/clear/corpus/failures
+- Mid-fill confirm modal dismissal — `confirm_modal_signals` is now
+  detected by capability scanner, but `_dismiss_confirm_modal` is only
+  called at submit time. Should be called between probe iterations
+  when `confirm_modal_signals > 0` is observed mid-fill.
 
 ## Conventions
 

@@ -21,6 +21,7 @@ Usage:
   python3 apply.py registry clear <h>   Delete an observation
   python3 apply.py registry corpus      List captured DOM snapshots
   python3 apply.py registry failures    List cascade-miss artifacts
+  python3 apply.py registry drift       Self-test corpus snapshots for drift
 
 The probe router adapts automatically: it learns which strategy works
 for each capability profile (capability-keyed, not domain-keyed), and
@@ -99,11 +100,14 @@ def main():
     creds_p.add_argument("args", nargs="+", help="list | get <domain> | set <domain> <email> <password> | delete <domain>")
 
     reg_p = sub.add_parser("registry", help="Probe observation + corpus management")
-    reg_p.add_argument("action", choices=["candidates", "confirm", "clear", "corpus", "failures"],
+    reg_p.add_argument("action", choices=["candidates", "confirm", "clear", "corpus", "failures", "drift"],
                        help="candidates (list unconfirmed obs) | confirm <hash> (manual promote) | "
                             "clear <hash> (delete an obs) | corpus (list snapshots) | "
-                            "failures (list captured cascade-miss failures)")
+                            "failures (list captured cascade-miss failures) | "
+                            "drift (self-test: probe all corpus snapshots for changes)")
     reg_p.add_argument("hash", nargs="?", help="Profile hash (for confirm/clear)")
+    reg_p.add_argument("--dry-run", action="store_true",
+                       help="drift: report only, no auto-demote (default: auto-demote stale)")
 
     args = parser.parse_args()
 
@@ -205,7 +209,7 @@ def main():
         cmd_creds(args.args)
     elif args.command == "registry":
         from apply.common.registry_cli import cmd_registry
-        cmd_registry(args.action, args.hash)
+        return cmd_registry(args.action, args.hash, dry_run=getattr(args, "dry_run", False))
 
 
 if __name__ == "__main__":

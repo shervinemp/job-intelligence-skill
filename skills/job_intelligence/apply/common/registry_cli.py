@@ -25,7 +25,7 @@ def _short(s, n=80):
     return s if len(s) <= n else s[:n - 1] + "..."
 
 
-def cmd_registry(action: str, hash_key=None):
+def cmd_registry(action: str, hash_key=None, dry_run: bool = False):
     if action == "candidates":
         _cmd_candidates()
     elif action == "confirm":
@@ -42,6 +42,9 @@ def cmd_registry(action: str, hash_key=None):
         _cmd_corpus()
     elif action == "failures":
         _cmd_failures()
+    elif action == "drift":
+        from apply.common.drift import run as _drift_run
+        _drift_run(dry_run=dry_run, verbose=True)
     return 0
 
 

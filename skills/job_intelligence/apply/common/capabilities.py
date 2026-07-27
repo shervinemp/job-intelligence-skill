@@ -48,6 +48,9 @@ class CapabilityProfile(TypedDict, total=False):
     has_captcha: bool
     honeypot_signals: int
     page_text_length: int           # body.innerText length (lower bound)
+    confirm_modal_signals: int      # visible HTML modals with confirm/ok button text
+    success_modal_text: bool        # body text suggests "submitted successfully"
+    error_modal_text: bool          # body text shows validation error in a modal
 
 
 _SCAN_JS = r"""() => {
@@ -197,6 +200,57 @@ _SCAN_JS = r"""() => {
         if (ariaHidden || offscreen) honeypot++;
     });
 
+    // Confirm modal detection — visible HTML modals that have an
+    // "OK" / "Confirm" / "Submit" / "Continue" button. These are
+    // mid-fill popups ("Please confirm your email") or leave-page
+    // warnings that need dismissal before the form can be touched.
+    // Distinguishes from form dialogs (which have inputs the user
+    // must fill, not just OK/Cancel buttons).
+    const confirmKws = ['ok', 'confirm', 'continue', 'submit', 'yes',
+                        'sure', 'i agree', 'dismiss', 'got it', 'close',
+                        'leave anyway', 'stay on page'];
+    let confirmModalCount = 0;
+    dialogs.forEach(d => {
+        if (d.offsetParent === null) return;
+        if (d.querySelector('input:not([type=hidden]):not([type=submit]), select, textarea')) {
+            // Has form fields → this is a form dialog, not confirm modal
+            return;
+        }
+        const btns = d.querySelectorAll('button, [role="button"], input[type="submit"]');
+        for (const btn of btns) {
+            const t = (btn.textContent || btn.value || '').trim().toLowerCase();
+            if (confirmKws.some(k => t === k || t.startsWith(k))) {
+                confirmModalCount++;
+                break;
+            }
+        }
+    });
+
+    // Success modal — body text inside a visible dialog says "submitted"
+    // or "successfully" or "we'll be in touch". Detects post-submit
+    // confirmation so the orchestrator knows submission already happened.
+    let successModalText = false;
+    dialogs.forEach(d => {
+        if (d.offsetParent === null) return;
+        const t = (d.innerText || '').toLowerCase();
+        if (/submission successful|application submitted|successfully submitted|we'\''ll be in touch|thank you for applying/.test(t)) {
+            successModalText = true;
+        }
+    });
+
+    // Error modal — validation error inside visible dialog (not form
+    // field error, but a modal popup saying "please fix errors above").
+    // Useful for cascading: the presence of an error modal means the
+    // outer form has unmet validation requirements.
+    let errorModalText = false;
+    dialogs.forEach(d => {
+        if (d.offsetParent === null) return;
+        const t = (d.innerText || '').toLowerCase();
+        if (/please (fix|correct|review)|fix the following|some information is missing|please complete all (required )?fields/.test(t)) {
+            errorModalText = true;
+        }
+    });
+
     return {
         dialog: visibleDialogs > 0,
         nested_dialog: nestedDialog,
@@ -221,6 +275,9 @@ _SCAN_JS = r"""() => {
         has_progress_bar: pbVisible,
         has_captcha: hasCaptcha,
         honeypot_signals: honeypot,
+        confirm_modal_signals: confirmModalCount,
+        success_modal_text: successModalText,
+        error_modal_text: errorModalText,
         page_text_length: txt.length,
     };
 }"""
@@ -255,6 +312,10 @@ def _hash_profile(profile: dict) -> str:
         "visible_text_inputs", "select_elements", "textarea_count",
         "radio_groups", "checkbox_count", "has_progress_bar",
         "has_captcha", "honeypot_signals",
+        # Modal-popup counts are structural (a platform that shows
+        # confirm modals reliably should hash consistently). Success/error
+        # modal text is copy-driven volatile, so excluded.
+        "confirm_modal_signals",
     ]
     # Bucket counts: 0 → 0, 1-2 → 1, 3-10 → 2, 11+ → 3 — stable across
     # small form-size changes (a 5-question form vs a 7-question one
@@ -369,6 +430,9 @@ def summarize(profile: Optional[dict]) -> str:
     if profile.get("has_progress_bar"): parts.append("progress-bar")
     if profile.get("has_captcha"): parts.append("captcha")
     if profile.get("honeypot_signals"): parts.append(f"honeypot:{profile['honeypot_signals']}")
+    if profile.get("confirm_modal_signals"): parts.append(f"confirm-modal:{profile['confirm_modal_signals']}")
+    if profile.get("success_modal_text"): parts.append("success-modal")
+    if profile.get("error_modal_text"): parts.append("error-modal")
     if profile.get("apply_buttons"):
         joined = "','".join(profile['apply_buttons'][:2])
         parts.append("apply:['" + joined + "']")
