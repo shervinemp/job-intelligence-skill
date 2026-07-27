@@ -9,6 +9,7 @@ from apply.act.helpers import (
     _wait_for_fields, _probe_form, _fill_with_playwright, _find_next_button,
     _empty_required, _click_action, _verify_with_ask_api, _detect_submit_button,
     _field_key, _build_ans_dict, _resolve_linkedin_apply, _wire_dialogs,
+    _is_junk_field,
 )
 
 
@@ -263,6 +264,38 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                     return 1
                 handle_session_timeout(page)
 
+            # Conditional-reveal sweep: clicking radio/yesno/select values on
+            # SPA forms (Ashby, Workday) can reveal NEW required fields
+            # that weren't in the original probe. Re-probe and fill any
+            # newly-revealed fields that weren't in the original set.
+            # Limited to 2 sweeps to avoid infinite loops on dynamic forms.
+            for sweep in range(2):
+                time.sleep(1)
+                pr2 = _probe_form(page, reg, jid, allow_vision=False)
+                new_fields = [
+                    f for f in (pr2.fields or [])
+                    if not _is_junk_field(f)
+                    and _field_key(f) not in filled_keys
+                    and _field_key(f) not in {_field_key(r) for r in failed_all}
+                ]
+                if not new_fields:
+                    break
+                print(f"  Sweep {sweep+1}: {len(new_fields)} new field(s) revealed", file=sys.stderr)
+                filled2, failed2 = _fill_with_playwright(page, new_fields, profile, answers)
+                for rec in filled2:
+                    if rec["key"] not in filled_keys:
+                        filled_keys.add(rec["key"])
+                        filled_all.append(rec["label"])
+                for rec in failed2:
+                    k = _field_key(rec)
+                    if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
+                        failed_all.append(rec)
+                field_total += len(new_fields)
+                if filled2:
+                    print(f"  Sweep {sweep+1}: filled {len(filled2)}/{len(new_fields)}", file=sys.stderr)
+                if not filled2 and not failed2:
+                    break
+
             remaining_now = [r for r in failed_all if _field_key(r) not in filled_keys]
             if verify and filled_all and not remaining_now and field_total > 0:
                 try:
@@ -385,43 +418,60 @@ def _handle_login_wall(page, jid, quick):
     if creds:
         print(f"  Auto-login: {creds['email']}", file=sys.stderr)
         try:
-            # Workday defaults to "Create Account" form with a "Sign In"
-            # link. Click it first so we target the sign-in form, not the
-            # create-account form (which needs confirm-password + checkbox).
-            for sel in [
-                '[data-automation-id="signInLink"]',
-                'a:has-text("Sign In")',
-                'button:has-text("Sign In")',
-            ]:
-                try:
-                    link = page.locator(sel).first
-                    if link.count() > 0 and link.is_visible():
-                        link.click(timeout=3000)
-                        time.sleep(2)
-                        print("  Switched to Sign In form", file=sys.stderr)
-                        break
-                except Exception:
-                    continue
-
-            email_input = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i]').first
-            if email_input.count() > 0:
-                email_input.fill(creds["email"])
-            pw_input = page.locator('input[type="password"]').first
-            if pw_input.count() > 0:
-                pw_input.fill(creds["password"])
-            # Prefer Sign In submit button, fall back to generic submit
-            submit = page.locator(
-                '[data-automation-id="signInSubmitButton"], '
-                'button:has-text("Sign In"), '
-                'button[type="submit"], input[type="submit"]'
-            ).first
-            if submit.count() > 0:
-                try:
-                    submit.click(timeout=5000)
-                except Exception:
-                    submit.click(force=True, timeout=5000)
+            # Workday renders BOTH Sign In and Create Account forms on the
+            # same page (tabbed SPA). Use a single JS evaluation to find
+            # the *sign-in* form (the one with exactly 1 password field),
+            # fill it, and click its submit button — all in one atomic
+            # operation so we don't accidentally target the wrong form.
+            result = page.evaluate("""(creds) => {
+                const forms = Array.from(document.querySelectorAll('form'));
+                for (const f of forms) {
+                    if (f.offsetParent === null) continue;
+                    const pws = f.querySelectorAll('input[type="password"]');
+                    if (pws.length !== 1) continue;
+                    const btn = f.querySelector('[data-automation-id="signInSubmitButton"]');
+                    if (!btn) continue;
+                    // This is the Sign In form.
+                    const email = f.querySelector('input[type="email"], input[type="text"]');
+                    if (email) {
+                        email.focus();
+                        email.value = creds.email;
+                        email.dispatchEvent(new Event('input', {bubbles: true}));
+                        email.dispatchEvent(new Event('change', {bubbles: true}));
+                    }
+                    pws[0].focus();
+                    pws[0].value = creds.password;
+                    pws[0].dispatchEvent(new Event('input', {bubbles: true}));
+                    pws[0].dispatchEvent(new Event('change', {bubbles: true}));
+                    btn.click();
+                    return true;
+                }
+                return false;
+            }""", {"email": creds["email"], "password": creds["password"]})
+            if result:
                 time.sleep(5)
                 print("  LOGIN: submitted", file=sys.stderr)
+            else:
+                # Fallback: generic locator approach
+                print("  LOGIN: no sign-in form found, trying generic fill", file=sys.stderr)
+                email_input = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i]').first
+                if email_input.count() > 0:
+                    email_input.fill(creds["email"])
+                pw_input = page.locator('input[type="password"]').first
+                if pw_input.count() > 0:
+                    pw_input.fill(creds["password"])
+                submit = page.locator(
+                    '[data-automation-id="signInSubmitButton"], '
+                    'button:has-text("Sign In"), '
+                    'button[type="submit"], input[type="submit"]'
+                ).first
+                if submit.count() > 0:
+                    try:
+                        submit.click(timeout=5000)
+                    except Exception:
+                        submit.click(force=True, timeout=5000)
+                    time.sleep(5)
+                    print("  LOGIN: submitted (generic)", file=sys.stderr)
             return True
         except Exception as e:
             print(f"  LOGIN_FAIL: {e}", file=sys.stderr)
