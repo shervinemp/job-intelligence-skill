@@ -90,6 +90,36 @@ def _determine_outcome(page, ctx, pages_before, url_before, submit_text_before):
     except Exception as ve:
         print(f"  VISION_SKIP: {ve}", file=sys.stderr)
 
+    # 6.5 Session timeout — submit returned to login wall or error
+    # text saying the session expired. This is NOT a submission
+    # failure — the user needs to re-auth and retry. Emit a
+    # distinct signal so the orchestrator knows to retry rather
+    # than treat as rejected.
+    try:
+        session_expired = page.evaluate("""() => {
+            const txt = (document.body.innerText || '').toLowerCase();
+            // Signal patterns from common ATSs:
+            //   - "Your session has expired"
+            //   - "Please log in to continue"
+            //   - "Session timed out"
+            //   - Workday: returns to sign-in form with no greeting
+            if (/session (has )?expired|session timed out|your session has expired/i.test(txt))
+                return true;
+            const visiblePws = Array.from(document.querySelectorAll('input[type="password"]'))
+                .filter(p => p.offsetParent !== null);
+            // If a password field reappeared with no greeting AND no
+            // error text, likely session was invalidated mid-submit.
+            if (visiblePws.length > 0) {
+                if (/sign in|log in|please login/i.test(txt)
+                    && !/invalid|incorrect|failed/i.test(txt)) return true;
+            }
+            return false;
+        }""")
+        if session_expired:
+            return "session_expired", "session expired mid-submit — re-auth required"
+    except Exception:
+        pass
+
     # 7. Uncertain — tried everything
     return "uncertain", "all detection methods exhausted"
 
@@ -264,11 +294,23 @@ def cmd_submit(jid, confirm=False, force=False):
                     emit_status("validation_error", f"investigation: {reason}")
                     emit_next("act --fill", "fix validation errors then resubmit")
                     return 1
-                # uncertain — mark as applied (conservative, prevents duplicate)
+                if outcome == "session_expired":
+                    # Session died between fill and submit — form was
+                    # silently invalidated. Don't mark as applied
+                    # (submit didn't go through), clear the guard so
+                    # user can re-auth and retry.
+                    state["submit_clicked"] = False
+                    save_state(state)
+                    emit_status("session_expired", f"investigation: {reason}")
+                    emit_next("login",
+                              "re-auth then 'act --fill' to regenerate the form "
+                              "and resubmit")
+                    return 1
+                # uncertain - mark as applied (conservative, prevents duplicate)
                 # but flag for human review
-                print("  UNCERTAIN — marking as applied (conservative), flagging for review", file=sys.stderr)
+                print("  UNCERTAIN - marking as applied (conservative), flagging for review", file=sys.stderr)
                 mark_applied(jid)
-                emit_status("submitted", f"uncertain outcome — {reason}. Review recommended.")
+                emit_status("submitted", f"uncertain outcome - {reason}. Review recommended.")
                 emit_next("verify", "please verify this submission was received")
                 return 0
 
@@ -447,10 +489,23 @@ def cmd_submit(jid, confirm=False, force=False):
                     for e in errors[:5]:
                         print(f"    ! {e[:80]}", file=sys.stderr)
                     state["submit_errors"] = errors
-                    state["submit_clicked"] = False  # form rejected — safe to retry
+                    state["submit_clicked"] = False  # form rejected - safe to retry
                     save_state(state)
                     emit_status("validation_error", f"{len(errors)} field(s) need fixing")
                     emit_next("act --fill", "fix validation errors then resubmit")
+                    return 1
+
+                if outcome == "session_expired":
+                    # Form silently invalidated mid-fill. Do NOT mark as
+                    # applied (submit didn't go through). Clear guard so
+                    # user can re-auth and retry without --force.
+                    state["submit_clicked"] = False
+                    state["submit_errors"] = [reason]
+                    save_state(state)
+                    emit_status("session_expired", reason)
+                    emit_next("login",
+                              "re-authenticate in Chrome then 'act --fill' to "
+                              "regenerate form and resubmit (no --force needed)")
                     return 1
 
                 # uncertain — click succeeded, no validation errors, no success signal

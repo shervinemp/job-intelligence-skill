@@ -277,8 +277,8 @@ _LEAVE_PAGE_MODAL = '''<html><body>
 # content. Tests the "already submitted" detection path.
 _SUCCESS_MODAL_MID_RUN = '''<html><body>
 <form style="display:none;">
-  <input type="email" name="email" required/>
-  <button type="submit">Submit</button>
+  <input type="email" required/>
+  <button>Submit</button>
 </form>
 <div role="dialog" aria-modal="true" id="success-modal"
      style="position:fixed;top:30%;background:white;padding:40px;">
@@ -286,6 +286,90 @@ _SUCCESS_MODAL_MID_RUN = '''<html><body>
   <p>We'll be in touch within 2 weeks.</p>
   <button>Continue</button>
 </div>
+</body></html>'''
+
+
+# ─── Edge-case curveballs — production-style interstitials ─────────
+# These mirror real failure modes we identified in the audit:
+#   - 2FA interstitial after login succeeds
+#   - Session-expired page after submit on a stale form
+#   - Drag-and-drop file upload zone (no <input type=file>)
+#   - jQuery UI datepicker calendar widget
+
+
+# 2FA interstitial: after login credentials accepted, the platform
+# asks for a 6-digit SMS/app code. The capability scanner should
+# detect `two_factor_signals >= 1` (visible numeric input maxlength=6
+# OR autocomplete='one-time-code'). _login_check returns "2fa" so
+# the multi-password trial loop does NOT try more passwords (they'd
+# just re-trigger 2FA).
+_2FA_INTERSTITIAL = '''<html><body>
+<h1>Two-factor authentication</h1>
+<p>Enter the 6-digit code sent to your phone</p>
+<form>
+  <input type="text" inputmode="numeric" maxlength="6"
+         autocomplete="one-time-code" pattern="[0-9]*" name="code"/>
+  <button type="submit">Verify</button>
+</form>
+</body></html>'''
+
+
+# Session expired: form appears valid (password field visible) but
+# body text says session expired. Tests that _determine_outcome
+# classifies this as "session_expired" rather than "uncertain" or
+# "rejected". Without this detection, the orchestrator would mark as
+# applied (conservative) and skip a working submission opportunity.
+_SESSION_EXPIRED_PAGE = '''<html><body>
+<h1>Your session has expired</h1>
+<p>Please log in to continue</p>
+<form>
+  <input type="email" name="email" placeholder="Email"/>
+  <input type="password" name="password" placeholder="Password"/>
+  <button type="submit">Sign In</button>
+</form>
+</body></html>'''
+
+
+# Drag-and-drop file upload: dropzone.js pattern. File inputs are
+# hidden (display:none), the visible drop area is a div. The
+# capability scanner should flag `dropzone_signals >= 1` so the
+# fill loop knows to synth a DataTransfer event (future work — for
+# now, this detection just surfaces the pattern).
+_DROPZONE_UPLOAD = '''<html><body>
+<form>
+  <input type="email" name="email" placeholder="Email" required/>
+  <div class="dropzone dz-clickable" id="resume-upload"
+       data-dropzone="true" style="border:2px dashed #ccc;padding:40px;">
+    <p>Drag your resume here or click to browse</p>
+    <input type="file" name="resume" style="display:none;"/>
+  </div>
+  <button type="submit">Submit</button>
+</form>
+</body></html>'''
+
+
+# jQuery UI calendar: a datepicker popup with `.ui-datepicker-calendar`
+# class. The capability scanner should flag `calendar_signals >= 1`.
+# The DatepickerFiller handles input filling after the popup is open;
+# the scanner signal lets the probe router know the form has calendar
+# widgets (defensive — alternative input paths work).
+_JQUERY_CALENDAR = '''<html><body>
+<form>
+  <label>Available Start Date<input type="text" id="datepicker"/></label>
+  <div class="ui-datepicker ui-widget ui-widget-content ui-helper-clearfix ui-corner-all"
+       style="display:block;">
+    <div class="ui-datepicker-header ui-widget-header ui-helper-clearfix ui-corner-all">
+      <a class="ui-datepicker-prev">Prev</a>
+      <span>July 2026</span>
+      <a class="ui-datepicker-next">Next</a>
+    </div>
+    <table class="ui-datepicker-calendar">
+      <thead><tr><th>Mo</th><th>Tu</th><th>We</th><th>Th</th><th>Fr</th></tr></thead>
+      <tbody><tr><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td></tr></tbody>
+    </table>
+  </div>
+  <button type="submit">Submit</button>
+</form>
 </body></html>'''
 
 
@@ -699,6 +783,121 @@ class AlertPopupFixtures(unittest.TestCase):
         h_without = self.profile_hash(self.scan(p_without))
         self.assertNotEqual(h_with, h_without,
                             "form + modal must hash distinctly from bare form")
+
+
+@unittest.skipIf(_NO_JSDOM, "jsdom not installed (npm install jsdom)")
+class EdgeCaseFixtures(unittest.TestCase):
+    """Edge cases identified in the production audit.
+
+    These mirror real failure modes:
+      - 2FA interstitial → _login_check returns "2fa", trial loop exits
+      - Session expired page → _determine_outcome returns "session_expired"
+      - Dropzone file upload → capability scanner flags dropzone_signals
+      - jQuery calendar → capability scanner flags calendar_signals
+    """
+
+    def setUp(self):
+        from apply.common.mock_page import CorpusPage
+        from apply.common.capabilities import scan, summarize, profile_hash
+        from apply.common.field_reader import read_fields
+        self.CorpusPage = CorpusPage
+        self.scan = scan
+        self.summarize = summarize
+        self.profile_hash = profile_hash
+        self.read_fields = read_fields
+
+    def test_2fa_interstitial_detected_by_scanner(self):
+        """The 6-digit one-time-code input must flag
+        two_factor_signals >= 1 so the probe router can short-circuit
+        before probing a non-form interstitial."""
+        p = self.CorpusPage.from_html(_2FA_INTERSTITIAL)
+        profile = self.scan(p)
+        self.assertGreaterEqual(profile["two_factor_signals"], 1,
+                                "6-digit numeric input must flag 2FA")
+        # suggest_strategy returns None for 2FA pages — not a form
+        from apply.common.capabilities import suggest_strategy
+        self.assertIsNone(suggest_strategy(profile),
+                          "2FA interstitial should not suggest a probe strategy")
+
+    def test_2fa_login_check_returns_2fa(self):
+        """_login_check must return "2fa" when it sees the 6-digit code
+        input — NOT "yes"/"no"/"uncertain"."""
+        from apply.act.fill import _login_check
+        # _login_check uses page.evaluate which CorpusPage supports
+        p = self.CorpusPage.from_html(_2FA_INTERSTITIAL)
+        # CorpusPage.evaluate doesn't take extra arg — _login_check
+        # calls page.evaluate(str) so this should work.
+        result = _login_check(p)
+        self.assertEqual(result, "2fa",
+                         f"_login_check should return '2fa' for the interstitial, got {result!r}")
+
+    def test_session_expired_detected_by_outcome(self):
+        """_determine_outcome must return "session_expired" when the page
+        body says "Your session has expired" and shows a password field.
+        Without this check, submit would mark as 'uncertain' → applied,
+        hiding a failed submit."""
+        from apply.act.submit import _determine_outcome
+
+        class _FakeCtx:
+            """Minimal BrowserContext stub: _check_submit_success iterates
+            ctx.pages. Empty list short-circuits to no success."""
+            pages = []
+            def on(self, *a, **k): pass
+
+        p = self.CorpusPage.from_html(_SESSION_EXPIRED_PAGE)
+        outcome, reason = _determine_outcome(p, _FakeCtx(), set(),
+                                              url_before="https://x.com/apply",
+                                              submit_text_before="Submit")
+        self.assertEqual(outcome, "session_expired",
+                         f"expected session_expired, got {outcome}: {reason}")
+
+    def test_dropzone_detected_by_scanner(self):
+        """Drag-and-drop file zones must flag dropzone_signals >= 1 so
+        the fill loop knows there's no upload button to click.
+        The hidden <input type="file"> inside the dropzone is
+        display:none, so the scanner correctly reports file_inputs=0
+        from the visible-fields perspective. The dropzone_signals
+        flag is what tells the fill loop a file upload area exists."""
+        p = self.CorpusPage.from_html(_DROPZONE_UPLOAD)
+        profile = self.scan(p)
+        self.assertGreaterEqual(profile["dropzone_signals"], 1,
+                                f"dropzone div must flag dropzone_signals: {profile.get('dropzone_signals')}")
+        # file_inputs may be 0 (hidden input is not visible) — this
+        # is correct. dropzone_signals is the relevant signal here.
+
+    def test_jquery_calendar_detected_by_scanner(self):
+        """jQuery UI datepicker popup must flag calendar_signals >= 1.
+        Defensive signal — the existing DatepickerFiller handles input
+        filling, but knowing the page has a calendar lets the probe
+        router prefer standard depth (calendars re-render inputs)."""
+        p = self.CorpusPage.from_html(_JQUERY_CALENDAR)
+        profile = self.scan(p)
+        self.assertGreaterEqual(profile["calendar_signals"], 1,
+                                f"jQuery datepicker must flag calendar_signals: {profile.get('calendar_signals')}")
+        # The text input is still visible for the DatepickerFiller
+        self.assertGreaterEqual(profile["visible_text_inputs"], 1)
+
+    def test_2fa_distinct_hash_from_login_wall(self):
+        """A 2FA interstitial must hash distinctly from a bare login
+        wall — the two_factor_signals signal is stable-keyed."""
+        p_2fa = self.CorpusPage.from_html(_2FA_INTERSTITIAL)
+        p_login = self.CorpusPage.from_html(_LOGIN_WALL)
+        h_2fa = self.profile_hash(self.scan(p_2fa))
+        h_login = self.profile_hash(self.scan(p_login))
+        self.assertNotEqual(h_2fa, h_login,
+                            "2FA interstitial must hash distinctly from login wall")
+
+    def test_dropzone_distinct_hash_from_plaintext_form(self):
+        """Form with dropzone hashes distinctly from form without —
+        dropzone_signals is a stable key."""
+        p_drop = self.CorpusPage.from_html(_DROPZONE_UPLOAD)
+        p_plain = self.CorpusPage.from_html(
+            '<form><input type="email" required/>'
+            '<input type="file" required/><button>Submit</button></form>')
+        h_drop = self.profile_hash(self.scan(p_drop))
+        h_plain = self.profile_hash(self.scan(p_plain))
+        self.assertNotEqual(h_drop, h_plain,
+                            "dropzone form must hash distinctly from plain-file form")
 
 
 if __name__ == "__main__":

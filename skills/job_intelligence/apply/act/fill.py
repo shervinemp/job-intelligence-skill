@@ -9,8 +9,82 @@ from apply.act.helpers import (
     _wait_for_fields, _probe_form, _fill_with_playwright, _find_next_button,
     _empty_required, _click_action, _verify_with_ask_api, _detect_submit_button,
     _field_key, _build_ans_dict, _resolve_linkedin_apply, _wire_dialogs,
-    _is_junk_field,
+    _is_junk_field, _dismiss_confirm_modal,
 )
+
+
+def _scan_capability(page):
+    """Cheap capability scan. Returns profile dict or None on failure.
+    Used by mid-fill decisions to detect popups, honeypots, and
+    shape changes between multi-page iterations."""
+    try:
+        from apply.common.capabilities import scan
+        return scan(page)
+    except Exception:
+        return None
+
+
+def _dismiss_popups_if_present(page, profile=None, *, verbose=True):
+    """Mid-fill confirm-modal dismissal.
+
+    If `confirm_modal_signals > 0` (visible OK/Submit button modal
+    without form inputs), dismiss it before probe/fill — otherwise
+    the underlying form is click-intercepted and every field appears
+    as no_answer.
+
+    Cheap even when called with profile=None (re-scans). Best-effort:
+    never lets dismissal failure abort the fill loop.
+    """
+    if profile is None:
+        profile = _scan_capability(page)
+    if not profile:
+        return
+    if profile.get("confirm_modal_signals", 0) > 0:
+        try:
+            _dismiss_confirm_modal(page)
+            if verbose:
+                print("  Dismissed confirm modal mid-fill "
+                      f"(confirm_modal_signals={profile['confirm_modal_signals']})",
+                      file=sys.stderr)
+        except Exception as e:
+            if verbose:
+                print(f"  POPUP_DISMISS_FAIL: {e}", file=sys.stderr)
+
+
+def _detect_2fa(page):
+    """Two-factor auth interstitial detection.
+
+    After login succeeds, some platforms require a 6-digit code
+    delivered via SMS/app. The capability scanner sees a numeric
+    input with maxlength 4-8 and `inputmode='numeric'` (or
+    autocomplete='one-time-code'). Returns True when this pattern
+    is detected — caller should emit `2fa_required` instead of
+    `login_succeeded` (otherwise the orchestrator would proceed to
+    fill as if logged-in, hitting a wall).
+    """
+    try:
+        return page.evaluate("""() => {
+            const inputs = document.querySelectorAll(
+                'input[autocomplete*="one-time-code" i],'  // explicit hint (ATS-aware browsers)
+                + ' input[inputmode="numeric"][maxlength],'
+                + ' input[type="tel"][maxlength],'
+                + ' input[pattern*="^[0-9]{N}" i]'  // rare, but some ATS use tel + pattern
+            );
+            for (const inp of inputs) {
+                if (inp.offsetParent === null) continue;
+                const ml = parseInt(inp.getAttribute('maxlength') || '0', 10);
+                if (ml >= 4 && ml <= 8) return true;
+                if (inp.getAttribute('autocomplete') &&
+                    /one-time-code/i.test(inp.getAttribute('autocomplete'))) return true;
+            }
+            // Body text hints — "Enter the 6-digit code sent to" etc.
+            const txt = (document.body.innerText || '').toLowerCase();
+            if (/\\b(\\d{1,2})-?digit (code|verification|otp)\\b/.test(txt)) return true;
+            if (/two-?factor|2fa|verification code|authentication code|enter the code/i.test(txt)) return true;
+            return false;
+        }""")
+    except Exception:
+        return False
 
 
 def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
@@ -194,6 +268,23 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
             seen = set()
             for page_num in range(1, max_pages + 1):
+                # Edge 1: dismiss any confirmed popups before probing —
+                # mid-fill "Please confirm your email" / "Are you sure?"
+                # modals click-intercept form fields otherwise.
+                _dismiss_popups_if_present(page)
+                # Edge 2: re-scan capability per page iteration —
+                # multi-step forms often have different shapes on
+                # later pages (dialog on page 1 → bare form on page 2).
+                # The capability scan is cheap (one page.evaluate) and
+                # fresh data beats stale observations.
+                page_profile = _scan_capability(page)
+                if page_profile:
+                    # Mid-page registry refresh if URL changed (some
+                    # platforms redirect between submit-page steps).
+                    if page.url and page.url != url and "about:blank" not in page.url:
+                        new_reg = resolve_registry(page.url)
+                        if new_reg:
+                            reg = new_reg
                 pr = _probe_form(page, reg, jid, allow_vision=(page_num == 1))
                 if page.url and page.url != url and "about:blank" not in page.url:
                     state["external_url"] = page.url
@@ -271,6 +362,9 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             # Limited to 2 sweeps to avoid infinite loops on dynamic forms.
             for sweep in range(2):
                 time.sleep(1)
+                # Dismiss popups that may have appeared from previous
+                # control clicks (radio/select can trigger helper modals).
+                _dismiss_popups_if_present(page)
                 pr2 = _probe_form(page, reg, jid, allow_vision=False)
                 new_fields = [
                     f for f in (pr2.fields or [])
@@ -474,6 +568,26 @@ def _handle_login_wall(page, jid, quick):
                         except Exception:
                             pass
                     return True
+                if result == "2fa":
+                    # Login credentials accepted — platform wants a 2FA
+                    # code now. Don't try more passwords (they're all
+                    # the same account) — they'd just re-trigger 2FA.
+                    # Save the verified password and surface for the
+                    # user to complete 2FA manually.
+                    print(f"  LOGIN: 2FA required after password #{idx+1} (credentials accepted)",
+                          file=sys.stderr)
+                    if tried_pw != creds["password"]:
+                        try:
+                            remaining = [p for p in creds["passwords"] if p != tried_pw]
+                            save_creds(domain, creds["email"], tried_pw, passwords=remaining)
+                        except Exception:
+                            pass
+                    emit_status("2fa_required",
+                                f"domain={domain} credentials accepted — "
+                                "complete 2FA manually then rerun")
+                    emit_next("login",
+                              f"domain={domain} jid={jid} — complete 2FA in Chrome then rerun fill")
+                    return False
                 if result == "uncertain":
                     # SPA may be slow — wait longer and re-check once.
                     time.sleep(5)
@@ -692,11 +806,14 @@ def _login_check(page):
       "yes"      — confidently logged in (password field gone, OR
                    greeting text found, OR sign-in form disappeared)
       "no"       — confidently failed (error text found)
+      "2fa"      — login succeeded but 2FA code is now required.
+                   Caller must NOT treat this as success — leave the
+                   user at the 2FA prompt so they can complete it.
       "uncertain"— form still visible, no error, no greeting — could be
                    slow SPA transition. Caller should wait and re-check.
     """
     try:
-        result = page.evaluate("""() => {
+        result = page.evaluate(r"""() => {
             const txt = (document.body.innerText || '').toLowerCase();
             const visiblePws = Array.from(document.querySelectorAll('input[type="password"]'))
                 .filter(p => p.offsetParent !== null);
@@ -708,6 +825,30 @@ def _login_check(page):
             // Greetings indicate success regardless of form state.
             const greetings = /signed in as|welcome back|my account|log out|sign out|hi,\\s|hello,\\s/im;
             if (greetings.test(txt)) return 'yes';
+
+            // 2FA interstitial — detect BEFORE error checks, since
+            // an accompanying "verification required" message can
+            // contain 'incorrect'-like phrases that would misroute
+            // to 'no'.
+            // Triggers: numeric input with maxlength 4-8, OR
+            // autocomplete='one-time-code', OR explicit body phrase.
+            const twoFAinputs = document.querySelectorAll(
+                'input[autocomplete*="one-time-code" i],'
+                + 'input[inputmode="numeric"][maxlength],'
+                + 'input[type="tel"][maxlength]'
+            );
+            for (const inp of twoFAinputs) {
+                if (inp.offsetParent === null) continue;
+                const ml = parseInt(inp.getAttribute('maxlength') || '0', 10);
+                const ac = inp.getAttribute('autocomplete') || '';
+                if ((ml >= 4 && ml <= 8) || /one-time-code/i.test(ac)) {
+                    return '2fa';
+                }
+            }
+            if (/\\b\d{1,2}-?digit (code|verification|otp)\\b/.test(txt)
+                || /two-?factor|2fa|verification code|authentication code|enter the code/i.test(txt)) {
+                return '2fa';
+            }
 
             // Error text indicates failure.
             const errors = /invalid email|incorrect password|password incorr|account does not exist|no account found|account is locked|failed login|wrong password|email or password is incorrect/im;

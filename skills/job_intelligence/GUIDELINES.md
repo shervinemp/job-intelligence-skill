@@ -39,11 +39,11 @@ YAML `probe.widgets` wins; ARIA auto-discovery fills the gaps via
 | Failure capture | `inspector.py:_capture_failure` | Cascade-miss → save DOM + capability profile. Prunes to 25 most recent. | `~/.ji/registry-failures/<ts>_<hash>_{dom.html,probe.json}` |
 | CorpusPage test harness | `apply/common/mock_page.py` | jsdom-backed page that runs real `_SCAN_JS` / `_READER_JS` against saved HTML via node subprocess. No browser needed. Skip-when-jsdom-missing. | Bridge in `$TEMP/corpus_*_bridge.js` |
 
-## Test coverage (144 pass + 64 subtests, zero pyflakes)
+## Test coverage (151 pass + 64 subtests, zero pyflakes)
 
 | File | Covers |
 |------|--------|
-| `tests/test_corpus.py` | Real `_SCAN_JS` + `_READER_JS` vs synthetic fixtures — 5 canonical shapes (login-wall, Workday-like, Ashby-like, Greenhouse-like, expired) + 5 curveballs (cookie overlay, honeypot-in-dialog, conditional reveal, obfuscated React label, login+honeypot compound) + 3 alert-popup curveballs (confirm modal mid-fill, leave-page modal, success modal post-submit). Skips if jsdom unavailable. |
+| `tests/test_corpus.py` | Real `_SCAN_JS` + `_READER_JS` vs synthetic fixtures — 5 canonical + 5 curveball + 6 alert-popup + 7 edge-case (2FA interstitial, session-expired post-submit, dropzone, jQuery calendar, 2FA login check returns '2fa', 2FA distinct hash, dropzone distinct hash). Skips if jsdom unavailable. |
 | `tests/test_probe_router.py` | Capability hash stability/variance, observation confirm/demote flow, widget merge priority, failure capture artifact + pruning, `_build_registry_widgets` YAML-wins-then-auto chain. |
 | `tests/test_*.py` (existing) | 96 baseline. |
 | `tests/test_probe_router.py` | Capability hash stability/variance, observation confirm/demote flow, widget merge priority, failure capture artifact + pruning, `_build_registry_widgets` YAML-wins-then-auto chain. |
@@ -95,14 +95,82 @@ Detection at scan-time:
 
 Dismissal at fill time:
   - `helpers.py:_dismiss_confirm_modal(page)` clicks OK/confirm/submit
-    buttons inside visible modals. Currently called only at submit
-    time (submit.py:419).
+    buttons inside visible modals. Called at two sites:
+    - submit time (`submit.py:419`)
+    - mid-fill (`fill.py:_dismiss_popups_if_present`) — runs at the
+      top of each page iteration AND between conditional-reveal sweeps
+      when `confirm_modal_signals > 0` is detected. Catches popups
+      that appear after typing email ("Please confirm") or before
+      navigating ("Are you sure you want to leave?").
   - Workday cookie banner: `fill.py:_handle_login_wall` clicks
     `legalNoticeAcceptButton` before login flow.
   - `confirm_modal_signals` is a stable capability hash key — a
     platform that reliably shows mid-fill confirms hashes distinctly
     from the bare form. The drift detector can flag when a platform
     stops showing the confirm popup (or adds one).
+
+## Two-factor auth (2FA) interstitial
+
+Detected at two layers:
+
+**Capability scanner** — `two_factor_signals: int`: counts visible
+numeric inputs with `maxlength` 4-8, OR `autocomplete='one-time-code'`.
+Included in the stable profile hash so a platform that requires 2FA
+hashes distinctly from one that doesn't.
+
+**`fill.py:_login_check`** returns `"2fa"` (the third result besides
+`yes`/`no`/`uncertain`) when:
+  - Visible numeric input with maxlength 4-8, OR
+  - `autocomplete='one-time-code'`, OR
+  - Body text matches `\b\d{1,2}-?digit (code|verification|otp)\b`
+    or `two-factor|2fa|verification code|authentication code|enter the code`
+
+The multi-password trial loop in `_handle_login_wall` checks for
+`"2fa"` BEFORE the `uncertain` branch — on 2FA detection it:
+  - Saves the verified password as primary (creds were accepted)
+  - Emits `STATUS: 2fa_required` + `NEXT: login` (with instructions
+    to complete 2FA in Chrome then rerun)
+  - Returns False (don't proceed to fill the form)
+
+Critical: trying more passwords would just re-trigger 2FA on the
+same account. The first 2FA detection stops the trial.
+
+## Session-expired detection (`submit.py:_determine_outcome`)
+
+After submit click, the outcome cascade checks for session-expired
+text BEFORE falling to "uncertain". Detection patterns:
+  - Body text: `session (has )?expired|session timed out`
+  - Password field reappeared + body has `sign in|log in|please login`
+    WITHOUT any validation-error text (rules out wrong password)
+
+On detection: `outcome = "session_expired"` → `cmd_submit` clears
+`submit_clicked` (retry doesn't need `--force`), emits
+`STATUS: session_expired` + `NEXT: login` so the orchestrator
+re-authenticates and retries the fill, rather than marking as
+"applied" (which would skip the working submission forever).
+
+## Dropzone file upload (`dropzone_signals`)
+
+`dropzone.js`-style drag-and-drop upload zones are detected via
+`.dropzone, [class*="dropzone"], [data-dropzone], [class*="drop-zone"],
+[class*="filedrop"], div[ondragover], div[ondrop]` — filtered to
+exclude visible text inputs (false-positive guard).
+
+In the stable profile hash. Fill path: NOT yet implemented
+(`_try_filechooser_upload` needs a synthetic `DataTransfer` event
+instead of clicking an upload button). The signal surfaces the
+pattern so the orchestrator knows manual intervention is needed.
+
+## jQuery UI / calendar (`calendar_signals`)
+
+Datepicker popups detected via `.ui-datepicker-calendar,
+.ui-datepicker, [class*="DayPicker"][class*="Month"], .pika-single,
+.pika-table, [class*="calendar"][class*="day"],
+[data-automation-id="calendar"], [role="grid"][class*="calendar"]`.
+
+In the stable profile hash. The existing `DatepickerFiller` handles
+text input after the popup opens. Defensive signal — alternative
+input paths work without it.
 
 ## Other live state (carry-over from prior sessions)
 
@@ -125,12 +193,15 @@ Dismissal at fill time:
 - Gmail staging blocked (OAuth expired — `gmail-cli auth add`)
 - Skyvern server stale (ECONNREFUSED on 9222 — needs restart)
 - ~100 active LinkedIn Easy Apply jobs waiting on `apply.py auto`
-- 13 active jobs with external ATS URLs (Harvey/Ashby, Scribd, TRM Labs, Narvar/Greenhouse, Lyft/CareerPuck, Behaviour ×2, LTM/Ripplehire)
-- CrowdStrike Workday needs shared password pool population (`creds shared-set`)
-- Mid-fill confirm modal dismissal — `confirm_modal_signals` is now
-  detected by capability scanner, but `_dismiss_confirm_modal` is only
-  called at submit time. Should be called between probe iterations
-  when `confirm_modal_signals > 0` is observed mid-fill.
+- 13 active jobs with external ATS URLs (Harvey/Ashby, Scribd, TRM
+  Labs, Narvar/Greenhouse, Lyft/CareerPuck, Behaviour ×2,
+  LTM/Ripplehire)
+- CrowdStrike Workday needs shared password pool population
+  (`creds shared-set`)
+- Dropzone fill path NOT yet implemented — `dropzone_signals` is
+  detected by the scanner, but the fill loop still uses
+  `_try_filechooser_upload` which expects an upload button. A future
+  synthetic DataTransfer event via `page.evaluate` will handle this.
 
 ## Conventions
 

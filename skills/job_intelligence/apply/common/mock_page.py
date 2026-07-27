@@ -83,9 +83,18 @@ process.stdin.on('end', () => {
                 return this.parentNode || null;
             },
         });
-        // Patch: jsdom doesn't implement innerText. Alias to textContent.
+        // Patch: jsdom doesn't implement innerText. Alias to textContent,
+        // but strip <script> and <style> content (innerText excludes
+        // these by spec — textContent includes them, which leaks our
+        // own injected script source into the body text and trips regex
+        // patterns in _SCAN_JS / _login_check).
+        const _stripInvisible = (root) => {
+            const clone = root.cloneNode(true);
+            clone.querySelectorAll('script, style, noscript').forEach(el => el.remove());
+            return clone.textContent || '';
+        };
         Object.defineProperty(window.HTMLElement.prototype, 'innerText', {
-            get() { return this.textContent || ''; },
+            get() { return _stripInvisible(this); },
             set(v) { this.textContent = String(v || ''); },
         });
         // Patch: getBoundingClientRect — jsdom returns zeros, which is fine.

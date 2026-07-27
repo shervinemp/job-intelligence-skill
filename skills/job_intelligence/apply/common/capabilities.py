@@ -51,6 +51,9 @@ class CapabilityProfile(TypedDict, total=False):
     confirm_modal_signals: int      # visible HTML modals with confirm/ok button text
     success_modal_text: bool        # body text suggests "submitted successfully"
     error_modal_text: bool          # body text shows validation error in a modal
+    dropzone_signals: int           # dropzone.js / drag-drop file upload areas
+    calendar_signals: int           # jQuery UI / React-Day-Picker calendar widgets
+    two_factor_signals: int         # 6-digit 2FA / one-time-code input pattern
 
 
 _SCAN_JS = r"""() => {
@@ -251,6 +254,65 @@ _SCAN_JS = r"""() => {
         }
     });
 
+    // Dropzone / drag-and-drop file upload detection. These widgets
+    // use a styled container (NOT an <input type=file>) where the
+    // user drags files onto a region. _try_filechooser_upload in
+    // helpers.py won't fire because there's no upload button —
+    // detection here surfaces the pattern so fillers can synth a
+    // DataTransfer event (future work).
+    let dropzoneCount = 0;
+    document.querySelectorAll(
+        '.dropzone, [class*="dropzone"], [data-dropzone], '
+        + '[class*="drop-zone"], [class*="filedrop"], '
+        + '[role="button"][aria-label*="drop" i], '
+        + 'div[ondragover], div[ondrop]'
+    ).forEach(el => {
+        if (el.offsetParent === null) return;
+        // Filter out obvious false positives — anything with text
+        // inputs is a form, not a dropzone.
+        if (el.querySelector('input:not([type=file]):not([type=hidden])')) return;
+        dropzoneCount++;
+    });
+
+    // Calendar widget detection — jQuery UI datepicker, React-Day-
+    // Picker, Pikaday, etc. These pop up a calendar grid (table with
+    // class containing "calendar" or "datepicker") when a text input
+    // is focused. Defensive — the existing DatepickerFiller handles
+    // inputs after the calendar is open, but the presence signal lets
+    // the probe router prefer the standard depth (calendars re-render
+    // inputs, so document-level probing works).
+    let calendarCount = 0;
+    document.querySelectorAll(
+        '.ui-datepicker-calendar, .ui-datepicker, '
+        + '[class*="DayPicker"][class*="Month"], '
+        + '.pika-single, .pika-table, '
+        + '[class*="calendar"][class*="day"], '
+        + '[data-automation-id="calendar"], '
+        + '[role="grid"][class*="calendar"]'
+    ).forEach(el => {
+        if (el.offsetParent === null) return;
+        calendarCount++;
+    });
+
+    // Two-factor auth interstitial — 6-digit numeric code input,
+    // OR one-time-code autocomplete. Detected here even though
+    // _login_check also does — the scan-time signal lets the probe
+    // router skip probing since this page is not a form (it's a 2FA
+    // interstitial between login and the apply form).
+    let twoFactorCount = 0;
+    document.querySelectorAll(
+        'input[autocomplete*="one-time-code" i],'
+        + 'input[inputmode="numeric"][maxlength],'
+        + 'input[type="tel"][maxlength]'
+    ).forEach(inp => {
+        if (inp.offsetParent === null) return;
+        const ml = parseInt(inp.getAttribute('maxlength') || '0', 10);
+        const ac = inp.getAttribute('autocomplete') || '';
+        if ((ml >= 4 && ml <= 8) || /one-time-code/i.test(ac)) {
+            twoFactorCount++;
+        }
+    });
+
     return {
         dialog: visibleDialogs > 0,
         nested_dialog: nestedDialog,
@@ -278,6 +340,9 @@ _SCAN_JS = r"""() => {
         confirm_modal_signals: confirmModalCount,
         success_modal_text: successModalText,
         error_modal_text: errorModalText,
+        dropzone_signals: dropzoneCount,
+        calendar_signals: calendarCount,
+        two_factor_signals: twoFactorCount,
         page_text_length: txt.length,
     };
 }"""
@@ -316,6 +381,10 @@ def _hash_profile(profile: dict) -> str:
         # confirm modals reliably should hash consistently). Success/error
         # modal text is copy-driven volatile, so excluded.
         "confirm_modal_signals",
+        # Dropzone / calendar / 2FA interstitial presence are
+        # structural — a platform that uses dropzone.js reliably
+        # should hash distinctly from one that uses <input type=file>.
+        "dropzone_signals", "calendar_signals", "two_factor_signals",
     ]
     # Bucket counts: 0 → 0, 1-2 → 1, 3-10 → 2, 11+ → 3 — stable across
     # small form-size changes (a 5-question form vs a 7-question one
@@ -361,8 +430,16 @@ def suggest_strategy(profile: Optional[dict]) -> Optional[str]:
     Strategy order is by strength of signal. Returns None if no
     signal fires (let the full cascade run in declaration order).
     The caller always runs the cascade as a backstop regardless.
+
+    Special-case: 2FA / dropzone / success-modal pages aren't forms
+    to probe — return None so the probe caller can short-circuit
+    via `_scan_capability` + caller decision before even probing.
     """
     if not profile:
+        return None
+    # 2FA / success modal — not a form, no probe needed.
+    # Caller should check these before calling probe().
+    if profile.get("two_factor_signals") or profile.get("success_modal_text"):
         return None
     # Prioritise by capability — dialog wins over iframe over widgets
     # because modal forms hide standard inputs from a document-level
@@ -433,6 +510,9 @@ def summarize(profile: Optional[dict]) -> str:
     if profile.get("confirm_modal_signals"): parts.append(f"confirm-modal:{profile['confirm_modal_signals']}")
     if profile.get("success_modal_text"): parts.append("success-modal")
     if profile.get("error_modal_text"): parts.append("error-modal")
+    if profile.get("dropzone_signals"): parts.append(f"dropzone:{profile['dropzone_signals']}")
+    if profile.get("calendar_signals"): parts.append(f"calendar:{profile['calendar_signals']}")
+    if profile.get("two_factor_signals"): parts.append(f"2fa:{profile['two_factor_signals']}")
     if profile.get("apply_buttons"):
         joined = "','".join(profile['apply_buttons'][:2])
         parts.append("apply:['" + joined + "']")
