@@ -402,7 +402,9 @@ _LOGIN_JS = r"""() => {
 def _handle_login_wall(page, jid, quick):
     """Detect login walls and auto-login or auto-create account.
     Returns True if we should continue to form fill, False to stop."""
-    from lib.credentials import get_creds, save_creds, get_account_defaults, gen_password, _domain_from_url
+    from lib.credentials import (
+        get_creds, save_creds, get_account_defaults, _domain_from_url,
+    )
 
     try:
         info = page.evaluate(_LOGIN_JS)
@@ -416,7 +418,7 @@ def _handle_login_wall(page, jid, quick):
 
     creds = get_creds(domain)
     if creds:
-        print(f"  Auto-login: {creds['email']}", file=sys.stderr)
+        print(f"  Auto-login: {creds['email']} ({len(creds['passwords'])} password(s))", file=sys.stderr)
         try:
             # Accept cookie banners that can intercept clicks (Workday, etc.)
             for sel in [
@@ -453,57 +455,28 @@ def _handle_login_wall(page, jid, quick):
                 except Exception:
                     continue
 
-            # Atomic fill+submit: find the sign-in form (1 password field),
-            # fill it, click submit — all in one JS call to avoid
-            # cross-form locator mismatches.
-            result = page.evaluate("""(creds) => {
-                const forms = Array.from(document.querySelectorAll('form'));
-                for (const f of forms) {
-                    if (f.offsetParent === null) continue;
-                    const pws = f.querySelectorAll('input[type="password"]');
-                    if (pws.length !== 1) continue;
-                    const btn = f.querySelector('[data-automation-id="signInSubmitButton"]');
-                    if (!btn) continue;
-                    const email = f.querySelector('input[type="email"], input[type="text"]');
-                    if (email) {
-                        email.focus();
-                        email.value = creds.email;
-                        email.dispatchEvent(new Event('input', {bubbles: true}));
-                        email.dispatchEvent(new Event('change', {bubbles: true}));
-                    }
-                    pws[0].focus();
-                    pws[0].value = creds.password;
-                    pws[0].dispatchEvent(new Event('input', {bubbles: true}));
-                    pws[0].dispatchEvent(new Event('change', {bubbles: true}));
-                    btn.click();
-                    return true;
-                }
-                return false;
-            }""", {"email": creds["email"], "password": creds["password"]})
-            if result:
+            # Try each password candidate until one succeeds (sign-in form
+            # disappears or URL changes).
+            tried_pw = ""
+            for tried_pw in creds["passwords"]:
+                _fill_signin_form(page, creds["email"], tried_pw)
                 time.sleep(5)
-                print("  LOGIN: submitted", file=sys.stderr)
-            else:
-                # Fallback: generic locator approach
-                print("  LOGIN: no sign-in form found, trying generic fill", file=sys.stderr)
-                email_input = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i]').first
-                if email_input.count() > 0:
-                    email_input.fill(creds["email"])
-                pw_input = page.locator('input[type="password"]').first
-                if pw_input.count() > 0:
-                    pw_input.fill(creds["password"])
-                submit = page.locator(
-                    '[data-automation-id="signInSubmitButton"], '
-                    'button:has-text("Sign In"), '
-                    'button[type="submit"], input[type="submit"]'
-                ).first
-                if submit.count() > 0:
-                    try:
-                        submit.click(timeout=5000)
-                    except Exception:
-                        submit.click(force=True, timeout=5000)
-                    time.sleep(5)
-                    print("  LOGIN: submitted (generic)", file=sys.stderr)
+                # Did sign-in succeed? Heuristic: password field is gone
+                # OR URL changed OR a logged-in greeting appeared.
+                if _login_succeeded(page):
+                    print(f"  LOGIN: OK with password #{creds['passwords'].index(tried_pw)+1}", file=sys.stderr)
+                    # Record which password worked to make it primary
+                    if tried_pw != creds["password"]:
+                        try:
+                            remaining = [p for p in creds["passwords"] if p != tried_pw]
+                            save_creds(domain, creds["email"], tried_pw, passwords=remaining)
+                            print(f"  LOGIN: promoted this password to primary for {domain}", file=sys.stderr)
+                        except Exception:
+                            pass
+                    return True
+                # Sign in failed — go back to sign-in form if needed.
+                _re_open_signin_form(page)
+            print(f"  LOGIN: all {len(creds['passwords'])} password(s) failed", file=sys.stderr)
             return True
         except Exception as e:
             print(f"  LOGIN_FAIL: {e}", file=sys.stderr)
@@ -535,7 +508,25 @@ def _handle_login_wall(page, jid, quick):
         emit_next("login", f"domain={domain} jid={jid}")
         return False
 
-    new_pw = gen_password()
+    # Pick a password that satisfies platform complexity rules, preferring
+    # the user's shared password pool entries when applicable so account
+    # creation stays consistent with manual accounts the user already has.
+    # If none fit, the local LLM (ask_api) generates a new password in
+    # the same style, satisfying the platform's rules. The new password
+    # is saved to the shared pool on successful account creation below.
+    from lib.credentials import (
+        get_shared_passwords, pick_password_for_platform, gen_password_for_platform,
+    )
+    shared_pws = get_shared_passwords()
+    new_pw = pick_password_for_platform(page.url, shared_pws, page=page)
+    if not new_pw:
+        # No existing password fits the platform's rules.
+        # Local LLM (if available) will read page text + rules and
+        # generate a password in the same style as the user's previous
+        # passwords. Falls back to a secure random generator if LLM
+        # unavailable or returns an unusable password.
+        new_pw = gen_password_for_platform(page.url, page=page, existing_pws=shared_pws)
+        print(f"  GEN_PASSWORD: generated new password (len={len(new_pw)}) for {domain}", file=sys.stderr)
     try:
         email_input = page.locator('input[type="email"], input[name*="email" i]').first
         if email_input.count() > 0:
@@ -556,10 +547,127 @@ def _handle_login_wall(page, jid, quick):
                 submit.click(force=True, timeout=5000)
             time.sleep(5)
             save_creds(domain, defaults["email"], new_pw)
-            print(f"  ACCOUNT_CREATED: {defaults['email']} @ {domain} — creds saved", file=sys.stderr)
+            # Also add to shared pool — future platforms can use it as a
+            # style example when generating their own passwords.
+            try:
+                from lib.credentials import add_shared_password
+                add_shared_password(new_pw)
+            except Exception:
+                pass
+            print(f"  ACCOUNT_CREATED: {defaults['email']} @ {domain} — creds saved (also added to shared pool)", file=sys.stderr)
             return True
     except Exception as e:
         print(f"  CREATE_FAIL: {e}", file=sys.stderr)
     emit_status("login_required", f"account creation failed at {domain}")
     emit_next("login", f"domain={domain} jid={jid}")
     return False
+
+
+# ─── login helper functions used by _handle_login_wall ───────────────
+
+def _fill_signin_form(page, email, password):
+    """Fill a sign-in form atomically via page.evaluate.
+
+    Targets the visible sign-in form (1 password field, prefers
+    data-automation-id=signInSubmitButton). Falls back to generic
+    locators if no atomic form is found.
+    """
+    result = page.evaluate("""(creds) => {
+        const forms = Array.from(document.querySelectorAll('form'));
+        for (const f of forms) {
+            if (f.offsetParent === null) continue;
+            const pws = f.querySelectorAll('input[type="password"]');
+            if (pws.length !== 1) continue;
+            const btn = f.querySelector('[data-automation-id="signInSubmitButton"]');
+            if (!btn) continue;
+            const emailEl = f.querySelector('input[type="email"], input[type="text"]');
+            if (emailEl) {
+                emailEl.focus();
+                emailEl.value = creds.email;
+                emailEl.dispatchEvent(new Event('input', {bubbles: true}));
+                emailEl.dispatchEvent(new Event('change', {bubbles: true}));
+            }
+            pws[0].focus();
+            pws[0].value = creds.password;
+            pws[0].dispatchEvent(new Event('input', {bubbles: true}));
+            pws[0].dispatchEvent(new Event('change', {bubbles: true}));
+            btn.click();
+            return true;
+        }
+        return false;
+    }""", {"email": email, "password": password})
+    if result:
+        return
+    # Generic fallback
+    try:
+        ei = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i]').first
+        if ei.count() > 0:
+            ei.fill(email)
+        pi = page.locator('input[type="password"]').first
+        if pi.count() > 0:
+            pi.fill(password)
+        sb = page.locator(
+            '[data-automation-id="signInSubmitButton"], '
+            'button:has-text("Sign In"), '
+            'button[type="submit"], input[type="submit"]'
+        ).first
+        if sb.count() > 0:
+            try:
+                sb.click(timeout=5000)
+            except Exception:
+                sb.click(force=True, timeout=5000)
+    except Exception:
+        pass
+
+
+def _login_succeeded(page):
+    """Heuristic: did the just-submitted sign-in form succeed?
+
+    Treats any of these as success:
+    - No visible email field on a sign-in form
+    - Password field is gone (form closed/transformed)
+    - URL changed away from an explicit login-path
+    - Body text contains a logged-in greeting ("signed in as", "welcome",
+      "my account", "log out", "log out")
+    Treats remaining error text (invalid password, etc.) as NOT success.
+    """
+    try:
+        result = page.evaluate("""() => {
+            const txt = (document.body.innerText || '').toLowerCase();
+            const pws = document.querySelectorAll('input[type="password"]');
+            const visiblePws = Array.from(pws).filter(p => p.offsetParent !== null);
+            const signInForm = document.querySelector('[data-automation-id="signInSubmitButton"]');
+            const greetings = /signed in as|welcome back|my account|log out|sign out|sign out/im;
+            const errors = /invalid email|incorrect password|password incorr|account does not exist|no account found|account is locked|failed login/im;
+            if (visiblePws.length === 0) return 'yes';
+            if (greetings.test(txt)) return 'yes';
+            if (errors.test(txt)) return 'no';
+            if (signInForm && signInForm.offsetParent !== null) return 'uncertain';
+            return 'uncertain';
+        }""")
+        return result == 'yes'
+    except Exception:
+        return False
+
+
+def _re_open_signin_form(page):
+    """If a wrong-password attempt left us on a non-sign-in tab (e.g. back to
+    Create Account), re-click the Sign In link so the next candidate can be
+    tried without manual interaction.
+    """
+    try:
+        for sel in [
+            '[data-automation-id="signInLink"]',
+            'a:has-text("Sign In")',
+            'button:has-text("Sign In")',
+        ]:
+            try:
+                link = page.locator(sel).first
+                if link.count() > 0 and link.is_visible():
+                    link.click(timeout=1500)
+                    time.sleep(1)
+                    return
+            except Exception:
+                continue
+    except Exception:
+        pass

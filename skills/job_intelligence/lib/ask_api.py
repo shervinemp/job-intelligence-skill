@@ -93,6 +93,14 @@ def ask_bytes(image_data, prompt, temperature=0.3, max_tokens=2048):
     return _vision(image_data, prompt, temperature, max_tokens, cfg)
 
 
+def ask_text(prompt, temperature=0.3, max_tokens=2048, timeout=10):
+    """Send text-only prompt to LLM API (no image). Returns (reply, error)."""
+    cfg = _load_config()
+    if not cfg["url"]:
+        return None, "LLM_API_URL not set"
+    return _text(prompt, temperature, max_tokens, cfg, timeout=timeout)
+
+
 def ask_chunked(image_data, prompt, temperature=0.3, max_tokens=2048,
                 max_chunk_height=1800, overlap=150):
     """Send image to vision API, auto-chunking if taller than max_chunk_height.
