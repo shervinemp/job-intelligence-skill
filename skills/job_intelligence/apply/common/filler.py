@@ -84,6 +84,14 @@ def _check_delta(before, after, ans, label, field=None):
             return True
         if after_l in ("yes", "no") and ans_l.startswith(("yes", "no")):
             return True
+        # Yes/No answer with full-sentence option text: check by negation.
+        # e.g. ans="Yes", after="I am based in Ottawa" (no negation → match)
+        # e.g. ans="No", after="I am not based in Ottawa" (has negation → match)
+        if ans_l in ("yes", "no") and after_l and after_l not in ("yes", "no"):
+            import re as _re
+            _neg = bool(_re.search(r'\b(not|dont|don\'t|never|unable|cannot|can\'t)\b', after_l))
+            if (ans_l == "yes" and not _neg) or (ans_l == "no" and _neg):
+                return True
         if after_l and after_l != before:
             emit_diag(label, ans, after, "wrong_option", "clicked option does not match answer")
             return False
@@ -306,6 +314,47 @@ class RadioFiller(FieldFiller):
                                 return { id: r.id, match: 'try5:norm:' + lbl.slice(0, 40) };
                             }
                         }
+                    }
+                }
+                // Try 6: Yes/No negation detection for options that don't
+                // start with yes/no (e.g. "I am based in Ottawa" vs
+                // "I am not based in Ottawa, but open to relocation").
+                // For "Yes": pick the option WITHOUT negation words.
+                // For "No": pick the option WITH negation words.
+                if (ynPref) {
+                    const negWords = /\\b(not|dont|don't|never|unable|cannot|can't)\\b/i;
+                    const candidates = [];
+                    for (const r of radios) {
+                        const lbl = radioLabel(r);
+                        if (!lbl) continue;
+                        const hasNeg = negWords.test(lbl);
+                        if (ynPref === 'yes' && !hasNeg) candidates.push({radio: r, label: lbl});
+                        if (ynPref === 'no' && hasNeg) candidates.push({radio: r, label: lbl});
+                    }
+                    if (candidates.length === 1) {
+                        return { id: candidates[0].radio.id, match: 'try6:neg:' + candidates[0].label.slice(0, 40) };
+                    }
+                    if (candidates.length > 1 && country) {
+                        const locWords = country.split(',').map(w => w.trim()).filter(Boolean);
+                        let bestMatch = null;
+                        let bestScore = -1;
+                        for (const m of candidates) {
+                            const lblLower = m.label.toLowerCase();
+                            let score = 0;
+                            for (const w of locWords) {
+                                if (lblLower.includes(w)) score++;
+                            }
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestMatch = m;
+                            }
+                        }
+                        if (bestMatch && bestScore > 0) {
+                            return { id: bestMatch.radio.id, match: 'try6:neg+loc:' + bestMatch.label.slice(0, 40) };
+                        }
+                    }
+                    if (candidates.length > 0) {
+                        return { id: candidates[0].radio.id, match: 'try6:neg:first:' + candidates[0].label.slice(0, 40) };
                     }
                 }
                 return null;

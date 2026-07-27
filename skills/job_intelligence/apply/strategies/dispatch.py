@@ -24,7 +24,10 @@ def field_deterministic(page, f, ans):
     f["_sel"] = sel
 
     # Pre-fill validation: catch bad values before they reach the widget.
-    if not _is_combobox(f):
+    # Skip option-constraint check for RADIO_GROUP — the RadioFiller has its
+    # own matching cascade (prefix match, label walk, EEOC normalize, negation
+    # detection) that's more nuanced than a simple substring check.
+    if not _is_combobox(f) and f.get("tag") != "RADIO_GROUP":
         from apply.common.validate import validate_value
         ok, reason = validate_value(f, ans)
         if not ok and reason != "empty":
