@@ -171,6 +171,32 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         _wait_for_fields(page, timeout=10)
                         break
 
+            # General no-apply-path check (platform-agnostic).
+            # At this point we've tried: LinkedIn Easy Apply/Apply link,
+            # generic Apply button, Apply Manually/Autofill modal, and
+            # waited 8+10+10s for fields. If no form elements, no dialog,
+            # and no iframe with form elements exist, the job is likely
+            # expired or the page didn't load a form.
+            if not page.query_selector('input, select, textarea'):
+                has_dialog = page.evaluate("""() => !!document.querySelector('dialog, [role="dialog"]')""")
+                has_iframe_form = False
+                for fr in page.frames:
+                    if fr == page.main_frame:
+                        continue
+                    try:
+                        if fr.query_selector('input, select, textarea'):
+                            has_iframe_form = True
+                            break
+                    except Exception:
+                        continue
+                if not has_dialog and not has_iframe_form:
+                    print("  WARN: no form, dialog, or iframe form found — job may be expired", file=sys.stderr)
+                    state["status"] = "no_apply_path"
+                    save_state(state)
+                    emit_status("no_apply_path", "no form or apply path found on page")
+                    emit_next("none", "job may be expired — skip or apply via external URL")
+                    return 1
+
             if not _handle_login_wall(page, jid, quick):
                 return 1
 

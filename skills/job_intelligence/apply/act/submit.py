@@ -468,16 +468,28 @@ def cmd_submit(jid, confirm=False, force=False):
                     emit_status("incomplete", f"{empt} required field(s) need answers")
                     emit_next("act --fill", "supply answers for empty fields, then resubmit")
                     return 1
-                # LinkedIn with no dialog/modal: Easy Apply never opened or expired
-                if "linkedin.com" in (page.url or "").lower():
-                    has_dialog = page.evaluate("""() => !!document.querySelector('dialog, [role="dialog"]')""")
-                    if not has_dialog:
-                        print("  No Easy Apply dialog and no submit button — job likely expired", file=sys.stderr)
-                        state["status"] = "no_apply_path"
-                        save_state(state)
-                        emit_status("no_apply_path", "no Easy Apply dialog or submit button — job may be expired")
-                        emit_next("none", "check if job is still active or apply via external URL")
-                        return 1
+                # No form/dialog/iframe form on the page — Skyvern can't help.
+                # This catches expired jobs on any platform (LinkedIn, Workday,
+                # Ashby, etc.) where the page loaded but no form rendered.
+                has_form = page.query_selector('input, select, textarea')
+                has_dialog = page.evaluate("""() => !!document.querySelector('dialog, [role="dialog"]')""")
+                has_iframe_form = False
+                for fr in page.frames:
+                    if fr == page.main_frame:
+                        continue
+                    try:
+                        if fr.query_selector('input, select, textarea'):
+                            has_iframe_form = True
+                            break
+                    except Exception:
+                        continue
+                if not has_form and not has_dialog and not has_iframe_form:
+                    print("  No form, dialog, or iframe form — Skyvern cannot help", file=sys.stderr)
+                    state["status"] = "no_apply_path"
+                    save_state(state)
+                    emit_status("no_apply_path", "no form or submit button — job may be expired")
+                    emit_next("none", "check if job is still active or apply via external URL")
+                    return 1
                 print("  Playwright could not click submit — using Skyvern", file=sys.stderr)
                 from apply.common.skyvern_bridge import click_submit
                 result = click_submit(url=page.url, browser_session_id=browser_session_id, timeout=60)
