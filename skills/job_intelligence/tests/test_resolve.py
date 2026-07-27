@@ -18,7 +18,10 @@ PROFILE = {
     "phone": "613-555-0100",
     "location": "Ottawa, ON, Canada",
     "linkedin_url": "https://linkedin.com/in/bilal",
-    "answers": {"authorized to work in canada": "Yes"},
+    "answers": {
+        "authorized to work in canada": "Yes",
+        "disability_status": "I do not have a disability",
+    },
 }
 
 
@@ -126,9 +129,27 @@ class AttrMatchGuard(unittest.TestCase):
                     field_id="eeoc_location", field_tag="SELECT")
         self.assertIsNone(r.value)
 
+    def test_dropdown_skips_attr_match(self):
+        r = resolve("What is your country of birth?", PROFILE,
+                    field_name="custom_question_country", field_tag="DROPDOWN")
+        self.assertIsNone(r.value)
+
+    def test_combobox_role_skips_attr_match(self):
+        r = resolve("What is your country of birth?", PROFILE,
+                    field_name="candidate_country", field_role="combobox")
+        self.assertIsNone(r.value)
+
     def test_text_input_still_uses_attr_match(self):
         r = resolve("Are you Hispanic/Latino?", PROFILE,
                     field_name="custom_question_location", field_tag="INPUT")
+        self.assertIsNotNone(r.value)
+
+    def test_disability_excludes_accommodation(self):
+        r = resolve("Will you require disability accommodations?", PROFILE)
+        self.assertIsNone(r.value)
+
+    def test_disability_status_still_matches(self):
+        r = resolve("Do you identify as having a disability?", PROFILE)
         self.assertIsNotNone(r.value)
 
 

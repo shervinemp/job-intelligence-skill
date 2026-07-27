@@ -60,7 +60,7 @@ def _read_element_value(page, sel, ans=None, field=None):
         return ""
 
 
-def _check_delta(before, after, ans, label):
+def _check_delta(before, after, ans, label, field=None):
     """True if the value changed meaningfully."""
     if isinstance(ans, list):
         ans = ", ".join(str(v) for v in ans)
@@ -72,6 +72,21 @@ def _check_delta(before, after, ans, label):
         ans_lower = ans.lower()
         if os.path.basename(ans_lower) in after_lower or after_lower in ans_lower:
             return True
+    # Radio/select: value must match ans (or be a yes/no variant), not just
+    # any change. Prevents false success when the wrong option was clicked.
+    _is_choice = field and (field.get("tag") in ("RADIO_GROUP", "SELECT", "DROPDOWN")
+                            or field.get("type") == "radio"
+                            or field.get("role") == "combobox")
+    if _is_choice and ans:
+        ans_l = ans.lower().strip()
+        after_l = (after or "").lower().strip()
+        if after_l and (after_l == ans_l or ans_l in after_l or after_l in ans_l):
+            return True
+        if after_l in ("yes", "no") and ans_l.startswith(("yes", "no")):
+            return True
+        if after_l and after_l != before:
+            emit_diag(label, ans, after, "wrong_option", "clicked option does not match answer")
+            return False
     if after and after != before and after != ans:
         return True
     if after and ans and (after == ans or ans in after or after in ans):
@@ -267,13 +282,18 @@ class RadioFiller(FieldFiller):
                     }
                 }
                 // Try 3: walk up 4 levels and match text (LinkedIn pattern)
+                // Guard: txt must be non-empty and short (<100 chars) to avoid
+                // matching when we've walked up to a container that aggregates
+                // the question text + all options + location headings.
+                // Drop ans.startsWith(txt) — reverse-prefix clicks the wrong
+                // radio when parent text is short or empty.
                 for (const r of radios) {
                     let el = r;
                     for (let i = 0; i < 4; i++) {
                         el = el.parentElement;
                         if (!el) break;
                         const txt = el.textContent.trim().toLowerCase();
-                        if (txt === ans || txt.startsWith(ans + ' ') || txt.startsWith(ans + ',') || ans.startsWith(txt)) {
+                        if (txt && txt.length < 100 && (txt === ans || txt.startsWith(ans + ' ') || txt.startsWith(ans + ','))) {
                             clickRadio(r); return 'try3:' + txt.slice(0, 40);
                         }
                     }
@@ -634,7 +654,7 @@ def fill_field(page, field: dict, ans: str) -> tuple[bool, str]:
         if filler.can_handle(field):
             if filler.fill(fr, field, ans):
                 aft = _read_element_value(page, sel, ans=ans, field=field)
-                if _check_delta(before, aft, ans, label):
+                if _check_delta(before, aft, ans, label, field):
                     return True, filler.name
 
     # Primary chain failed — try text fallback

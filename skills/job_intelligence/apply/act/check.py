@@ -105,7 +105,8 @@ def cmd_check(jid):
                               field_name=f.get("name", ""),
                               field_id=f.get("id", ""),
                               field_tag=f.get("tag", ""),
-                              field_type=f.get("type", ""))
+                              field_type=f.get("type", ""),
+                              field_role=f.get("role", ""))
                 expected = res.value
 
                 checked += 1

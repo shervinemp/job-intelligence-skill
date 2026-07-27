@@ -4,7 +4,7 @@ Chrome lifecycle, DOM interaction (JS evaluation), field probing,
 fill dispatch, file upload, validation scanning, submit detection,
 profile loading, answer dict construction, vision verification.
 """
-import json, os, sys, time
+import json, os, re, sys, time
 from contextlib import contextmanager
 
 from lib.config import PROFILE_PATH, JI_HOME
@@ -494,7 +494,9 @@ def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list
         tag = (f.get("tag") or "").lower()
         ftype = (f.get("type") or "").lower()
         lc = label.lower()
-        if (tag == "input" and (f.get("accept") or ftype == "file")) or "resume" in lc or "cv" in lc or "cover" in lc:
+        _is_file_field = (tag == "input" and (f.get("accept") or ftype == "file"))
+        _has_resume_kw = "resume" in lc or re.search(r'\bcv\b', lc) or "cover letter" in lc or "cover_letter" in lc
+        if _is_file_field or _has_resume_kw:
             ident = f"{lc} {(f.get('id') or '').lower()} {(f.get('name') or '').lower()}"
             path = cover_path if "cover" in ident else resume_path
             if path and os.path.exists(path):
@@ -525,7 +527,8 @@ def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list
                       field_name=f.get("name", ""),
                       field_id=f.get("id", ""),
                       field_tag=f.get("tag", ""),
-                      field_type=f.get("type", ""))
+                      field_type=f.get("type", ""),
+                      field_role=f.get("role", ""))
         ans = res.value
         if ans is None:
             if tag == "input" and ftype == "checkbox" and os.environ.get("JI_AUTO_CONSENT") == "1":

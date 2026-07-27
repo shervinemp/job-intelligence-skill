@@ -160,6 +160,7 @@ def resolve(
     field_id: str = "",
     field_tag: str = "",
     field_type: str = "",
+    field_role: str = "",
 ) -> Resolution:
     if answers_override is None:
         answers_override = {}
@@ -201,12 +202,17 @@ def resolve(
     # Step 1.6: name/id attribute semantics — ATS vendors use consistent
     # attribute names (first_name, last_name, email, phone, country, etc.)
     # that are more reliable than visible labels. Mirrors Jobright's pattern.
-    # Skip for radio/select: their name/id are arbitrary DB IDs (e.g.
+    # Skip for radio/select/combobox: their name/id are arbitrary DB IDs (e.g.
     # "custom_question_location") that can incidentally match _ATTR_MAP keys
     # and cause false answers on EEOC questions.
     _ft = (field_tag or "").upper()
     _fty = (field_type or "").lower()
-    _skip_attr = _ft in ("RADIO_GROUP", "SELECT") or _fty in ("radio", "select-one", "select-multiple")
+    _role = (field_role or "").lower()
+    _skip_attr = (
+        _ft in ("RADIO_GROUP", "SELECT", "DROPDOWN")
+        or _fty in ("radio", "select-one", "select-multiple", "custom")
+        or _role == "combobox"
+    )
     if not _skip_attr:
         for attr_val in (field_name, field_id):
             if not attr_val:
@@ -308,7 +314,7 @@ _ALIAS_RULES = [
      ["how_did_you_hear", "How did you hear about this job opportunity?"]),
     (r"\bgender\b", ["gender", "Gender Identity"]),
     (r"\bveteran\b", ["veteran_status"]),
-    (r"\bdisabilit", ["disability_status",
+    (r"\bdisabilit(?!.*\baccommodation)", ["disability_status",
       "Do you identify as a person with a visible or non-visible disability?"]),
     (r"\bsalary|compensation\b",
      ["expected_salary", "What is your annual base salary expectations?"]),
