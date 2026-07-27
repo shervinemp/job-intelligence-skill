@@ -152,6 +152,15 @@ class AttrMatchGuard(unittest.TestCase):
         r = resolve("Do you identify as having a disability?", PROFILE)
         self.assertIsNotNone(r.value)
 
+    def test_veteran_excludes_spouse(self):
+        r = resolve("Are you a spouse of a veteran?", PROFILE)
+        self.assertIsNone(r.value)
+
+    def test_veteran_status_still_matches(self):
+        prof = dict(PROFILE, answers={**PROFILE["answers"], "veteran_status": "I am not a protected veteran"})
+        r = resolve("Are you a protected veteran?", prof)
+        self.assertIsNotNone(r.value)
+
 
 if __name__ == "__main__":
     unittest.main()
