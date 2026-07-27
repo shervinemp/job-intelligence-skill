@@ -6,3 +6,5 @@ __pycache__/
 
 # Personal data
 profile.json
+
+.commit_msg.txt
