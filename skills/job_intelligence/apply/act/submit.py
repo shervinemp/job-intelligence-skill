@@ -1,11 +1,11 @@
-"""act/submit.py — Submit command with policy gate, Playwright + Skyvern fallback."""
-import json, os, sys, time
+"""act/submit.py — Submit command with policy gate and outcome detection cascade."""
+import json, sys, time
 
 from lib.db import get_conn
 from apply.common.output import emit_next, emit_status, emit_error
 from apply.common.page_helpers import load_state, save_state, handle_captcha, mark_applied
 from apply.act.helpers import (
-    _load_profile, chrome_session, _probe_form, _fill_with_playwright,
+    chrome_session,
     _empty_required, _detect_submit_button, _dismiss_confirm_modal,
     _check_submit_success, _get_validation_errors,
     _find_next_button, _click_action,
@@ -222,20 +222,6 @@ def cmd_submit(jid, confirm=False, force=False):
                 pass
 
             if "linkedin.com/jobs" in (page.url or "").lower():
-                # LinkedIn-specific pre-flight: Easy Apply button may be gone
-                # (LinkedIn shows "Applied" after submission)
-                from apply.common.signals import has_already_applied_text
-                from apply.common.page_helpers import page_text as _lpt
-                try:
-                    _lptxt = _lpt(page) or ""
-                    if has_already_applied_text(_lptxt):
-                        mark_applied(jid)
-                        emit_status("already applied")
-                        emit_next("verify")
-                        return 0
-                except Exception:
-                    pass
-
                 dialog_open = page.evaluate("""() => {
                     const d = document.querySelector('dialog[data-testid="dialog"]');
                     return d && d.open && d.offsetParent !== null;

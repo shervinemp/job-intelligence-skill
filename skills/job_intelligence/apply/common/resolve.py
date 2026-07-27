@@ -320,7 +320,7 @@ _ALIAS_RULES = [
     (r"\bhow did you (hear|learn|find)\b",
      ["how_did_you_hear", "How did you hear about this job opportunity?"]),
     (r"\bgender\b", ["gender", "Gender Identity"]),
-    (r"\bveteran(?!.*\b(spouse|dependent|family|preference)\b)", ["veteran_status"]),
+    (r"^(?!.*\b(spouse|dependent|family|preference)\b).*\bveteran\b", ["veteran_status"]),
     (r"\bdisabilit(?!.*\baccommodation)", ["disability_status",
       "Do you identify as a person with a visible or non-visible disability?"]),
     (r"\b(salary|compensation)\b",
