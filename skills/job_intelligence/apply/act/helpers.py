@@ -97,6 +97,21 @@ def _host(u):
 _NEXT_KEYWORDS_JS = ["next", "continue", "continue to review", "review",
                      "review application", "next step", "save and continue"]
 
+
+def _find_next_button(page):
+    """Find the best 'Next'/'Continue' button. Delegates to page_state.find_buttons
+    with the next-keyword list. Returns {text, score} dict or None."""
+    from apply.common.page_state import find_buttons
+    cands = find_buttons(page, _NEXT_KEYWORDS_JS, scope="any")
+    return cands[0] if cands else None
+
+
+def _click_action(page, text):
+    """Click a button by text. Delegates to page_state.click_button_by_text
+    which handles dialog offsetParent and modal preference."""
+    from apply.common.page_state import click_button_by_text
+    return click_button_by_text(page, text, prefer_dialog=True)
+
 _ERROR_MARKERS = (
     "upstream connect error", "bad gateway", "service unavailable",
     "404 not found", "page not found", "access denied", "403 forbidden",
@@ -129,50 +144,9 @@ def _url_fallbacks(url, state_url=""):
 
 
 def _wait_for_fields(page, timeout=8):
-    for _ in range(timeout):
-        try:
-            n = page.evaluate("""() => document.querySelectorAll(
-                'input:not([type=hidden]):not([type=submit]), select, textarea'
-            ).length""")
-            if n:
-                return True
-        except Exception:
-            return False
-        time.sleep(1)
-    return False
-
-
-def _find_next_button(page):
-    try:
-        cands = page.evaluate("""(kws) => {
-            const out = [];
-            const all = document.querySelectorAll('button, a, [role="button"], input[type=submit]');
-            const inDlg = (el) => !!el.closest('dialog, [role="dialog"]');
-            const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
-            for (const el of all) {
-                const dlg = inDlg(el);
-                // LinkedIn Easy Apply uses <dialog open> where children may have
-                // offsetParent === null. Skip offsetParent check for dialog buttons.
-                if (!dlg && el.offsetParent === null) continue;
-                if (isDisabled(el)) continue;
-                if (!dlg && el.closest('nav, header, footer, [role=navigation], [role=banner], [role=contentinfo]')) continue;
-                const t = ((el.textContent || el.value || '')).trim().toLowerCase().replace(/\\s+/g, ' ');
-                if (!t || t.length > 30) continue;
-                let score = 0;
-                for (const kw of kws) {
-                    if (t === kw) score = Math.max(score, 4);
-                    else if (t.startsWith(kw)) score = Math.max(score, 3);
-                }
-                if (score >= 3) {
-                    out.push({text: t.slice(0, 30), score: dlg ? score + 10 : score});
-                }
-            }
-            out.sort((a, b) => b.score - a.score);
-            return out;
-        }""", _NEXT_KEYWORDS_JS)
-        return cands[0] if cands else None
-    except Exception:
-        return None
+    """Delegate to page_state.wait_for_form."""
+    from apply.common.page_state import wait_for_form
+    return wait_for_form(page, timeout)
 
 
 _JUNK_TYPES = {"range", "search", "hidden", "submit", "button", "reset"}
@@ -390,35 +364,6 @@ def _check_submit_success(ctx, page, pages_before_ids):
         except Exception:
             continue
     return False, None
-
-
-def _click_action(page, text):
-    try:
-        return bool(page.evaluate("""(t) => {
-            const all = document.querySelectorAll('button, a, [role="button"]');
-            const inDlg = (el) => !!el.closest('dialog, [role="dialog"]');
-            // LinkedIn Easy Apply <dialog open> children may have offsetParent === null.
-            // Don't filter by offsetParent for dialog buttons.
-            const vis = Array.from(all).filter(el => {
-                if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
-                if (inDlg(el)) return true;
-                return el.offsetParent !== null;
-            });
-            // Prefer buttons inside dialog/modal (Easy Apply, etc.)
-            const inModal = vis.filter(el => el.closest('dialog, [role="dialog"], [class*="modal"], [class*=" Modal"], [data-test*="modal"], [class*="easy-apply"]'));
-            const onPage = vis.filter(el => !el.closest('dialog, [role="dialog"], [class*="modal"], [class*=" Modal"], [data-test*="modal"], [class*="easy-apply"]'));
-            for (const pool of [inModal, onPage]) {
-                for (const el of pool) {
-                    if ((el.textContent || '').trim().toLowerCase() === t) { el.click(); return true; }
-                }
-                for (const el of pool) {
-                    if ((el.textContent || '').trim().toLowerCase().includes(t)) { el.click(); return true; }
-                }
-            }
-            return false;
-        }""", (text or "").strip().lower()))
-    except Exception:
-        return False
 
 
 def _field_key(f):

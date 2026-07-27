@@ -151,24 +151,25 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                     max_pages = min(max_pages, int(reg.page_range[-1]))
                 except Exception:
                     pass
-            _wait_for_fields(page, timeout=8)
+            from apply.common.page_state import has_form, wait_for_form
+            wait_for_form(page, timeout=8)
 
-            if not page.query_selector('input, select, textarea'):
+            if not has_form(page):
                 apply_btn = page.locator('a:has-text("Apply"), button:has-text("Apply")').first
                 if apply_btn.count() > 0:
                     apply_btn.click()
                     print("  Listing page: clicked Apply", file=sys.stderr)
                     time.sleep(3)
-                    _wait_for_fields(page, timeout=10)
+                    wait_for_form(page, timeout=10)
 
-            if not page.query_selector('input, select, textarea'):
+            if not has_form(page):
                 for label in ["Apply Manually", "Autofill with Resume"]:
                     btn = page.locator(f'button:has-text("{label}"), a:has-text("{label}")').first
                     if btn.count() > 0:
                         btn.click()
                         print(f"  Apply modal: clicked '{label}'", file=sys.stderr)
                         time.sleep(3)
-                        _wait_for_fields(page, timeout=10)
+                        wait_for_form(page, timeout=10)
                         break
 
             # General no-apply-path check (platform-agnostic).
@@ -177,25 +178,14 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             # waited 8+10+10s for fields. If no form elements, no dialog,
             # and no iframe with form elements exist, the job is likely
             # expired or the page didn't load a form.
-            if not page.query_selector('input, select, textarea'):
-                has_dialog = page.evaluate("""() => !!document.querySelector('dialog, [role="dialog"]')""")
-                has_iframe_form = False
-                for fr in page.frames:
-                    if fr == page.main_frame:
-                        continue
-                    try:
-                        if fr.query_selector('input, select, textarea'):
-                            has_iframe_form = True
-                            break
-                    except Exception:
-                        continue
-                if not has_dialog and not has_iframe_form:
-                    print("  WARN: no form, dialog, or iframe form found — job may be expired", file=sys.stderr)
-                    state["status"] = "no_apply_path"
-                    save_state(state)
-                    emit_status("no_apply_path", "no form or apply path found on page")
-                    emit_next("none", "job may be expired — skip or apply via external URL")
-                    return 1
+            from apply.common.page_state import has_any_form
+            if not has_any_form(page):
+                print("  WARN: no form, dialog, or iframe form found — job may be expired", file=sys.stderr)
+                state["status"] = "no_apply_path"
+                save_state(state)
+                emit_status("no_apply_path", "no form or apply path found on page")
+                emit_next("none", "job may be expired — skip or apply via external URL")
+                return 1
 
             if not _handle_login_wall(page, jid, quick):
                 return 1

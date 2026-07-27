@@ -274,11 +274,11 @@ def cmd_submit(jid, confirm=False, force=False):
 
             # LinkedIn Easy Apply: navigate to review/submit page
             if "linkedin.com" in (page.url or ""):
+                from apply.common.page_state import has_dialog as _has_dialog
                 prev_next_text = ""
                 stuck_count = 0
                 for _nav in range(10):
-                    has_dialog = page.evaluate("""() => !!document.querySelector('dialog, [role="dialog"]')""")
-                    if not has_dialog:
+                    if not _has_dialog(page):
                         break
                     submit_btn = page.evaluate("""() => {
                         const d = document.querySelector('dialog, [role="dialog"]');
@@ -471,19 +471,8 @@ def cmd_submit(jid, confirm=False, force=False):
                 # No form/dialog/iframe form on the page — Skyvern can't help.
                 # This catches expired jobs on any platform (LinkedIn, Workday,
                 # Ashby, etc.) where the page loaded but no form rendered.
-                has_form = page.query_selector('input, select, textarea')
-                has_dialog = page.evaluate("""() => !!document.querySelector('dialog, [role="dialog"]')""")
-                has_iframe_form = False
-                for fr in page.frames:
-                    if fr == page.main_frame:
-                        continue
-                    try:
-                        if fr.query_selector('input, select, textarea'):
-                            has_iframe_form = True
-                            break
-                    except Exception:
-                        continue
-                if not has_form and not has_dialog and not has_iframe_form:
+                from apply.common.page_state import has_any_form
+                if not has_any_form(page):
                     print("  No form, dialog, or iframe form — Skyvern cannot help", file=sys.stderr)
                     state["status"] = "no_apply_path"
                     save_state(state)
