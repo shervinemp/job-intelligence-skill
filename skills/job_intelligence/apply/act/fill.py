@@ -385,13 +385,36 @@ def _handle_login_wall(page, jid, quick):
     if creds:
         print(f"  Auto-login: {creds['email']}", file=sys.stderr)
         try:
+            # Workday defaults to "Create Account" form with a "Sign In"
+            # link. Click it first so we target the sign-in form, not the
+            # create-account form (which needs confirm-password + checkbox).
+            for sel in [
+                '[data-automation-id="signInLink"]',
+                'a:has-text("Sign In")',
+                'button:has-text("Sign In")',
+            ]:
+                try:
+                    link = page.locator(sel).first
+                    if link.count() > 0 and link.is_visible():
+                        link.click(timeout=3000)
+                        time.sleep(2)
+                        print("  Switched to Sign In form", file=sys.stderr)
+                        break
+                except Exception:
+                    continue
+
             email_input = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i]').first
             if email_input.count() > 0:
                 email_input.fill(creds["email"])
             pw_input = page.locator('input[type="password"]').first
             if pw_input.count() > 0:
                 pw_input.fill(creds["password"])
-            submit = page.locator('button[type="submit"], input[type="submit"]').first
+            # Prefer Sign In submit button, fall back to generic submit
+            submit = page.locator(
+                '[data-automation-id="signInSubmitButton"], '
+                'button:has-text("Sign In"), '
+                'button[type="submit"], input[type="submit"]'
+            ).first
             if submit.count() > 0:
                 try:
                     submit.click(timeout=5000)

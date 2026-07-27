@@ -121,6 +121,25 @@ _READER_JS = """(config) => {
             ? Array.from(el.options).map(o => o.text.trim()).filter(Boolean).slice(0, 15)
             : [];
         const rawVal = el.value || '';
+
+        // Honeypot detection — mark but don't filter here (Python-side
+        // _is_junk_field has the final say). Signals: label/placeholder
+        // contains robot/honeypot/do-not-fill, OR aria-hidden on a text
+        // input, OR name explicitly says "honeypot".
+        function isHoneypot(el, label) {
+            const lc = (label || '').toLowerCase();
+            const ph = (el.placeholder || '').toLowerCase();
+            const nm = (el.getAttribute('name') || '').toLowerCase();
+            const ariaHidden = el.getAttribute('aria-hidden') === 'true';
+            if (/\\brobot|honeypot|for bots|spam trap|do not fill|do not enter|leave this blank|leave empty\\b/.test(lc)) return true;
+            if (/\\brobot|honeypot|for bots|spam trap|do not fill|do not enter\\b/.test(ph)) return true;
+            if (nm === 'honeypot' || nm === 'spam_trap' || nm === 'anti_spam') return true;
+            // aria-hidden text input with no required flag — likely a bot trap
+            if (ariaHidden && el.tagName === 'INPUT' && (el.type === 'text' || el.type === '')
+                && !el.required && el.getAttribute('aria-required') !== 'true') return true;
+            return false;
+        }
+
         return {
             tag: el.tagName, type: el.getAttribute('type') || '',
             id: el.id, name: el.getAttribute('name') || '',
@@ -136,6 +155,7 @@ _READER_JS = """(config) => {
             multiple: el.tagName === 'SELECT' && el.multiple || false, options: opts,
             datepicker: el.type === 'date' ? 'native'
                 : el.classList.contains('flatpickr-input') || (el.closest && el.closest('.flatpickr')) ? 'flatpickr' : '',
+            is_honeypot: isHoneypot(el, label),
         };
     }
 

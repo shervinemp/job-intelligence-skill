@@ -151,10 +151,14 @@ def _wait_for_fields(page, timeout=8):
 
 _JUNK_TYPES = {"range", "search", "hidden", "submit", "button", "reset"}
 _JUNK_LABEL_KW = ("progress", "scrubber", "search", "subscribe", "newsletter",
-                  "volume", "playback", "password", "captcha")
+                  "volume", "playback", "password", "captcha",
+                  "robot", "honeypot", "leave this blank", "leave empty",
+                  "for bots", "spam trap", "do not fill", "do not enter")
 
 
 def _is_junk_field(f):
+    if f.get("is_honeypot"):
+        return True
     t = (f.get("type") or "").lower()
     if t in _JUNK_TYPES:
         return True

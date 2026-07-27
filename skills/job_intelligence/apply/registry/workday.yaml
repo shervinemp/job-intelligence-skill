@@ -4,6 +4,9 @@ notes: |
   7-step SPA (Info → Experience → Questions → Disclosures → Review).
   DROPDOWN = button[aria-haspopup]. Phone: strip +1 prefix.
   Skills autocomplete: type skill then press Enter. Per-company login.
+  Login: defaults to Create Account form. _handle_login_wall clicks
+  Sign In link (data-automation-id="signInLink") before filling creds.
+  Honeypot: "website" field with "for robots" label — filtered by _is_junk_field.
 
 detect:
   domains:
