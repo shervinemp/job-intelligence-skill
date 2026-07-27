@@ -158,6 +158,8 @@ def resolve(
     autocomplete: str = "",
     field_name: str = "",
     field_id: str = "",
+    field_tag: str = "",
+    field_type: str = "",
 ) -> Resolution:
     if answers_override is None:
         answers_override = {}
@@ -199,19 +201,26 @@ def resolve(
     # Step 1.6: name/id attribute semantics — ATS vendors use consistent
     # attribute names (first_name, last_name, email, phone, country, etc.)
     # that are more reliable than visible labels. Mirrors Jobright's pattern.
-    for attr_val in (field_name, field_id):
-        if not attr_val:
-            continue
-        av = attr_val.lower().replace("-", "_")
-        for pat, ekey in _ATTR_MAP.items():
-            if pat in av:
-                val = _find_ephemeral_value(ekey, ephemeral)
-                if val:
-                    if "country_code" in av or "countrycode" in av:
-                        import re as _re
-                        m = _re.match(r'\+?(\d{1,3})', val)
-                        val = ("+" + m.group(1)) if m else "+1"
-                    return Resolution(val, ekey, label, "attr")
+    # Skip for radio/select: their name/id are arbitrary DB IDs (e.g.
+    # "custom_question_location") that can incidentally match _ATTR_MAP keys
+    # and cause false answers on EEOC questions.
+    _ft = (field_tag or "").upper()
+    _fty = (field_type or "").lower()
+    _skip_attr = _ft in ("RADIO_GROUP", "SELECT") or _fty in ("radio", "select-one", "select-multiple")
+    if not _skip_attr:
+        for attr_val in (field_name, field_id):
+            if not attr_val:
+                continue
+            av = attr_val.lower().replace("-", "_")
+            for pat, ekey in _ATTR_MAP.items():
+                if pat in av:
+                    val = _find_ephemeral_value(ekey, ephemeral)
+                    if val:
+                        if "country_code" in av or "countrycode" in av:
+                            import re as _re
+                            m = _re.match(r'\+?(\d{1,3})', val)
+                            val = ("+" + m.group(1)) if m else "+1"
+                        return Resolution(val, ekey, label, "attr")
 
     # Step 2: profile ephemeral exact match (deterministic facts/derivations)
     for key, (val, _source) in ephemeral.items():

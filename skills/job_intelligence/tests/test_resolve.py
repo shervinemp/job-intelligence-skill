@@ -107,5 +107,30 @@ class AnswersOverride(unittest.TestCase):
         self.assertNotEqual(r.value, "WRONG")
 
 
+class AttrMatchGuard(unittest.TestCase):
+    """Step 1.6 attribute matching must not fire for radio/select fields.
+
+    EEOC questions (e.g. 'Are you Hispanic/Latino?') often have name/id
+    attributes like 'custom_question_location' that incidentally contain
+    _ATTR_MAP keys. Without the guard, resolve returns the user's location
+    instead of no_match.
+    """
+
+    def test_radio_skips_attr_match(self):
+        r = resolve("Are you Hispanic/Latino?", PROFILE,
+                    field_name="custom_question_location", field_tag="RADIO_GROUP")
+        self.assertIsNone(r.value)
+
+    def test_select_skips_attr_match(self):
+        r = resolve("Are you Hispanic/Latino?", PROFILE,
+                    field_id="eeoc_location", field_tag="SELECT")
+        self.assertIsNone(r.value)
+
+    def test_text_input_still_uses_attr_match(self):
+        r = resolve("Are you Hispanic/Latino?", PROFILE,
+                    field_name="custom_question_location", field_tag="INPUT")
+        self.assertIsNotNone(r.value)
+
+
 if __name__ == "__main__":
     unittest.main()

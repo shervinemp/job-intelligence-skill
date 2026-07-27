@@ -103,7 +103,9 @@ def cmd_check(jid):
                 res = resolve(label, profile, None,
                               autocomplete=f.get("autocomplete", ""),
                               field_name=f.get("name", ""),
-                              field_id=f.get("id", ""))
+                              field_id=f.get("id", ""),
+                              field_tag=f.get("tag", ""),
+                              field_type=f.get("type", ""))
                 expected = res.value
 
                 checked += 1

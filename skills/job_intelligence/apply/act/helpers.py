@@ -523,7 +523,9 @@ def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list
         res = resolve(label, profile, answers_override,
                       autocomplete=f.get("autocomplete", ""),
                       field_name=f.get("name", ""),
-                      field_id=f.get("id", ""))
+                      field_id=f.get("id", ""),
+                      field_tag=f.get("tag", ""),
+                      field_type=f.get("type", ""))
         ans = res.value
         if ans is None:
             if tag == "input" and ftype == "checkbox" and os.environ.get("JI_AUTO_CONSENT") == "1":
