@@ -501,13 +501,149 @@ def _password_valid(pw, min_len, require_upper, require_lower, require_digit, re
     return True
 
 
+def _parse_freeform_rules(text):
+    """Parse free-text password requirements into structured rules.
+
+    Returns dict: {min_len, require_upper, require_lower, require_digit,
+    require_sym}. Missing fields default to 0/False.
+    """
+    lower = (text or "").lower()
+    min_len = 0
+    m = re.search(r'(?:min(?:imum)?|at least)\s*(\d{1,2})\s*(?:char|character|letter)', lower)
+    if not m:
+        m = re.search(r'\b(\d{1,2})\s*(?:char|character|letter)', lower)
+    if not m:
+        m = re.search(r'\b(\d{1,2})\s*(?:or more|minimum)', lower)
+    if m:
+        min_len = int(m.group(1))
+    return {
+        "min_len": min_len,
+        "require_upper": bool(re.search(r'upper|capital|capital letter', lower)),
+        "require_lower": bool(re.search(r'lower|lowercase|small letter', lower)),
+        "require_digit": bool(re.search(r'\bdigit\b|\bnumber\b|\bnumeric\b|\b0-9\b|number', lower)),
+        "require_sym": bool(re.search(r'special|symbol|punctuation|non-alphanumeric|[^a-z0-9]', lower)),
+    }
+
+
+def suggest_password(freeform_rules, existing_pws=None, save=False):
+    """Suggest a password that meets the given requirements.
+
+    Tries in order:
+      1. Parse freeform text deterministically → structured rules.
+      2. If existing passwords are provided (or shared pool is non-empty),
+         try pick_password_for_platform — returns a shared password that
+         fits the rules if one exists.
+      3. If none fit, ask the local LLM to merge/modify existing passwords
+         into a new one that satisfies the rules.
+      4. Fallback: secure secrets-based generator guaranteed to satisfy.
+
+    Args:
+        freeform_rules: free text describing password requirements,
+            e.g. "min 12 chars, 1 uppercase, 1 number, 1 symbol"
+        existing_pws: optional list of candidate passwords. When None,
+            pulls from the shared pool.
+        save: when True, adds the suggested password to the shared pool.
+
+    Returns:
+        str: a password that satisfies the parsed rules, or None on
+        failure.
+    """
+    rules = _parse_freeform_rules(freeform_rules)
+    min_len = rules["min_len"]
+    require_upper = rules["require_upper"]
+    require_lower = rules["require_lower"]
+    require_digit = rules["require_digit"]
+    require_sym = rules["require_sym"]
+
+    if existing_pws is None:
+        existing_pws = get_shared_passwords()
+
+    # Step 1: does any existing password already fit?
+    if existing_pws:
+        fitting = [p for p in existing_pws
+                   if _password_valid(p, min_len, require_upper,
+                                      require_lower, require_digit, require_sym)]
+        if fitting:
+            chosen = max(fitting, key=_score_password_complexity)
+            if save:
+                add_shared_password(chosen)
+            return chosen
+
+    # Step 2: ask the local LLM to merge/modify existing passwords.
+    if existing_pws:
+        new_pw = _gen_password_via_llm(
+            existing_pws, min_len, require_upper, require_lower,
+            require_digit, require_sym, freeform_rules=freeform_rules
+        )
+        if new_pw and _password_valid(new_pw, min_len, require_upper,
+                                       require_lower, require_digit, require_sym):
+            if save:
+                add_shared_password(new_pw)
+            return new_pw
+        # LLM returned something that doesn't satisfy rules — try to
+        # fix it by appending missing character classes.
+        if new_pw:
+            fixed = _repair_password(new_pw, min_len, require_upper,
+                                     require_lower, require_digit, require_sym)
+            if fixed:
+                if save:
+                    add_shared_password(fixed)
+                return fixed
+
+    # Step 3: secure generator — guaranteed to satisfy.
+    alphabet = string.ascii_letters + string.digits + "!@#$%"
+    while True:
+        pw = "".join(secrets.choice(alphabet) for _ in range(max(min_len, 16)))
+        if _password_valid(pw, min_len, require_upper,
+                           require_lower, require_digit, require_sym):
+            if save:
+                add_shared_password(pw)
+            return pw
+
+
+def _repair_password(pw, min_len, require_upper, require_lower,
+                     require_digit, require_sym):
+    """Try to repair an LLM-produced password by appending/substituting
+    the missing character classes. Returns the repaired password or None
+    if the original is too broken to fix."""
+    pw = list(pw)
+    # Ensure length
+    while len(pw) < min_len:
+        pw.append(secrets.choice(string.ascii_letters + string.digits))
+    # Insert missing classes
+    if require_upper and not re.search(r'[A-Z]', "".join(pw)):
+        pw.append(secrets.choice(string.ascii_uppercase))
+    if require_lower and not re.search(r'[a-z]', "".join(pw)):
+        pw.append(secrets.choice(string.ascii_lowercase))
+    if require_digit and not re.search(r'\d', "".join(pw)):
+        pw.append(secrets.choice(string.digits))
+    if require_sym and not re.search(r'[^A-Za-z0-9]', "".join(pw)):
+        pw.append(secrets.choice("!@#$%"))
+    result = "".join(pw)
+    if _password_valid(result, min_len, require_upper,
+                       require_lower, require_digit, require_sym):
+        return result
+    return None
+
+
 def _gen_password_via_llm(existing_pws, min_len, require_upper,
-                          require_lower, require_digit, require_sym):
+                          require_lower, require_digit, require_sym,
+                          freeform_rules=None):
     """Use local ask_api LLM to generate a password in the same style as
     the existing shared passwords while satisfying new platform rules.
 
-    The model receives a small sample (3-5 shared passwords) and an
-    explicit rule specification, and is asked to emit ONE password.
+    The model receives a small sample (3-5 shared passwords) + an
+    explicit rule specification, and is asked to emit ONE password. It
+    is instructed to merge or modify the existing password patterns to
+    produce a new password that meets the requirements — NOT to invent
+    something random.
+
+    Args:
+        existing_pws: the user's known passwords (style references)
+        min_len, require_*: parsed complexity rules
+        freeform_rules: raw text description of rules (passed to the LLM
+            verbatim when available — gives the model context the
+            regex parser may have missed)
 
     Returns None if ask_api is unavailable or the model returns
     something unusable (too short, fails rules, contains spaces).
@@ -521,23 +657,28 @@ def _gen_password_via_llm(existing_pws, min_len, require_upper,
     # Take up to 5 examples, oldest/most-frequent first.
     samples = list(existing_pws)[:5]
     rules_list = [
-        f"min length {min_len}",
-        "include uppercase" if require_upper else "",
-        "include lowercase" if require_lower else "",
-        "include digit" if require_digit else "",
-        "include special character" if require_sym else "",
+        f"min length {min_len}" if min_len else "",
+        "include an uppercase letter" if require_upper else "",
+        "include a lowercase letter" if require_lower else "",
+        "include a digit" if require_digit else "",
+        "include a special character" if require_sym else "",
     ]
     rules_list = [r for r in rules_list if r]
+    rules_block = "\n".join(f"  - {r}" for r in rules_list)
+    if freeform_rules:
+        rules_block += f"\n\nAdditional requirements (free text):\n{freeform_rules}"
     prompt = (
-        "You are generating a single new password for the user. "
-        "It must satisfy these complexity rules:\n  - "
-        + "\n  - ".join(rules_list)
-        + "\n\nThe user already uses these passwords (do NOT reuse them, "
-          "but mimic their style — capitalisation pattern, digit "
-          "placement, symbol preference, length):\n"
+        "You are generating ONE single new password for the user.\n\n"
+        "Complexity rules:\n" + rules_block + "\n\n"
+        "The user already uses these passwords — do NOT reuse them as-is, "
+        "but mimic their style (capitalisation, digit placement, symbol "
+        "preference, length, word fragments). You may MERGE parts of "
+        "existing passwords, MODIFY one slightly to meet a new rule "
+        "(e.g. append a digit, swap in a symbol), or construct a new one "
+        "that matches their style.\n"
         + "\n".join(f"  - {s}" for s in samples)
         + "\n\nOutput exactly ONE password on a single line. "
-          "No quotes, no markers, no trailing newline. "
+          "No quotes, no labels, no explanation, no trailing newline."
     )
     try:
         from lib.ask_api import ask_text
@@ -655,5 +796,31 @@ def cmd_creds(args):
         _fallback_write(fb)
         print(f"  deleted {args[1]}", file=sys.stderr)
         return
+    if cmd == "suggest":
+        # creds suggest "<free-form requirements text>" [--save]
+        # Parses what it can deterministically, then asks the local LLM
+        # to pick an existing password that fits, or merge/modify existing
+        # passwords to satisfy the rules. Prints the result. --save adds
+        # it to the shared pool.
+        if len(args) < 2:
+            print("Usage: creds suggest \"<requirements text>\" [--save]", file=sys.stderr)
+            print("Example: creds suggest \"min 12 chars, at least 1 uppercase, 1 number, 1 symbol\"", file=sys.stderr)
+            return
+        save_flag = "--save" in args
+        freeform = " ".join(a for a in args[1:] if a != "--save")
+        pw = suggest_password(freeform)
+        if pw:
+            print(f"  SUGGESTED: {pw}")
+            has_u = bool(re.search(r'[A-Z]', pw))
+            has_l = bool(re.search(r'[a-z]', pw))
+            has_d = bool(re.search(r'\d', pw))
+            has_s = bool(re.search(r'[^A-Za-z0-9]', pw))
+            print(f"  length={len(pw)}, upper={has_u}, lower={has_l}, digit={has_d}, symbol={has_s}")
+            if save_flag:
+                add_shared_password(pw)
+                print(f"  saved to shared pool ({len(get_shared_passwords())} total)")
+        else:
+            print("  no suggestion — check ask_api availability or shared pool", file=sys.stderr)
+        return
     print(f"Unknown subcommand: {cmd}", file=sys.stderr)
-    print("Commands: list, get, set, add-pw, shared-list, shared-add, shared-set, delete", file=sys.stderr)
+    print("Commands: list, get, set, add-pw, shared-list, shared-add, shared-set, suggest, delete", file=sys.stderr)
