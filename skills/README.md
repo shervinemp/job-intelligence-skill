@@ -51,77 +51,26 @@ Automated job discovery, description fetching, CV tailoring, and autonomous job 
 
 ```
 skills/
-├── README.md
-├── gmail-cli/
-│   └── gmail_cli.py          # Gmail API client
-├── gemini-browser/
-│   ├── gemini.js             # CDP-based Gemini automation
-│   └── gems.json             # Gem alias → ID mapping
-    └── job_intelligence/
+├── gmail-cli/                # Gmail API client
+├── gemini-browser/           # Gemini CDP automation (gemini.js + gems.json)
+└── job_intelligence/
     ├── stage_emails.py       # Stage emails from Gmail
     ├── extract.py            # URL extraction + admit/reject
     ├── linkedin.py           # LinkedIn job scraping
     ├── enrich.py             # Job description fetching + enrichment
     ├── tailor.py             # CV tailoring via Gemini
-    ├── apply.py              # Apply pipeline (detect/navigate/act/verify/registry/creds)
-    ├── apply/
-    │   ├── detect.py         # Job type classification + pre-flight
-    │   ├── navigate.py       # LinkedIn → external ATS
-    │   ├── auto.py           # Autonomous pipeline for all tailored jobs
-    │   ├── act/              # Form filling, submission, inspection
-    │   │   ├── fill.py           # Hybrid fill: Playwright first, Skyvern fallback
-    │   │   ├── submit.py         # Submit with 7-step outcome detection
-    │   │   ├── check.py          # Pre-submit validation
-    │   │   ├── inspect.py        # Screenshot + probe analysis
-    │   │   ├── investigate.py   # Unknown-platform deep analysis
-    │   │   └── helpers.py        # Chrome lifecycle, profile loading, fill dispatch
-    │   ├── common/           # Shared apply helpers
-    │   │   ├── capabilities.py   # Capability scanner (single page.evaluate)
-    │   │   ├── observations.py   # Learned probe-routing observations
-    │   │   ├── inspector.py      # 9-level probe cascade
-    │   │   ├── field_reader.py   # DOM field extraction (honeypot, ARIA label walk)
-    │   │   ├── filler.py         # Filler chain (Radio/Select/Combobox/File/...)
-    │   │   ├── value_reader.py   # Field-value reader cascade
-    │   │   ├── resolve.py        # Label→value resolution (profile + --answers)
-    │   │   ├── registry.py       # Platform registry loader (URL → YAML)
-    │   │   ├── registry_cli.py   # `apply.py registry` subcommand
-    │   │   ├── corpus.py         # DOM snapshot capture for offline tests
-    │   │   ├── mock_page.py      # CorpusPage — runs real JS via node+jsdom
-    │   │   ├── drift.py          # Self-test drift detector
-    │   │   ├── skyvern_bridge.py # Skyvern LLM-agent fallback
-    │   │   ├── inspect_lib.py    # Screenshot/HTML capture
-    │   │   ├── page_helpers.py   # State, page finding, captcha
-    │   │   ├── page_manager.py   # Tab lifecycle
-    │   │   ├── page_state.py     # Page-query single source of truth
-    │   │   ├── signals.py        # Success / already-applied text signals
-    │   │   ├── validate.py       # Pre-fill value validation
-    │   │   └── output.py         # Pipeline signal output (STATUS/NEXT/FILLED)
-    │   ├── strategies/       # Per-type fill strategies
-    │   │   ├── dispatch.py       # Field-type → filler dispatch
-    │   │   ├── combobox.py        # ARIA combobox fill
-    │   │   ├── select.py          # Native <select> fill
-    │   │   ├── text.py            # Text input fill
-    │   │   ├── contenteditable.py
-    │   │   └── datepicker.py
-    │   └── registry/         # Per-ATS YAML configs (no per-platform Python)
+    ├── apply.py              # Apply pipeline (detect → navigate → act → verify)
+    ├── apply/                # Hybrid fill engine, probe cascade, registry YAMLs
     ├── report.py             # Pipeline data inspection + candidates report
-    ├── categories.json       # Category → gem mapping
     ├── profile.json          # User profile for auto-apply (local, gitignored)
-    ├── GUIDELINES.md         # High-density state file (per AGENTS.md)
-    ├── lib/
-    │   ├── db/               # SQLite backend (jobs table, schema, dedup)
-    │   ├── config.py         # Paths, env loading, atomic_write_json
-    │   ├── chrome_manager.py # Dedicated Chrome lifecycle (port persistence)
-    │   ├── ask_api.py        # LLM API (vision + text, chunked images)
-    │   ├── credentials.py    # Multi-password vault + shared pool + LLM gen
-    │   ├── auth_walls.py     # Auth wall tracking
-    │   ├── call_gemini.py    # gemini.js subprocess wrapper
-    │   ├── build_resume.py   # PDF assembly from Gemini output
-    │   ├── extract_structured.py
-    │   ├── report.py         # stats, inspect, search, export, candidates
-    │   └── platforms/        # ATS-specific fetch logic
-    └── SKILL.md              # Detailed operations manual
+    ├── categories.json       # Category → gem mapping
+    ├── decisions.md          # Job accept/reject rules per category
+    ├── lib/                  # SQLite, Chrome lifecycle, credential vault, Gemini bridge
+    ├── SKILL.md              # Detailed operations manual
+    └── GUIDELINES.md         # High-density state file (per AGENTS.md)
 ```
+
+`apply/` hosts the adaptive probe system: a capability scanner, an observation store, a 9-level probe cascade, a corpus of captured DOM snapshots, and a drift detector — all platform-agnostic (no per-platform Python). See `job_intelligence/SKILL.md` for the operations manual and `GUIDELINES.md` for maintainer reference.
 
 ---
 
@@ -163,10 +112,10 @@ Features:
 | 3 | LinkedIn scrape | `linkedin.py` | Same admit/reject flow |
 | 4 | Fetch description | `enrich.py` | `admit`, `reject`, or `flag` (auth wall) |
 | 5 | CV tailoring | `tailor.py` | `admit`, `reject`, `undo`, `retry` |
-| 6 | Auto-apply | `apply.py` | `detect`, `navigate`, `act --fill/--next/--submit/--inspect`, `verify`, `auto`, `act --investigate` |
-| — | Probe management | `apply.py registry` | `candidates`, `confirm`, `clear`, `corpus`, `failures`, `drift` |
-| — | Credentials | `apply.py creds` | `set`, `get`, `suggest`, `shared-set`, `shared-add`, `list` |
+| 6 | Auto-apply | `apply.py` | `detect`, `navigate`, `act --fill/--check/--submit/--inspect`, `verify`, `auto`, `act --investigate` |
 | — | Data inspection | `report.py` | `stats`, `inspect`, `search`, `export`, `summary`, `candidates` |
+
+For probe inspection (`registry`), credentials (`creds`), and drift self-test, see the operations manual.
 
 All stage scripts respond to `help`. Pipeline state via `report.py stats`.
 
@@ -262,13 +211,11 @@ A job can be at `tailored` stage with `rejected` state, or `described` with `act
 
 | File | Purpose |
 |------|---------|
-| `.env` | Gmail search query override, `JI_AUTO_CONSENT`, `JI_TAILOR` |
+| `.env` | Gmail search query override |
 | `categories.json` | Category → gem alias mapping |
 | `gems.json` | Gem alias → raw Gemini ID |
 | `profile.json` | User profile for auto-apply (local only, not tracked) |
 | `decisions.md` | Job accept/reject rules per category |
-| `GUIDELINES.md` | High-density state file (per AGENTS.md compression) |
-| `apply/registry/*.yaml` | Per-ATS platform configs (declarative, no Python) |
 
 ---
 
@@ -317,18 +264,7 @@ Tailored CVs and application files are written to `~/.ji/results/{jid}/`:
 └── *.pdf                  # Generated CV / cover letter
 ```
 
-Probe system state lives under `~/.ji/`:
-
-```
-📁 ~/.ji/
-├── state/jobs.db                # SQLite (jobs + state)
-├── state/apply_state.json       # Per-job pipeline state
-├── registry-obs/                # Learned observations (per profile hash)
-├── registry-corpus/             # Captured DOM snapshots (first-wins)
-├── registry-failures/           # Cascade-miss artifacts (last 25)
-├── snapshots/                  # Probe snapshots (last 20)
-└── chrome-profile/             # Persistent Chrome session
-```
+Pipeline state lives under `~/.ji/` (SQLite, captured DOM snapshots, learned observations, Chrome profile). See `SKILL.md` for the full layout.
 
 ---
 
@@ -344,10 +280,8 @@ Probe system state lives under `~/.ji/`:
 | CAPTCHA | Security challenge | Solve in Chrome, press Enter to resume |
 | DB corruption | Bad reset / crash | `python3 extract.py reset` |
 | Auth wall stuck | Blocked page | `enrich.py open` then `enrich.py --refresh` |
-| 2FA required | Platform needs SMS/app code | Complete 2FA in Chrome, rerun `act --fill` |
-| Session expired | Form invalidated mid-fill | Re-auth, rerun `act --fill` (no `--force` needed) |
-| Unknown platform | Probe found 0 fields | `apply.py registry failures` → `act --investigate` |
-| Stale observation | Platform redesigned | `apply.py registry drift` (auto-demotes) |
+
+The probe system auto-detects 2FA, session expiry, mid-fill popups, and unknown platforms — emitting `STATUS:` + `NEXT:` signals for the orchestrator. See `SKILL.md` for these edge cases.
 
 ---
 
@@ -356,11 +290,10 @@ Probe system state lives under `~/.ji/`:
 | Dependency | Version | Notes |
 |------------|---------|-------|
 | Python | 3.12+ | Core runtime |
-| Node.js | 20+ | Gemini automation, jsdom for corpus tests |
+| Node.js | 20+ | Gemini automation |
 | Google Chrome | Latest | CDP target for Playwright + Puppeteer |
 | Playwright (Python) | — | `pip install playwright` |
 | puppeteer-core (Node) | — | `npm install -g puppeteer-core` |
-| jsdom (Node) | — | `npm install jsdom` (optional, for `test_corpus.py`) |
 | Google Cloud Project | — | Enable Gmail API |
 | Gmail API credentials | — | `client_secret.json` from Google Cloud Console |
 
