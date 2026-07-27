@@ -21,6 +21,10 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
         emit_error(f"job {jid} not found")
         return 1
     stage, job_state = db_row["stage"], db_row["state"]
+    if stage == "applied":
+        emit_status("already applied")
+        emit_next("verify")
+        return 0
 
     state = load_state()
     if state.get("jid") != jid:

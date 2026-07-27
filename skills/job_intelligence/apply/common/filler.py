@@ -199,9 +199,17 @@ class RadioFiller(FieldFiller):
                     return (r.value || '').toLowerCase();
                 }
 
+                // Helper: click radio and dispatch React-compatible events
+                function clickRadio(r) {
+                    r.click();
+                    r.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                    r.dispatchEvent(new Event('change', { bubbles: true }));
+                    r.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+
                 // Try 1: match by value (standard HTML)
                 for (const r of radios) {
-                    if (r.value && r.value.toLowerCase() === ans) { r.click(); return true; }
+                    if (r.value && r.value.toLowerCase() === ans) { clickRadio(r); return true; }
                 }
                 // Try 1b: Yes/No prefix match — collect ALL matches, disambiguate
                 if (ynPref) {
@@ -218,12 +226,12 @@ class RadioFiller(FieldFiller):
                     if (ans.length > ynPref.length + 1) {
                         for (const m of matches) {
                             if (m.label === ans || m.label.startsWith(ans) || ans.startsWith(m.label)) {
-                                m.radio.click(); return 'exact:' + m.label.slice(0, 40);
+                                clickRadio(m.radio); return 'exact:' + m.label.slice(0, 40);
                             }
                         }
                     }
                     if (matches.length === 1) {
-                        matches[0].radio.click(); return 'single:' + matches[0].label.slice(0, 40);
+                        clickRadio(matches[0].radio); return 'single:' + matches[0].label.slice(0, 40);
                     }
                     // Multiple matches — disambiguate by location words
                     if (matches.length > 1 && country) {
@@ -242,12 +250,12 @@ class RadioFiller(FieldFiller):
                             }
                         }
                         if (bestMatch && bestScore > 0) {
-                            bestMatch.radio.click(); return 'loc:' + bestMatch.label.slice(0, 40) + ' score=' + bestScore;
+                            clickRadio(bestMatch.radio); return 'loc:' + bestMatch.label.slice(0, 40) + ' score=' + bestScore;
                         }
                     }
                     // No country disambiguation — click first match
                     if (matches.length > 0) {
-                        matches[0].radio.click(); return 'first_match:' + matches[0].label.slice(0, 40);
+                        clickRadio(matches[0].radio); return 'first_match:' + matches[0].label.slice(0, 40);
                     }
                 }
                 // Try 2: match by associated <label> text
@@ -255,7 +263,7 @@ class RadioFiller(FieldFiller):
                     const lbl = r.closest('label');
                     if (lbl) {
                         const txt = lbl.textContent.replace(r.value || '', '').trim().toLowerCase();
-                        if (txt === ans || txt.startsWith(ans) || ans.startsWith(txt)) { r.click(); return 'try2:' + txt.slice(0, 40); }
+                        if (txt === ans || txt.startsWith(ans) || ans.startsWith(txt)) { clickRadio(r); return 'try2:' + txt.slice(0, 40); }
                     }
                 }
                 // Try 3: walk up 4 levels and match text (LinkedIn pattern)
@@ -266,7 +274,7 @@ class RadioFiller(FieldFiller):
                         if (!el) break;
                         const txt = el.textContent.trim().toLowerCase();
                         if (txt === ans || txt.startsWith(ans + ' ') || txt.startsWith(ans + ',') || ans.startsWith(txt)) {
-                            r.click(); return 'try3:' + txt.slice(0, 40);
+                            clickRadio(r); return 'try3:' + txt.slice(0, 40);
                         }
                     }
                 }
@@ -276,7 +284,7 @@ class RadioFiller(FieldFiller):
                     while (sib) {
                         const txt = sib.textContent.trim().toLowerCase();
                         if (txt && (txt === ans || txt.startsWith(ans) || ans.startsWith(txt))) {
-                            r.click(); return 'try4:' + txt.slice(0, 40);
+                            clickRadio(r); return 'try4:' + txt.slice(0, 40);
                         }
                         sib = sib.nextElementSibling;
                     }
@@ -298,7 +306,7 @@ class RadioFiller(FieldFiller):
                         const lblNorm = normEEOC(lbl);
                         if (lblNorm && lblNorm.length > 5) {
                             if (ansNorm === lblNorm || ansNorm.includes(lblNorm) || lblNorm.includes(ansNorm)) {
-                                r.click(); return 'try5:norm:' + lbl.slice(0, 40);
+                                clickRadio(r); return 'try5:norm:' + lbl.slice(0, 40);
                             }
                         }
                     }

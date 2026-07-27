@@ -74,7 +74,34 @@ def cmd_submit(jid, confirm=False, force=False):
                 emit_status("captcha", "CAPTCHA still present after timeout")
                 return 1
 
+            # Pre-flight: check for already-applied signals on any ATS
+            from apply.common.signals import has_already_applied_text
+            from apply.common.page_helpers import page_text as _pt
+            try:
+                _ptxt = _pt(page) or ""
+                if has_already_applied_text(_ptxt):
+                    mark_applied(jid)
+                    emit_status("already applied")
+                    emit_next("verify")
+                    return 0
+            except Exception:
+                pass
+
             if "linkedin.com/jobs" in (page.url or "").lower():
+                # LinkedIn-specific pre-flight: Easy Apply button may be gone
+                # (LinkedIn shows "Applied" after submission)
+                from apply.common.signals import has_already_applied_text
+                from apply.common.page_helpers import page_text as _lpt
+                try:
+                    _lptxt = _lpt(page) or ""
+                    if has_already_applied_text(_lptxt):
+                        mark_applied(jid)
+                        emit_status("already applied")
+                        emit_next("verify")
+                        return 0
+                except Exception:
+                    pass
+
                 dialog_open = page.evaluate("""() => {
                     const d = document.querySelector('dialog[data-testid="dialog"]');
                     return d && d.open && d.offsetParent !== null;
@@ -226,8 +253,11 @@ def cmd_submit(jid, confirm=False, force=False):
                 pages_before = {id(p) for p in ctx.pages}
                 success, success_page = _check_submit_success(ctx, page, pages_before)
                 if success:
-                    mark_applied(jid)
-                    emit_status("submitted", "Playwright clicked submit")
+                    was_new = mark_applied(jid)
+                    if was_new:
+                        emit_status("submitted", "Playwright clicked submit")
+                    else:
+                        emit_status("already applied")
                     emit_next("verify")
                     return 0
 

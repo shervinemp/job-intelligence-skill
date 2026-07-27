@@ -40,17 +40,24 @@ def tag_page(page, jid):
 
 
 def mark_applied(jid):
+    """Atomically mark a job as applied. Returns True if this call actually
+    transitioned the stage (was not already 'applied'). This prevents
+    duplicate submissions even if two processes race past the stage check."""
     from lib.db import get_conn
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-    get_conn().execute(
-        "UPDATE jobs SET stage='applied', updated_at=?, applied_at=? WHERE id=?",
+    cur = get_conn().execute(
+        "UPDATE jobs SET stage='applied', updated_at=?, applied_at=? "
+        "WHERE id=? AND stage != 'applied'",
         (ts, ts, jid),
-    ).connection.commit()
+    )
+    cur.connection.commit()
+    was_new = cur.rowcount > 0
     try:
         from apply.common.apply_state import clear as _as_clear
         _as_clear(jid)
     except Exception:
         pass
+    return was_new
 
 
 def check_applied_signal(page):
