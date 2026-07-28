@@ -51,11 +51,6 @@ def main():
     detect_p = sub.add_parser("detect", help="Pre-flight classify")
     detect_p.add_argument("jid", nargs="?", help="Job ID (auto-pick first tailored if omitted)")
 
-    auto_p = sub.add_parser("auto", help="Run full pipeline for all tailored jobs")
-    auto_p.add_argument("--jid", help="Process a single job")
-    auto_p.add_argument("--quick", action="store_true", help="Deterministic-only (no vision/Skyvern)")
-    auto_p.add_argument("--max-pages", type=int, default=4, help="Max form pages (default 4)")
-
     nav_p = sub.add_parser("navigate", help="LinkedIn -> External ATS")
     nav_p.add_argument("jid", help="Job ID")
 
@@ -111,9 +106,6 @@ def main():
     if args.command == "detect":
         from apply.detect import run
         run(args.jid or _auto_jid())
-    elif args.command == "auto":
-        from apply.auto import run as auto_run
-        return auto_run(jid=args.jid, quick=args.quick, max_pages=args.max_pages)
     elif args.command == "navigate":
         from apply.navigate import run
         run(args.jid)
