@@ -588,8 +588,20 @@ def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list
                 continue
 
         try:
+            key = _field_key(f)
+            if key in filled_keys:
+                continue
+            # Skip if the field already has the correct value (prevents
+            # double-typing on autocomplete/combobox fields during sweeps).
+            sel = f.get("_sel") or f.get("selector") or ""
+            if sel:
+                import json as _json
+                current = page.evaluate(f"() => document.querySelector({_json.dumps(sel)})?.value || ''")
+                if current and (current == ans or current in ans or ans in current):
+                    filled.append({"label": label, "key": key})
+                    continue
             if field_deterministic(page, f, ans):
-                filled.append({"label": label, "key": _field_key(f)})
+                filled.append({"label": label, "key": key})
                 if res.provenance == "answers_override":
                     learn_mapping(label, ans)
                 if jid:
