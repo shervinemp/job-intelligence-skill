@@ -13,7 +13,7 @@ from apply.common.page_helpers import (
     load_state, page_text, find_page,
     check_applied_signal, scan_actions,
 )
-from apply.common.resolve import resolve, learn_mapping
+from apply.common.resolve import resolve, learn_mapping, _build_ephemeral
 from apply.common.signals import has_success_text
 
 RESULTS_DIR = os.path.join(JI_HOME, "results")
@@ -438,6 +438,49 @@ def _resolve_linkedin_apply(page):
         return None
 
 
+def _gap_fill_into_answers(fields, profile, answers_override, jid, ephemeral):
+    """Mutate answers_override in-place with LLM key-mapping for no_match fields.
+    Returns updated answers_override (new dict if None was given).
+    Only fills gaps — never overrides existing entries.
+    """
+    try:
+        gap_fields = []
+        for f in fields:
+            label = (f.get("label") or "").strip()
+            if not label:
+                continue
+            if f.get("tag") == "input" and (f.get("accept") or f.get("type") == "file"):
+                continue
+            if any(kw in label.lower() for kw in ("resume", " cv ", "cover")):
+                continue
+            r = resolve(label, profile, answers_override,
+                        autocomplete=f.get("autocomplete", ""),
+                        field_name=f.get("name", ""),
+                        field_id=f.get("id", ""),
+                        field_tag=f.get("tag", ""),
+                        field_type=f.get("type", ""),
+                        field_role=f.get("role", ""),
+                        ephemeral=ephemeral)
+            if r.value is None:
+                gap_fields.append(f)
+        if not gap_fields:
+            return answers_override
+        from apply.act.suggest import llm_field_key_mapping
+        from lib.db import get_job
+        _job = get_job(jid) or {}
+        gap = llm_field_key_mapping(gap_fields, profile, _job, ephemeral=ephemeral)
+        if not gap:
+            return answers_override
+        if answers_override is None:
+            answers_override = {}
+        for k, v in gap.items():
+            if k not in answers_override:
+                answers_override[k] = v
+    except Exception as e:
+        print(f"  LLM_MAP_SKIP: {e}", file=sys.stderr)
+    return answers_override
+
+
 def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list[dict], list[dict]]:
     from apply.strategies.dispatch import field_deterministic
 
@@ -481,6 +524,13 @@ def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list
 
     for f in fields:
         f["_country"] = user_loc_words
+
+    # Build ephemeral once — shared across all resolve calls in this page
+    ephemeral = _build_ephemeral(profile)
+
+    # Phase 1: heuristic resolve + LLM batch gap-fill for no_match fields.
+    # Merges LLM key-mapping results into answers_override so Phase 2 picks them up.
+    answers_override = _gap_fill_into_answers(fields, profile, answers_override, jid, ephemeral)
 
     for f in fields:
         label = f.get("label", "").strip()
@@ -527,7 +577,8 @@ def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list
                       field_id=f.get("id", ""),
                       field_tag=f.get("tag", ""),
                       field_type=f.get("type", ""),
-                      field_role=f.get("role", ""))
+                      field_role=f.get("role", ""),
+                      ephemeral=ephemeral)
         ans = res.value
         if ans is None:
             if tag == "input" and ftype == "checkbox" and os.environ.get("JI_AUTO_CONSENT") == "1":

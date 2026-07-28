@@ -187,6 +187,9 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
         emit_error("no answers resolved — check profile or --answers")
         return 1
 
+    if answers is None:
+        answers = {}
+
     from apply.common.registry import resolve as resolve_registry
 
     filled_all, failed_all = [], []

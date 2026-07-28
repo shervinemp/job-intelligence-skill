@@ -161,6 +161,7 @@ def resolve(
     field_tag: str = "",
     field_type: str = "",
     field_role: str = "",
+    ephemeral: Optional[dict] = None,
 ) -> Resolution:
     if answers_override is None:
         answers_override = {}
@@ -169,26 +170,29 @@ def resolve(
     if not norm:
         return Resolution(None, None, label, "no_match")
 
+    # Build ephemeral once if not provided (shared across calls in a loop)
+    if ephemeral is None:
+        ephemeral = _build_ephemeral(profile)
+
     # Step 1: --answers override (explicit user/assistant value for this run)
     for k, v in answers_override.items():
         nk = normalize(k)
         if nk == norm:
-            return Resolution(v, "answers_override", label, "user_typed")
+            return Resolution(v, "answers_override", label, "answers_override")
         # Prefix match for field_reader's 60-char label truncation.
         # Bidirectional: field label may be truncated (nk longer than norm)
         # or answer key may be truncated (norm longer than nk).
         if len(nk) >= 10 and (norm.startswith(nk) or nk.startswith(norm)):
-            return Resolution(v, "answers_override", label, "user_typed")
+            return Resolution(v, "answers_override", label, "answers_override")
 
     # Step 1.5a: phone country code — extract from phone before generic matching
     if "country code" in norm and "phone" in norm:
-        phone_val = _find_ephemeral_value("phone", _build_ephemeral(profile))
+        phone_val = _find_ephemeral_value("phone", ephemeral)
         if phone_val:
             m = re.match(r'\+?(\d{1,3})', phone_val)
             return Resolution(("+" + m.group(1)) if m else "+1", "phone", label, "country_code")
 
     # Step 1.5: HTML autocomplete attribute (standardized semantics, free)
-    ephemeral = _build_ephemeral(profile)
     ac_key = _autocomplete_key(autocomplete)
     if ac_key:
         val = _find_ephemeral_value(ac_key, ephemeral)

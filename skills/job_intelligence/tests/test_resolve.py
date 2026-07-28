@@ -95,7 +95,7 @@ class AnswersOverride(unittest.TestCase):
     def test_exact_override_wins(self):
         r = self._res("Expected salary", {"expected salary": "95000"})
         self.assertEqual(r.value, "95000")
-        self.assertEqual(r.provenance, "user_typed")
+        self.assertEqual(r.provenance, "answers_override")
 
     def test_truncation_prefix_match(self):
         # field_reader truncates labels to 60 chars; a >=10-char key that is a

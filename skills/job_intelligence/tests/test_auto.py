@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from apply.auto import run, _process_one, _print_summary, _extract_error_labels, _llm_supply_answers
+from apply.auto import run, _process_one, _print_summary, _extract_error_labels
 
 
 class AutoDryRun(unittest.TestCase):
@@ -72,7 +72,7 @@ class AutoProcessOne(unittest.TestCase):
              patch("apply.act.check.cmd_check", return_value=0), \
              patch("apply.act.submit.cmd_submit", return_value=0), \
              patch("lib.db.get_conn", return_value=conn):
-            _process_one("testjid", False, 4, False, results)
+            _process_one("testjid", False, 4, True, results)
         self.assertEqual(len(results["submitted"]), 1)
         self.assertEqual(len(results["stopped"]), 0)
 
@@ -86,7 +86,7 @@ class AutoProcessOne(unittest.TestCase):
              patch("apply.act.fill.cmd_fill", return_value=0), \
              patch("apply.act.check.cmd_check", return_value=0), \
              patch("lib.db.get_conn", return_value=conn):
-            _process_one("testjid", False, 4, True, results)
+            _process_one("testjid", False, 4, False, results)
         self.assertEqual(len(results["stopped"]), 1)
         self.assertEqual(len(results["submitted"]), 0)
 
@@ -149,19 +149,6 @@ class ExtractErrorLabels(unittest.TestCase):
 
     def test_empty_input(self):
         self.assertEqual(_extract_error_labels([]), [])
-
-
-class LlmSupplyAnswers(unittest.TestCase):
-    """_llm_supply_asks LLM for values on missing fields."""
-
-    @patch("lib.ask_api.available", return_value=False)
-    def test_llm_unavailable_returns_empty(self, _):
-        result = _llm_supply_answers("Engineer", ["Country"])
-        self.assertEqual(result, {})
-
-    def test_no_labels_returns_empty(self):
-        result = _llm_supply_answers("Engineer", [])
-        self.assertEqual(result, {})
 
 
 if __name__ == "__main__":

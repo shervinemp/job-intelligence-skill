@@ -19,6 +19,7 @@ from apply.act.helpers import (
 )
 from apply.common.registry import resolve as resolve_registry
 from apply.common.filler import _read_element_value
+from apply.common.resolve import resolve, _build_ephemeral
 
 
 def cmd_check(jid):
@@ -75,6 +76,7 @@ def cmd_check(jid):
                 return 1
 
             ans_dict = _build_ans_dict(profile)
+            ephemeral = _build_ephemeral(profile)
 
             for f in fields:
                 label = (f.get("label") or "").strip()
@@ -99,14 +101,14 @@ def cmd_check(jid):
                 # Read what's actually in the DOM
                 actual = _read_element_value(page, sel, ans=ans_dict.get(label, ""), field=f)
                 # Resolve what we expected to fill
-                from apply.common.resolve import resolve
                 res = resolve(label, profile, None,
                               autocomplete=f.get("autocomplete", ""),
                               field_name=f.get("name", ""),
                               field_id=f.get("id", ""),
                               field_tag=f.get("tag", ""),
                               field_type=f.get("type", ""),
-                              field_role=f.get("role", ""))
+                              field_role=f.get("role", ""),
+                              ephemeral=ephemeral)
                 expected = res.value
 
                 checked += 1
@@ -291,38 +293,42 @@ def cmd_check(jid):
                             "reason": "Required field appears empty",
                         })
 
+            # Cross-field consistency checks (page is alive inside with block)
+            loc = (profile.get("location") or "").lower()
+            user_city = loc.split(",")[0].strip() if "," in loc else ""
+            filled_values = {}
+            for f in fields:
+                sel = f.get("_sel") or ""
+                if sel:
+                    val = _read_element_value(page, sel, field=f)
+                    if val:
+                        filled_values[(f.get("label") or "").lower()] = val
+
+            country_val = filled_values.get("country") or filled_values.get("if hired, in which country will you be based?")
+            loc_val = filled_values.get("location") or filled_values.get("location (city)")
+            if country_val and loc_val and user_city:
+                if user_city not in loc_val.lower() and country_val.lower() not in loc_val.lower():
+                    issues.append({
+                        "label": "cross-field: country vs location",
+                        "expected": f"both should reference '{user_city}'",
+                        "actual": f"country={country_val}, location={loc_val}",
+                        "severity": "WARN",
+                        "reason": "Country and location fields may be inconsistent",
+                    })
+
+            errors = [i for i in issues if i["severity"] == "ERROR"]
+            warnings = [i for i in issues if i["severity"] == "WARN"]
+            infos = [i for i in issues if i["severity"] == "INFO"]
+
+            from apply.common.page_helpers import save_state
+            state["check_errors"] = errors
+            state["check_warnings"] = warnings
+            state["check_infos"] = infos
+            save_state(state)
+
     except Exception as e:
         emit_error(f"check failed: {e}")
         return 1
-
-    # Cross-field consistency checks
-    loc = (profile.get("location") or "").lower()
-    user_city = loc.split(",")[0].strip() if "," in loc else ""
-    filled_values = {}
-    for f in fields:
-        sel = f.get("_sel") or ""
-        if sel:
-            val = _read_element_value(page if 'page' in dir() else None, sel, field=f)
-            if val:
-                filled_values[(f.get("label") or "").lower()] = val
-
-    # Check: if "country" field says one thing and "location" says another
-    country_val = filled_values.get("country") or filled_values.get("if hired, in which country will you be based?")
-    loc_val = filled_values.get("location") or filled_values.get("location (city)")
-    if country_val and loc_val and user_city:
-        if user_city not in loc_val.lower() and country_val.lower() not in loc_val.lower():
-            issues.append({
-                "label": "cross-field: country vs location",
-                "expected": f"both should reference '{user_city}'",
-                "actual": f"country={country_val}, location={loc_val}",
-                "severity": "WARN",
-                "reason": "Country and location fields may be inconsistent",
-            })
-
-    # Output report
-    errors = [i for i in issues if i["severity"] == "ERROR"]
-    warnings = [i for i in issues if i["severity"] == "WARN"]
-    infos = [i for i in issues if i["severity"] == "INFO"]
 
     print(f"CHECK: {checked} fields verified, {len(errors)} errors, {len(warnings)} warnings, {len(infos)} unreadable", file=sys.stderr)
 
