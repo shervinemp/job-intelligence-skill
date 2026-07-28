@@ -415,7 +415,7 @@ async function deleteChat(page) {
     if (convId) {
       for (let attempt = 0; attempt < 3; attempt++) {
         if (attempt > 0) await wait(3000);
-        clicked = await page.evaluate((cid, fullUrl) => {
+        clicked = await page.evaluate(({cid, fullUrl}) => {
           const convs = document.querySelectorAll('[data-test-id="conversation"]');
           for (const c of convs) {
             const link = c.querySelector('a');
@@ -429,7 +429,7 @@ async function deleteChat(page) {
             return 'ok';
           }
           return 'not_found';
-        }, convId, convUrl);
+        }, {cid: convId, fullUrl: convUrl});
         if (clicked !== 'not_found') break;
       }
     }
