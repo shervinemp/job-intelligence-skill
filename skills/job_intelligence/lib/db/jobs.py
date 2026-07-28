@@ -29,6 +29,10 @@ def _insert_job(jid, replace=False, commit=True, **fields):
     fields["scripts"] = scripts or "[]"
     fields.setdefault("state", "active")
     fields.setdefault("stage", "extracted")
+    if "title" in fields:
+        fields["title"] = _whitespace_normalize(fields["title"])
+    if "company" in fields:
+        fields["company"] = _whitespace_normalize(fields["company"])
     fields["id"] = jid
     cols = ", ".join(fields.keys())
     qs = ", ".join("?" for _ in fields)
@@ -36,6 +40,11 @@ def _insert_job(jid, replace=False, commit=True, **fields):
     conn.execute(f"{cmd} jobs ({cols}) VALUES ({qs})", list(fields.values()))
     if commit:
         conn.commit()
+
+
+def _whitespace_normalize(s):
+    """Collapse all whitespace (tabs, newlines, etc) to single spaces and strip."""
+    return re.sub(r'\s+', ' ', str(s)).strip() if s else (s or "")
 
 
 def _normalize_url(url):
@@ -79,36 +88,102 @@ def _normalize_url(url):
         return url.strip("/")
 
 
+def _sql_norm_col(col):
+    """SQLite expression that normalizes whitespace like _whitespace_normalize.
+       Replaces tabs, newlines, carriage returns with space, collapses multiple,
+       then strips."""
+    return f"LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE({col}, CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' '), '  ', ' ')))"
+
+
+_ABBREV = {
+    "sr": "senior", "sr.": "senior",
+    "jr": "junior", "jr.": "junior",
+    "sw": "software", "sde": "software development engineer",
+    "eng": "engineer", "mgr": "manager", "dev": "developer",
+    "dept": "department", "dir": "director",
+    "ml": "machine learning", "ai": "artificial intelligence",
+    "ui": "user interface", "ux": "user experience",
+    "fe": "frontend", "be": "backend",
+    "infra": "infrastructure", "admin": "administrator",
+    "db": "database",
+}
+
+
+def _expand_abbrev(text):
+    """Expand common abbreviations in a title string."""
+    words = _whitespace_normalize(text).lower().split()
+    expanded = [_ABBREV.get(w, w) for w in words]
+    return " ".join(expanded)
+
+
+def _token_overlap(a, b, threshold=0.6):
+    """Token overlap ratio after abbreviation expansion."""
+    if not a or not b:
+        return 0.0
+    a_tokens = set(_expand_abbrev(a).split())
+    b_tokens = set(_expand_abbrev(b).split())
+    if not a_tokens or not b_tokens:
+        return 0.0
+    return len(a_tokens & b_tokens) / max(len(a_tokens), len(b_tokens))
+
+
 def find_duplicate(jid, title, company, conn=None):
     """Find an existing active job with the same title+company (different JID).
 
     Returns the duplicate job row (id, stage) or None.
     Prefers jobs in more advanced stages (applied > tailored > described > extracted).
+
+    Phase 1: exact match after SQL-level whitespace normalization.
+    Phase 2: token-overlap fallback (same company, similar title).
     """
     if not title or not company:
         return None
     if conn is None:
         conn = get_conn()
-    norm_title = re.sub(r'\s+', ' ', title.strip()).lower()
-    norm_company = re.sub(r'\s+', ' ', company.strip()).lower()
+    norm_title = _whitespace_normalize(title).lower()
+    norm_company = _whitespace_normalize(company).lower()
+
+    # Phase 1: exact match after full whitespace normalization
+    sn = _sql_norm_col
     row = conn.execute(
-        "SELECT id, stage FROM jobs "
-        "WHERE id != ? AND state = 'active' "
-        "AND title IS NOT NULL AND company IS NOT NULL "
-        "AND LOWER(TRIM(REPLACE(title, '  ', ' '))) = ? "
-        "AND LOWER(TRIM(REPLACE(company, '  ', ' '))) = ? "
-        "ORDER BY CASE stage "
-        "  WHEN 'applied' THEN 0 "
-        "  WHEN 'tailored' THEN 1 "
-        "  WHEN 'described' THEN 2 "
-        "  ELSE 3 END "
-        "LIMIT 1",
+        f"SELECT id, stage, title, company FROM jobs "
+        f"WHERE id != ? AND state = 'active' "
+        f"AND title IS NOT NULL AND company IS NOT NULL "
+        f"AND {sn('title')} = ? AND {sn('company')} = ? "
+        f"ORDER BY CASE stage "
+        f"  WHEN 'applied' THEN 0 "
+        f"  WHEN 'tailored' THEN 1 "
+        f"  WHEN 'described' THEN 2 "
+        f"  ELSE 3 END "
+        f"LIMIT 1",
         (jid, norm_title, norm_company),
     ).fetchone()
-    return row
+    if row:
+        return {"id": row["id"], "stage": row["stage"]}
+
+    # Phase 2: token-overlap fallback — same company, similar title
+    sn_c = _sql_norm_col("company")
+    rows = conn.execute(
+        f"SELECT id, stage, title, company FROM jobs "
+        f"WHERE id != ? AND state = 'active' "
+        f"AND title IS NOT NULL AND company IS NOT NULL "
+        f"AND {sn_c} = ?",
+        (jid, norm_company),
+    ).fetchall()
+    for r in rows:
+        if _token_overlap(title, r["title"]) >= 0.6:
+            return {"id": r["id"], "stage": r["stage"]}
+    return None
 
 
-def add_job(job_data):
+def add_job(job_data, skip_known=False):
+    """Insert a new job. Returns jid on insert, existing jid if URL known,
+    None if blocked by title+company dedup.
+
+    With skip_known=True, returns None for URL-known jobs (avoids
+    wasted work in scrapers that don't need to re-fetch descriptions).
+    Notes are still updated on URL-known jobs regardless of skip_known.
+    """
     from .companies import company_upsert
     conn = get_conn()
     raw_url = job_data.get("url", "")
@@ -123,6 +198,8 @@ def add_job(job_data):
                 (job_data["notes"], datetime.now().isoformat(), jid),
             )
             conn.commit()
+        if skip_known:
+            return None
         return jid
 
     title = job_data.get("title", "")

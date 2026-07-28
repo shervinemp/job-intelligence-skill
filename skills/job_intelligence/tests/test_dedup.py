@@ -5,7 +5,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import lib.db.schema as schema
-from lib.db.jobs import find_duplicate, add_job
+from lib.db.jobs import find_duplicate, add_job, _whitespace_normalize, _token_overlap
 
 
 class _TempDBMixin:
@@ -53,7 +53,7 @@ class FindDuplicate(_TempDBMixin, unittest.TestCase):
 
     def test_different_title_no_dup(self):
         self._insert("aaa", "Senior Engineer", "Acme")
-        result = find_duplicate("bbb", "Junior Engineer", "Acme")
+        result = find_duplicate("bbb", "Junior QA Engineer", "Acme")
         self.assertIsNone(result)
 
     def test_different_company_no_dup(self):
@@ -108,7 +108,7 @@ class AddJobDedup(_TempDBMixin, unittest.TestCase):
         jid1 = add_job({"url": "https://linkedin.com/jobs/view/100",
                         "title": "Senior Engineer", "company": "Acme"})
         jid2 = add_job({"url": "https://linkedin.com/jobs/view/200",
-                        "title": "Junior Engineer", "company": "Acme"})
+                        "title": "Junior QA Engineer", "company": "Acme"})
         self.assertIsNotNone(jid1)
         self.assertIsNotNone(jid2)
 
@@ -125,6 +125,99 @@ class AddJobDedup(_TempDBMixin, unittest.TestCase):
         jid2 = add_job({"url": "https://linkedin.com/jobs/view/100",
                         "title": "Senior Engineer", "company": "Acme"})
         self.assertEqual(jid1, jid2)
+
+
+
+class WhitespaceNormalization(_TempDBMixin, unittest.TestCase):
+    def test_tab_in_stored_title_matches(self):
+        self.conn.execute(
+            "INSERT INTO jobs (id, url, title, company, stage, state, created_at, updated_at, scripts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]')",
+            ("aaa", "https://example.com/aaa", "Senior\tEngineer", "Acme", "extracted", "active",
+             datetime.now().isoformat(), datetime.now().isoformat()),
+        )
+        self.conn.commit()
+        result = find_duplicate("bbb", "Senior Engineer", "Acme")
+        self.assertIsNotNone(result)
+
+    def test_newline_in_stored_title_matches(self):
+        self.conn.execute(
+            "INSERT INTO jobs (id, url, title, company, stage, state, created_at, updated_at, scripts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]')",
+            ("aaa", "https://example.com/aaa", "Senior\nEngineer", "Acme", "extracted", "active",
+             datetime.now().isoformat(), datetime.now().isoformat()),
+        )
+        self.conn.commit()
+        result = find_duplicate("bbb", "Senior Engineer", "Acme")
+        self.assertIsNotNone(result)
+
+    def test_multiple_spaces_normalized(self):
+        self.conn.execute(
+            "INSERT INTO jobs (id, url, title, company, stage, state, created_at, updated_at, scripts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]')",
+            ("aaa", "https://example.com/aaa", "Senior   Engineer", "Acme", "extracted", "active",
+             datetime.now().isoformat(), datetime.now().isoformat()),
+        )
+        self.conn.commit()
+        result = find_duplicate("bbb", "Senior Engineer", "Acme")
+        self.assertIsNotNone(result)
+
+    def test_whitespace_normalize_helper(self):
+        self.assertEqual(_whitespace_normalize("hello   world"), "hello world")
+        self.assertEqual(_whitespace_normalize("hello\tworld"), "hello world")
+        self.assertEqual(_whitespace_normalize("hello\nworld"), "hello world")
+        self.assertEqual(_whitespace_normalize("  hello world  "), "hello world")
+        self.assertEqual(_whitespace_normalize(None), "")
+
+
+class TokenOverlap(_TempDBMixin, unittest.TestCase):
+    def test_sr_matches_senior_same_company(self):
+        self._insert("aaa", "Senior Python Engineer", "Acme")
+        result = find_duplicate("bbb", "Sr. Python Engineer", "Acme")
+        self.assertIsNotNone(result)
+
+    def test_different_company_no_token_match(self):
+        self._insert("aaa", "Senior Engineer", "Acme")
+        result = find_duplicate("bbb", "Senior Engineer", "Beta")
+        self.assertIsNone(result)
+
+    def test_low_token_overlap_no_match(self):
+        self._insert("aaa", "Senior Python Engineer Backend", "Acme")
+        result = find_duplicate("bbb", "Senior QA Tester", "Acme")
+        self.assertIsNone(result)
+
+    def test_token_overlap_helper(self):
+        self.assertGreaterEqual(_token_overlap("Senior Engineer", "Sr. Engineer"), 0.6)
+        self.assertGreaterEqual(_token_overlap("Python Developer", "Python Developer"), 0.6)
+        self.assertLess(_token_overlap("Senior Python Engineer", "Senior QA Tester"), 0.6)
+        self.assertGreaterEqual(_token_overlap("Senior Python Engineer", "Senior Software Engineer"), 0.6)
+        self.assertLess(_token_overlap("Senior Engineer", "Junior QA Engineer"), 0.6)
+        self.assertEqual(_token_overlap("", "Anything"), 0.0)
+
+
+class AddJobSkipKnown(_TempDBMixin, unittest.TestCase):
+    def test_skip_known_returns_none_for_existing_url(self):
+        jid1 = add_job({"url": "https://linkedin.com/jobs/view/100",
+                        "title": "Engineer", "company": "Acme"})
+        self.assertIsNotNone(jid1)
+        result = add_job({"url": "https://linkedin.com/jobs/view/100",
+                          "title": "Engineer", "company": "Acme"},
+                         skip_known=True)
+        self.assertIsNone(result)
+
+    def test_skip_known_still_inserts_new_job(self):
+        result = add_job({"url": "https://linkedin.com/jobs/view/999",
+                          "title": "New Role", "company": "NewCo"},
+                         skip_known=True)
+        self.assertIsNotNone(result)
+
+    def test_skip_known_true_but_dup_title_company_still_none(self):
+        add_job({"url": "https://linkedin.com/jobs/view/100",
+                 "title": "Engineer", "company": "Acme"})
+        result = add_job({"url": "https://linkedin.com/jobs/view/200",
+                          "title": "Engineer", "company": "Acme"},
+                         skip_known=True)
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

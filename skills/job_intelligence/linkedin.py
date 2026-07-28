@@ -181,8 +181,9 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                     job_url = cd['url']
                     parsed = cd['parsed']
                     actual_jid = add_job({"url": job_url, "title": parsed["title"], "company": parsed["company"],
-                                          "location": parsed["location"], "source": "LinkedIn", "source_url": job_url,
-                                          "category": "tech"})
+                                           "location": parsed["location"], "source": "LinkedIn", "source_url": job_url,
+                                           "category": "tech"},
+                                          skip_known=True)
                     if not actual_jid:
                         continue
                     jid = actual_jid
