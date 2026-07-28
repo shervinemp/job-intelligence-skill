@@ -578,7 +578,11 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             print(f"  Skyvern fill failed: {se}", file=sys.stderr)
 
     state["filled_count"] = len(filled_all)
-    state["failed_fields"] = [r["label"] for r in skyvern_fields]
+    state["remaining_fields"] = [
+        {"label": r["label"], "tag": r.get("tag"), "type": r.get("type"),
+         "why": r.get("_why"), "attempted": r.get("attempted", "")[:80]}
+        for r in remaining
+    ]
     state["skipped_fields"] = [r["label"] for r in skipped]
     if not (skyvern_result and skyvern_result.get("run_id")):
         state.pop("fill_run_id", None)

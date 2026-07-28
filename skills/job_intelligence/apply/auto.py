@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
 """auto.py — Autonomous apply pipeline orchestrator.
 
-Walks every tailored job through: detect -> navigate -> fill -> check.
-Optional --submit enables gap-fill LLM key-mapping inside cmd_fill and
-a key-mapping retry on submit validation errors.
-
-Default (no flags): fill + check + stop. Surface for orchestrator review.
+Walks every tailored job through: detect -> navigate -> fill -> check -> submit.
+On fill failure: inspect -> LLM key-map -> retry -> stop for review if still fails.
+On submit failure: LLM key-map errored fields -> re-fill -> re-submit.
 
 Usage:
-  python apply.py auto                      Fill + check + stop (default)
-  python apply.py auto --jid <jid>          Process a single job
-  python apply.py auto --limit N            Cap at N jobs
-  python apply.py auto --submit             Enable gap-fill + retry
-  python apply.py auto --no-submit          Explicit stop after check
-  python apply.py auto --quick              Deterministic-only
-  python apply.py auto --max-pages N        Max form pages (default 4)
+  python apply.py auto                           All tailored jobs
+  python apply.py auto --jid <jid>               Single job
+  python apply.py auto --quick                   Deterministic-only
+  python apply.py auto --max-pages N             Max form pages (default 4)
 """
 import json, os, sys, time, re
 
@@ -27,7 +22,6 @@ _ERROR_LABEL_RE = re.compile(
 
 
 def _extract_error_labels(errors):
-    """Extract unique field labels from validation error messages."""
     seen = set()
     out = []
     for e in errors:
@@ -40,7 +34,7 @@ def _extract_error_labels(errors):
     return out
 
 
-def run(jid=None, limit=None, quick=False, max_pages=4, no_submit=False, submit=False):
+def run(jid=None, quick=False, max_pages=4):
     from lib.db import get_jobs_by_stage, get_job
 
     if jid:
@@ -55,11 +49,6 @@ def run(jid=None, limit=None, quick=False, max_pages=4, no_submit=False, submit=
             print("NO_TAILORED: no jobs ready to apply", file=sys.stderr)
             return 0
 
-    if limit:
-        jobs = jobs[:limit]
-
-    do_submit = submit and not no_submit
-
     N = len(jobs)
     print(f"\nAUTO: {N} job(s) to process (stage=tailored)", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
@@ -73,7 +62,7 @@ def run(jid=None, limit=None, quick=False, max_pages=4, no_submit=False, submit=
         print(f"{'-'*60}", file=sys.stderr)
 
         try:
-            _process_one(jid, quick, max_pages, do_submit, results)
+            _process_one(jid, job, quick, max_pages, results)
         except Exception as e:
             print(f"  ERROR: {e}", file=sys.stderr)
             results["skipped"].append((jid, f"exception: {e}"))
@@ -85,13 +74,47 @@ def run(jid=None, limit=None, quick=False, max_pages=4, no_submit=False, submit=
     return 0 if not results["skipped"] else 1
 
 
-def _retry_with_llm(jid, job, results):
-    """Retry submit after validation_error using LLM key-mapping.
+def _retry_fill_with_llm(jid, job, results):
+    from apply.common.page_helpers import load_state
+    from apply.act.fill import cmd_fill
+    from apply.act.check import cmd_check
+    from apply.act.submit import cmd_submit
+    from lib.ask_api import available as llm_avail
+    from apply.act.helpers import _load_profile
+    from apply.act.suggest import llm_field_key_mapping
 
-    Maps errored field labels to profile keys (not values) and passes
-    the resolved values as --answers to cmd_fill. Safe: LLM never emits
-    raw values.
-    """
+    if not llm_avail():
+        print("  LLM unavailable — cannot retry fill", file=sys.stderr)
+        return False
+
+    profile = _load_profile()
+    st = load_state()
+    remaining = st.get("remaining_fields", [])
+    labels = [r.get("label", "") for r in remaining if r.get("label")]
+    if not labels:
+        print("  No unfilled field labels to map", file=sys.stderr)
+        return False
+
+    fake_fields = [{"label": lbl} for lbl in labels]
+    mapping = llm_field_key_mapping(fake_fields, profile, job)
+    if not mapping:
+        print("  LLM returned no mapping for unfilled fields", file=sys.stderr)
+        return False
+
+    print(f"  LLM mapped {len(mapping)} unfilled field(s) — re-filling", file=sys.stderr)
+    rc = cmd_fill(jid, answers=mapping, verify=False, max_pages=4, quick=True)
+    if rc != 0:
+        print("  Re-fill failed after LLM mapping", file=sys.stderr)
+        return False
+
+    rc = cmd_check(jid)
+    if rc != 0:
+        print("  Re-check failed after LLM mapping", file=sys.stderr)
+        return False
+    return True
+
+
+def _retry_submit_with_llm(jid, job, results):
     from apply.common.page_helpers import load_state
     from apply.act.fill import cmd_fill
     from apply.act.check import cmd_check
@@ -106,7 +129,7 @@ def _retry_with_llm(jid, job, results):
         return row["stage"] if row else ""
 
     if not llm_avail():
-        print("  LLM unavailable — cannot retry", file=sys.stderr)
+        print("  LLM unavailable — cannot retry submit", file=sys.stderr)
         return False
 
     st = load_state()
@@ -142,7 +165,7 @@ def _retry_with_llm(jid, job, results):
     return False
 
 
-def _process_one(jid, quick, max_pages, do_submit, results):
+def _process_one(jid, job, quick, max_pages, results):
     from apply.detect import run as detect_run
     from apply.navigate import run as navigate_run
     from apply.act.fill import cmd_fill
@@ -155,18 +178,16 @@ def _process_one(jid, quick, max_pages, do_submit, results):
         row = get_conn().execute("SELECT stage FROM jobs WHERE id=?", (jid,)).fetchone()
         return row["stage"] if row else ""
 
-    job = get_job(jid)
-    if job:
-        title = job.get("title", "")
-        company = job.get("company", "")
-        if title and company:
-            dup = find_duplicate(jid, title, company)
-            if dup and dup["stage"] == "applied":
-                results["already_applied"].append(
-                    (jid, f"duplicate of applied {dup['id'][:12]}"))
-                print(f"  SKIP -- duplicate of already-applied {dup['id'][:12]}",
-                      file=sys.stderr)
-                return
+    title = job.get("title", "")
+    company = job.get("company", "")
+    if title and company:
+        dup = find_duplicate(jid, title, company)
+        if dup and dup["stage"] == "applied":
+            results["already_applied"].append(
+                (jid, f"duplicate of applied {dup['id'][:12]}"))
+            print(f"  SKIP -- duplicate of already-applied {dup['id'][:12]}",
+                  file=sys.stderr)
+            return
 
     # ── Step 1: detect ──────────────────────────────────────────────
     print("  detect...", file=sys.stderr, end=" ")
@@ -196,7 +217,7 @@ def _process_one(jid, quick, max_pages, do_submit, results):
             results["skipped"].append((jid, "navigate failed"))
             return
 
-    # ── Step 3: fill (gap-fill key-mapping runs inside cmd_fill when quick=False) ──
+    # ── Step 3: fill ────────────────────────────────────────────────
     print("  fill...", file=sys.stderr)
     rc = cmd_fill(jid, answers=None, verify=not quick,
                   max_pages=max_pages, quick=quick)
@@ -209,9 +230,23 @@ def _process_one(jid, quick, max_pages, do_submit, results):
             from lib.db import advance_job
             advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
             results["skipped"].append((jid, "no apply path (expired)"))
+            return
+        if st.get("status") in ("login_required", "login_failed"):
+            results["skipped"].append((jid, f"fill failed: {st.get('status')}"))
+            return
+        print("  FILL_FAILED — inspecting...", file=sys.stderr)
+        try:
+            from apply.act.inspect import run as inspect_run
+            inspect_run(jid)
+        except Exception as ie:
+            print(f"  INSPECT_ERR: {ie}", file=sys.stderr)
+        succeeded = _retry_fill_with_llm(jid, job, results)
+        if succeeded:
+            print("  Fill succeeded on LLM retry", file=sys.stderr)
         else:
-            results["skipped"].append((jid, "fill failed"))
-        return
+            results["stopped"].append((jid, "fill failed with diagnostic — review inspect output"))
+            print("  STOPPED — fill failed after LLM retry, inspect for context", file=sys.stderr)
+            return
 
     if _stage() == "applied":
         results["already_applied"].append((jid, "already applied"))
@@ -227,12 +262,7 @@ def _process_one(jid, quick, max_pages, do_submit, results):
 
     print("  check passed", file=sys.stderr)
 
-    # ── Step 5: submit (only with --submit) ─────────────────────────
-    if not do_submit:
-        results["stopped"].append((jid, "check passed -- ready to submit"))
-        print(f"  READY -- run: python apply.py act --submit {jid}", file=sys.stderr)
-        return
-
+    # ── Step 5: submit ──────────────────────────────────────────────
     print("  submit...", file=sys.stderr)
     rc = cmd_submit(jid, confirm=True)
     if rc != 0:
@@ -243,7 +273,7 @@ def _process_one(jid, quick, max_pages, do_submit, results):
         if st.get("submit_errors") and st.get("submit_clicked") is False:
             print("  VALIDATION_ERROR — retrying with LLM key-mapping",
                   file=sys.stderr)
-            succeeded = _retry_with_llm(jid, job, results)
+            succeeded = _retry_submit_with_llm(jid, job, results)
             if succeeded:
                 results["submitted"].append((jid, "submitted (LLM retry)"))
                 return
@@ -276,9 +306,6 @@ def _print_summary(results):
         print("\n  STOPPED (orchestrator review needed):", file=sys.stderr)
         for jid, detail in results["stopped"]:
             print(f"    {jid[:12]} -- {detail}", file=sys.stderr)
-        print("\n  To resolve: review fill output above, supply --answers, then:", file=sys.stderr)
-        print("    python apply.py act --fill <jid> --answers '{...}'", file=sys.stderr)
-        print("    python apply.py act --submit <jid>", file=sys.stderr)
 
     if results["skipped"]:
         print("\n  SKIPPED:", file=sys.stderr)

@@ -53,9 +53,6 @@ def main():
 
     auto_p = sub.add_parser("auto", help="Run full pipeline for all tailored jobs")
     auto_p.add_argument("--jid", help="Process a single job")
-    auto_p.add_argument("--limit", type=int, help="Cap at N jobs")
-    auto_p.add_argument("--no-submit", action="store_true", help="Stop after check passes (default)")
-    auto_p.add_argument("--submit", action="store_true", help="LLM-review then auto-submit (experimental)")
     auto_p.add_argument("--quick", action="store_true", help="Deterministic-only (no vision/Skyvern)")
     auto_p.add_argument("--max-pages", type=int, default=4, help="Max form pages (default 4)")
 
@@ -116,9 +113,7 @@ def main():
         run(args.jid or _auto_jid())
     elif args.command == "auto":
         from apply.auto import run as auto_run
-        return auto_run(jid=args.jid, limit=args.limit,
-                        quick=args.quick, max_pages=args.max_pages,
-                        no_submit=args.no_submit, submit=args.submit)
+        return auto_run(jid=args.jid, quick=args.quick, max_pages=args.max_pages)
     elif args.command == "navigate":
         from apply.navigate import run
         run(args.jid)

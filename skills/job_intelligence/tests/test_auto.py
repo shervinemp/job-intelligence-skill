@@ -24,7 +24,7 @@ class AutoProcessOne(unittest.TestCase):
         results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
         with patch("apply.detect.run", return_value=1), \
              patch("apply.common.page_helpers.load_state", return_value={}):
-            _process_one("testjid", False, 4, False, results)
+            _process_one("testjid", {}, False, 4, results)
         self.assertEqual(len(results["skipped"]), 1)
         self.assertEqual(len(results["submitted"]), 0)
 
@@ -32,7 +32,7 @@ class AutoProcessOne(unittest.TestCase):
         results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
         with patch("apply.detect.run", return_value=0), \
              patch("apply.common.page_helpers.load_state", return_value={"type": "already_applied"}):
-            _process_one("testjid", False, 4, False, results)
+            _process_one("testjid", {}, False, 4, results)
         self.assertEqual(len(results["already_applied"]), 1)
         self.assertEqual(len(results["submitted"]), 0)
 
@@ -40,7 +40,7 @@ class AutoProcessOne(unittest.TestCase):
         results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
         with patch("apply.detect.run", return_value=0), \
              patch("apply.common.page_helpers.load_state", return_value={"type": "unknown"}):
-            _process_one("testjid", False, 4, False, results)
+            _process_one("testjid", {}, False, 4, results)
         self.assertEqual(len(results["skipped"]), 1)
         self.assertEqual(len(results["submitted"]), 0)
 
@@ -54,7 +54,7 @@ class AutoProcessOne(unittest.TestCase):
              patch("apply.act.fill.cmd_fill", return_value=0), \
              patch("apply.act.check.cmd_check", return_value=1), \
              patch("lib.db.get_conn", return_value=conn):
-            _process_one("testjid", False, 4, False, results)
+            _process_one("testjid", {}, False, 4, results)
         self.assertEqual(len(results["stopped"]), 1)
         self.assertEqual(len(results["submitted"]), 0)
 
@@ -72,23 +72,9 @@ class AutoProcessOne(unittest.TestCase):
              patch("apply.act.check.cmd_check", return_value=0), \
              patch("apply.act.submit.cmd_submit", return_value=0), \
              patch("lib.db.get_conn", return_value=conn):
-            _process_one("testjid", False, 4, True, results)
+            _process_one("testjid", {}, False, 4, results)
         self.assertEqual(len(results["submitted"]), 1)
         self.assertEqual(len(results["stopped"]), 0)
-
-    def test_no_submit_stops_after_check(self):
-        results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
-        state = {"type": "ats_direct"}
-        conn = MagicMock()
-        conn.execute.return_value.fetchone.return_value = {"stage": "tailored"}
-        with patch("apply.detect.run", return_value=0), \
-             patch("apply.common.page_helpers.load_state", return_value=state), \
-             patch("apply.act.fill.cmd_fill", return_value=0), \
-             patch("apply.act.check.cmd_check", return_value=0), \
-             patch("lib.db.get_conn", return_value=conn):
-            _process_one("testjid", False, 4, False, results)
-        self.assertEqual(len(results["stopped"]), 1)
-        self.assertEqual(len(results["submitted"]), 0)
 
 
 class AutoDedupGuard(unittest.TestCase):
@@ -98,7 +84,7 @@ class AutoDedupGuard(unittest.TestCase):
         dup = {"id": "existing1234567", "stage": "applied"}
         with patch("lib.db.get_job", return_value=job), \
              patch("lib.db.find_duplicate", return_value=dup):
-            _process_one("testjid", False, 4, False, results)
+            _process_one("testjid", job, False, 4, results)
         self.assertEqual(len(results["already_applied"]), 1)
         self.assertIn("duplicate", results["already_applied"][0][1])
         self.assertEqual(len(results["submitted"]), 0)
@@ -111,7 +97,7 @@ class AutoDedupGuard(unittest.TestCase):
              patch("lib.db.find_duplicate", return_value=dup), \
              patch("apply.detect.run", return_value=1), \
              patch("apply.common.page_helpers.load_state", return_value={}):
-            _process_one("testjid", False, 4, False, results)
+            _process_one("testjid", job, False, 4, results)
         self.assertEqual(len(results["already_applied"]), 0)
         self.assertEqual(len(results["skipped"]), 1)
 
@@ -122,7 +108,7 @@ class AutoDedupGuard(unittest.TestCase):
              patch("lib.db.find_duplicate", return_value=None) as fd_mock, \
              patch("apply.detect.run", return_value=1), \
              patch("apply.common.page_helpers.load_state", return_value={}):
-            _process_one("testjid", False, 4, False, results)
+            _process_one("testjid", job, False, 4, results)
         fd_mock.assert_not_called()
         self.assertEqual(len(results["skipped"]), 1)
 
