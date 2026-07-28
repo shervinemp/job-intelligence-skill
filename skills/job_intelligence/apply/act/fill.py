@@ -35,7 +35,7 @@ def _batch_verify(fields):
     if not check_indices:
         return {}
 
-    from lib.ask_api import ask
+    from lib.ask_api import ask_text
     lines = []
     for i in sorted(check_indices):
         f = fields[i]
@@ -58,7 +58,7 @@ def _batch_verify(fields):
         "If none are wrong, answer NONE.\n\n"
         + "\n".join(lines)
     )
-    reply, err = ask(prompt, max_tokens=256, temperature=0.1)
+    reply, err = ask_text(prompt, max_tokens=256, temperature=0.1)
     if err or not reply:
         print(f"  LLM_VERIFY_SKIP: {err}", file=sys.stderr)
         return None

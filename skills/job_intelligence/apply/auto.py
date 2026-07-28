@@ -14,9 +14,73 @@ Usage:
   python apply.py auto --max-pages N      Max form pages (default 4)
   python3 report.py candidates            Preview classification and counts
 """
-import os, sys, time
+import json, os, sys, time, re
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+
+_ERROR_LABEL_RE = re.compile(
+    r"(?:Missing entry for required field:\s*)?(.+?)\s*[.。]?\s*$"
+)
+
+
+def _extract_error_labels(errors):
+    """Extract unique field labels from validation error messages.
+    Handles both 'Missing entry for required field: X' and bare 'X' patterns."""
+    seen = set()
+    out = []
+    for e in errors:
+        m = _ERROR_LABEL_RE.match(e.strip())
+        if m:
+            label = m.group(1).strip().rstrip(".")
+            if label and label not in seen:
+                seen.add(label)
+                out.append(label)
+    return out
+
+
+def _llm_supply_answers(job_title, field_labels, existing_answers=None):
+    """Ask LLM what values to supply for missing fields. Returns label→value dict."""
+    if not field_labels:
+        return {}
+    from lib.ask_api import ask_text, available as llm_avail
+    if not llm_avail():
+        return {}
+    existing = existing_answers or {}
+    lines = [f"Job: {job_title}"]
+    if existing:
+        lines.append("")
+        lines.append("Existing profile answers (for context):")
+        for k, v in sorted(existing.items()):
+            vstr = str(v)[:80]
+            lines.append(f"  {k}: {vstr}")
+    lines.append("")
+    lines.append("Fields that still need values (the LLM must fill these):")
+    for lbl in field_labels:
+        lines.append(f"  - {lbl}")
+    lines.append("")
+    lines.append(
+        "Return a JSON object mapping each field label to its value. "
+        "Use existing profile answers as context. "
+        "If a field is optional or unclear, set it to null. "
+        "Return ONLY the JSON, no other text."
+    )
+    prompt = "\n".join(lines)
+    reply, err = ask_text(prompt, temperature=0.2, max_tokens=1024)
+    if err or not reply:
+        return {}
+    try:
+        # Strip markdown fences
+        text = reply.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+            text = text.rsplit("```", 1)[0].strip()
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if v is not None and str(v).strip()}
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 
 def run(jid=None, limit=None, quick=False, max_pages=4, no_submit=False):
@@ -160,13 +224,57 @@ def _process_one(jid, quick, max_pages, no_submit, results):
         if _stage() == "applied":
             results["submitted"].append((jid, "submitted"))
             return
-        # Check if the failure was due to no apply path (expired job)
         from apply.common.page_helpers import load_state
         st = load_state()
         if st.get("status") == "no_apply_path":
             from lib.db import advance_job
             advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
             results["skipped"].append((jid, "no apply path (expired)"))
+        elif st.get("status") == "validation_error" and st.get("submit_errors"):
+            # Retry: LLM fills missing fields from validation errors
+            print("  VALIDATION_ERROR — retrying with LLM-supplied answers", file=sys.stderr)
+            try:
+                from lib.ask_api import ask_text, available as llm_avail
+                if not llm_avail():
+                    print("  LLM unavailable — cannot retry", file=sys.stderr)
+                    results["skipped"].append((jid, "validation_error (no LLM for retry)"))
+                    return
+                errors = st["submit_errors"]
+                labels = _extract_error_labels(errors)
+                if not labels:
+                    print("  No parseable field labels in errors", file=sys.stderr)
+                    results["skipped"].append((jid, "validation_error (unparseable labels)"))
+                    return
+                job_title = job.get("title", "")
+                from apply.act.helpers import _load_profile
+                from apply.common.resolve import _build_ephemeral
+                _prof = _load_profile()
+                _answers_ctx = {k: v[0] for k, v in _build_ephemeral(_prof).items()}
+                llm_answers = _llm_supply_answers(job_title, labels, _answers_ctx)
+                if not llm_answers:
+                    print("  LLM returned no answers — giving up", file=sys.stderr)
+                    results["skipped"].append((jid, "validation_error (LLM no answers)"))
+                    return
+                print(f"  LLM supplied {len(llm_answers)} answer(s) — re-filling", file=sys.stderr)
+                rc = cmd_fill(jid, answers=llm_answers, verify=False, max_pages=4, quick=True)
+                if rc != 0:
+                    print("  Re-fill failed after LLM answers", file=sys.stderr)
+                    results["skipped"].append((jid, "re-fill failed after LLM retry"))
+                    return
+                rc = cmd_check(jid)
+                if rc != 0:
+                    print("  Re-check failed after LLM answers", file=sys.stderr)
+                    results["stopped"].append((jid, "check failed after LLM retry"))
+                    return
+                print("  Re-check passed — re-submitting", file=sys.stderr)
+                rc = cmd_submit(jid, confirm=True)
+                if rc == 0 and _stage() == "applied":
+                    results["submitted"].append((jid, "submitted (LLM retry)"))
+                    return
+                results["skipped"].append((jid, "re-submit failed after LLM retry"))
+            except Exception as e:
+                print(f"  LLM RETRY ERROR: {e}", file=sys.stderr)
+                results["skipped"].append((jid, f"LLM retry exception: {e}"))
         else:
             results["skipped"].append((jid, "submit failed"))
         return

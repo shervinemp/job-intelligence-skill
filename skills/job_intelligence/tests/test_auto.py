@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from apply.auto import run, _process_one, _print_summary
+from apply.auto import run, _process_one, _print_summary, _extract_error_labels, _llm_supply_answers
 
 
 class AutoDryRun(unittest.TestCase):
@@ -125,6 +125,43 @@ class AutoDedupGuard(unittest.TestCase):
             _process_one("testjid", False, 4, False, results)
         fd_mock.assert_not_called()
         self.assertEqual(len(results["skipped"]), 1)
+
+
+class ExtractErrorLabels(unittest.TestCase):
+    """_extract_error_labels extracts field labels from validation error strings."""
+
+    def test_missing_entry_prefix(self):
+        errors = ["Missing entry for required field: Select your country of employment"]
+        self.assertEqual(_extract_error_labels(errors), ["Select your country of employment"])
+
+    def test_bare_field_name(self):
+        errors = ["Company name", "Company name is required."]
+        result = _extract_error_labels(errors)
+        self.assertIn("Company name", result)
+
+    def test_deduplicates(self):
+        errors = [
+            "Missing entry for required field: Email",
+            "Email",
+            "Missing entry for required field: Email",
+        ]
+        self.assertEqual(len(_extract_error_labels(errors)), 1)
+
+    def test_empty_input(self):
+        self.assertEqual(_extract_error_labels([]), [])
+
+
+class LlmSupplyAnswers(unittest.TestCase):
+    """_llm_supply_asks LLM for values on missing fields."""
+
+    @patch("lib.ask_api.available", return_value=False)
+    def test_llm_unavailable_returns_empty(self, _):
+        result = _llm_supply_answers("Engineer", ["Country"])
+        self.assertEqual(result, {})
+
+    def test_no_labels_returns_empty(self):
+        result = _llm_supply_answers("Engineer", [])
+        self.assertEqual(result, {})
 
 
 if __name__ == "__main__":
