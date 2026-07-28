@@ -99,6 +99,15 @@ def _check_delta(before, after, ans, label, field=None):
         return True
     if after and ans and (after == ans or ans in after or after in ans):
         return True
+    # Postal/zip: strip spaces from both sides before comparing
+    # (text.py strips spaces from postal values; verification sees
+    # the original value with space still in ans).
+    import re as _re
+    if after and ans and _re.search(r"postal|zip|code", label, _re.I):
+        clean_a = after.replace(" ", "")
+        clean_ans = ans.replace(" ", "")
+        if clean_a == clean_ans or clean_ans in clean_a or clean_a in clean_ans:
+            return True
     if after == before and label:
         if before:
             emit_diag(label, ans, before, "unchanged", "ATS may have rejected the value")

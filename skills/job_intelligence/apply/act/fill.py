@@ -28,7 +28,7 @@ def _batch_verify(fields):
     ]
     sample = set(random.sample(
         clear_indices,
-        min(3, len(clear_indices))
+        min(5, len(clear_indices))
     )) if clear_indices else set()
     check_indices = suspect_indices | sample
 
@@ -643,6 +643,23 @@ def _handle_login_wall(page, jid, quick):
 
     domain = _domain_from_url(page.url)
     print(f"  LOGIN_WALL: {domain}", file=sys.stderr)
+
+    # Try guest apply first — some platforms (Workday, etc.) offer
+    # "Continue without signing in" / "Apply as guest". Check registry
+    # patterns for the current platform.
+    from apply.common.registry import resolve as resolve_registry
+    reg = resolve_registry(page.url)
+    if reg:
+        for pattern in reg.patterns.get("guest_apply", []):
+            try:
+                btn = page.locator(f'button:has-text("{pattern}"), a:has-text("{pattern}")').first
+                if btn.count() > 0 and btn.is_visible(timeout=2000):
+                    btn.click(timeout=5000)
+                    time.sleep(2)
+                    print(f"  GUEST_APPLY: clicked '{pattern}'", file=sys.stderr)
+                    return True
+            except Exception:
+                continue
 
     creds = get_creds(domain)
     if creds:

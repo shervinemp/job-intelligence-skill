@@ -74,13 +74,14 @@ def fill_text_field(page, f, ans, sel, el, method="fill"):
 
     label = (f.get("label") or f.get("name") or "").lower()
 
-    # Phone number: strip non-digits before maxlength truncation.
+    # Phone number: strip to digits only, then format as E.164
+    # (keep the country code, strip formatting). E.164 is the universal
+    # format accepted by all ATS. Profile value e.g. "+1 (343) 558-1744"
+    # becomes "+13435581744".
     if re.search(r"phone|contact|mobile|cell", label):
         digits = re.sub(r"\D", "", ans)
         if 7 <= len(digits) <= 15:
-            if len(digits) == 11 and digits.startswith("1"):
-                digits = digits[1:]
-            ans = digits
+            ans = "+" + digits
 
     # Postal code: strip spaces for maxlength=6 fields (Canadian format).
     # Filling "K2P 1J6" (7 chars) into a maxlength=6 field overflows and
@@ -92,10 +93,16 @@ def fill_text_field(page, f, ans, sel, el, method="fill"):
     maxlen = el.get_attribute("maxlength") if el else None
     try:
         if maxlen and ans and len(ans) > int(maxlen):
-            from apply.common.output import emit_diag
-            emit_diag(f.get("label", f.get("name", "?")), _orig_ans,
-                      ans[:int(maxlen)], "truncated", f"maxlength={maxlen}")
-            ans = ans[: int(maxlen)]
+            # Semantic rescue: maxlength=4 with "Immediately"/"ASAP"/"Now"
+            # → this is almost certainly a year field (YYYY).
+            if int(maxlen) <= 4 and re.search(r"year", label):
+                from datetime import datetime as _dt
+                ans = str(_dt.now().year)
+            else:
+                from apply.common.output import emit_diag
+                emit_diag(f.get("label", f.get("name", "?")), _orig_ans,
+                          ans[:int(maxlen)], "truncated", f"maxlength={maxlen}")
+                ans = ans[: int(maxlen)]
     except Exception:
         pass
 
