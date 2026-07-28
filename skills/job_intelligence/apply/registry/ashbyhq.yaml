@@ -11,6 +11,7 @@ notes: |
 detect:
   domains:
     - ashbyhq.com
+    - trmlabs.com
 probe:
   best_strategy: standard
   widgets:

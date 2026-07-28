@@ -1,5 +1,5 @@
 name: linkedin
-version: 2
+version: 3
 
 detect:
   domains:
@@ -7,7 +7,6 @@ detect:
 
 probe:
   best_strategy: dialog
-  widgets: {}
 
 patterns:
   already_applied:
@@ -21,8 +20,9 @@ properties:
   has_progress_bar: true
   page_range: [1, 10]
 
-
 notes: |
-  Easy Apply modal via LinkedinHandler. Ember.js: click+events, not nativeValueSetter.
-  Resume names in <span> (labels empty). Upload via file chooser.
-  External via legacy flow. Uses <dialog open> not [role="dialog"].
+  Easy Apply modal opens as <dialog> element. Multi-page flow: fill fields
+  on each page, click Next/Review/Submit. Auto-discovery handles all field
+  types via ARIA labels and input selectors. File upload uses standard
+  file input trigger. Ember.js/Glimmer picks up Playwright's real browser
+  events — no CDP nativeValueSetter needed.
