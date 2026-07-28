@@ -12,12 +12,12 @@ from apply.common.resolve import normalize, resolve, _build_ephemeral
 
 
 PROFILE = {
-    "first_name": "Bilal",
-    "last_name": "M",
-    "email": "b@x.com",
+    "first_name": "John",
+    "last_name": "Smith",
+    "email": "john.smith@example.com",
     "phone": "613-555-0100",
     "location": "Ottawa, ON, Canada",
-    "linkedin_url": "https://linkedin.com/in/bilal",
+    "linkedin_url": "https://linkedin.com/in/johnsmith",
     "answers": {
         "authorized to work in canada": "Yes",
         "disability_status": "I do not have a disability",
@@ -40,7 +40,7 @@ class Normalize(unittest.TestCase):
 class Ephemeral(unittest.TestCase):
     def test_derives_full_name_and_location_parts(self):
         e = _build_ephemeral(PROFILE)
-        self.assertEqual(e["full_name"][0], "Bilal M")
+        self.assertEqual(e["full_name"][0], "John Smith")
         self.assertEqual(e["city"][0], "Ottawa")
         self.assertEqual(e["state_province"][0], "ON")
         self.assertEqual(e["country"][0], "Canada")
@@ -55,10 +55,10 @@ class ProfileFactMatch(unittest.TestCase):
         return resolve(label, PROFILE, answers_override=override or {}).value
 
     def test_email(self):
-        self.assertEqual(self._val("Email"), "b@x.com")
+        self.assertEqual(self._val("Email"), "john.smith@example.com")
 
     def test_full_name(self):
-        self.assertEqual(self._val("Full name"), "Bilal M")
+        self.assertEqual(self._val("Full name"), "John Smith")
 
     def test_city_country_from_location(self):
         self.assertEqual(self._val("City"), "Ottawa")
@@ -165,6 +165,77 @@ class AttrMatchGuard(unittest.TestCase):
         prof = dict(PROFILE, answers={**PROFILE["answers"], "have_you_ever_been": "No"})
         r = resolve("Have you ever been convicted of a felony?", prof)
         self.assertIsNone(r.value)
+
+
+class Step3WordCountGuard(unittest.TestCase):
+    """Step 3 requires ≥2 content words to prevent single-content-word keys
+    like how_did_you_hear (content={hear}) from matching generic labels."""
+
+    def _val(self, label, extra_answers=None):
+        prof = dict(PROFILE)
+        if extra_answers:
+            prof["answers"] = {**PROFILE.get("answers", {}), **extra_answers}
+        return resolve(label, prof).value
+
+    def test_two_content_words_still_matches(self):
+        prof = dict(PROFILE, answers={**PROFILE["answers"], "willing_to_relocate": "Yes"})
+        r = resolve("Are you willing to relocate?", prof)
+        self.assertEqual(r.value, "Yes")
+
+    def test_single_content_word_does_not_match(self):
+        prof = dict(PROFILE, answers={**PROFILE["answers"], "how_did_you_hear": "LinkedIn"})
+        r = resolve("Heard about us via", prof)
+        self.assertIsNone(r.value)
+
+    def test_single_content_word_falls_back_to_alias(self):
+        prof = dict(PROFILE, answers={**PROFILE["answers"], "how_did_you_hear": "LinkedIn"})
+        # "How did you hear about us?" has "how" as content word + alias pattern
+        r = resolve("How did you hear about us?", prof)
+        self.assertEqual(r.value, "LinkedIn")
+
+
+class Step3bWordLimit(unittest.TestCase):
+    """Step 3b suffix-stripped match only fires on labels ≤6 words to avoid
+    matching entity names that appear inside long option-list text."""
+
+    def _val(self, label):
+        return resolve(label, PROFILE).value
+
+    def test_short_label_matches_linkedin(self):
+        self.assertEqual(self._val("LinkedIn"), "https://linkedin.com/in/johnsmith")
+
+    def test_six_word_label_still_matches(self):
+        self.assertEqual(
+            self._val("Please enter your LinkedIn profile URL"),
+            "https://linkedin.com/in/johnsmith",
+        )
+
+    def test_seven_word_label_does_not_match_via_suffix(self):
+        # "How did you hear about us? LinkedIn" = 7 words → no match via Step 3b
+        # Falls through to step 5 alias, which doesn't match, so None.
+        r = resolve("How did you hear about us? LinkedIn", PROFILE)
+        self.assertIsNone(r.value)
+
+    def test_four_word_label_matches_github(self):
+        prof = dict(PROFILE, github_url="https://github.com/johnsmith")
+        self.assertEqual(
+            resolve("GitHub profile URL", prof).value,
+            "https://github.com/johnsmith",
+        )
+
+    def test_website_in_short_label_matches(self):
+        prof = dict(PROFILE, website="https://john.dev")
+        self.assertEqual(
+            resolve("Portfolio", prof).value,
+            "https://john.dev",
+        )
+
+    def test_portfolio_in_short_label_matches(self):
+        prof = dict(PROFILE, portfolio_url="https://john.dev")
+        self.assertEqual(
+            resolve("Website", prof).value,
+            "https://john.dev",
+        )
 
 
 if __name__ == "__main__":

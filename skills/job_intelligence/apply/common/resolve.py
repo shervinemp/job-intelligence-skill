@@ -246,19 +246,23 @@ def resolve(
     _norm_words = set(norm.split())
     for key, (val, _source) in ephemeral.items():
         _key_words = set(normalize(key.replace("_", " ")).split())
+        _content = _key_words - _STOPWORDS
         if len(_key_words) >= 2 and _key_words.issubset(_norm_words):
-            if _key_words - _STOPWORDS:
+            if len(_content) >= 2:
                 return Resolution(val, key, label, "ephemeral")
 
     # Step 3b: suffix-stripped match — profile keys like linkedin_url / github_url
     # end in _url, _path, _handle. The entity name (linkedin, github) appears in
     # the field label ("LinkedIn Profile", "Github"). Strip suffix, check name match.
-    for key, (val, _source) in ephemeral.items():
-        for suffix in ("_url", "_path", "_handle", "_email", "_phone"):
-            if key.endswith(suffix):
-                name = key[:-len(suffix)]
-                if name in _norm_words:
-                    return Resolution(val, key, label, "ephemeral")
+    # Guard: only match on short labels (≤6 words) to avoid matching when the entity
+    # name appears as one option among many (e.g. "How did you hear about us? LinkedIn").
+    if len(_norm_words) <= 6:
+        for key, (val, _source) in ephemeral.items():
+            for suffix in ("_url", "_path", "_handle", "_email", "_phone"):
+                if key.endswith(suffix):
+                    name = key[:-len(suffix)]
+                    if name in _norm_words:
+                        return Resolution(val, key, label, "ephemeral")
 
     # Step 3c: single-word whole-word match for unambiguous contact/location
     # keys ("Location (City)" → location, "Country" → country). Whitelist keeps

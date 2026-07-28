@@ -645,6 +645,50 @@ def _detect_submit_button(page) -> str | None:
     return None
 
 
+def _resolve_standalone_form_url(page) -> str | None:
+    """If the page has a cross-origin iframe containing a job form
+    (e.g. Ashby embed on customer domain), return the standalone
+    form URL.  Strips embed parameters so Playwright can access the
+    form directly instead of through a cross-origin iframe."""
+    try:
+        return page.evaluate("""() => {
+            const iframes = document.querySelectorAll('iframe');
+            for (const ifr of iframes) {
+                const src = ifr.src || '';
+                if (!src || src === 'about:blank') continue;
+                let visible = false;
+                try {
+                    const rect = ifr.getBoundingClientRect();
+                    visible = rect.width >= 100 && rect.height >= 100
+                        && ifr.offsetParent !== null;
+                } catch { continue; }
+                if (!visible) continue;
+                const title = (ifr.title || '').toLowerCase();
+                const srcL = src.toLowerCase();
+                const isFormIframe = (
+                    /ashbyhq/.test(srcL)
+                    || /greenhouse/.test(srcL)
+                    || title.includes('job') || title.includes('apply')
+                    || title.includes('application') || title.includes('career')
+                    || title.includes('form')
+                );
+                if (!isFormIframe) continue;
+                try {
+                    const u = new URL(src);
+                    u.searchParams.delete('embed');
+                    u.searchParams.delete('embedded');
+                    for (const k of [...u.searchParams.keys()]) {
+                        if (k.startsWith('utm_')) u.searchParams.delete(k);
+                    }
+                    return u.href;
+                } catch { return src; }
+            }
+            return null;
+        }""")
+    except Exception:
+        return None
+
+
 def _build_ans_dict(profile: dict, answers_override: dict = None) -> dict:
     result = {}
     if isinstance(profile, dict):

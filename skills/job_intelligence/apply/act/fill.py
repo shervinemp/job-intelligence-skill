@@ -1,5 +1,5 @@
 """act/fill.py — Hybrid fill command: Playwright-first, Skyvern-fallback."""
-import sys, time
+import random, re, sys, time
 
 from lib.db import get_conn
 from apply.common.output import emit_next, emit_status, emit_error, emit_fill_report
@@ -11,6 +11,69 @@ from apply.act.helpers import (
     _field_key, _build_ans_dict, _resolve_linkedin_apply, _wire_dialogs,
     _is_junk_field, _dismiss_confirm_modal,
 )
+
+
+def _batch_verify(fields):
+    """Send fields to the LLM for batch review.
+    Returns dict of field index→verdict to clear,
+    or None if the result is unreliable (error or
+    suspicious range-dump)."""
+    suspect_indices = {
+        i for i, f in enumerate(fields)
+        if f.get("_suspect")
+    }
+    clear_indices = [
+        i for i, f in enumerate(fields)
+        if not f.get("_suspect") and f.get("value")
+    ]
+    sample = set(random.sample(
+        clear_indices,
+        min(3, len(clear_indices))
+    )) if clear_indices else set()
+    check_indices = suspect_indices | sample
+
+    if not check_indices:
+        return {}
+
+    from lib.ask_api import ask
+    lines = []
+    for i in sorted(check_indices):
+        f = fields[i]
+        opt_str = (
+            ", ".join(f["options"][:8])
+            if f.get("options") else "-"
+        )
+        lines.append(
+            f"[{i}] label=\"{f.get('label', '')}\" "
+            f"type={f.get('type', '?')} "
+            f"tag={f.get('tag', '?')} "
+            f"options=[{opt_str}] "
+            f"value=\"{f.get('value', '')}\""
+        )
+    prompt = (
+        "Review these job application field→value pairs. "
+        "For each, does the value make sense for the field?\n"
+        "Answer ONLY with comma-separated field indices "
+        "that are WRONG.\n"
+        "If none are wrong, answer NONE.\n\n"
+        + "\n".join(lines)
+    )
+    reply, err = ask(prompt, max_tokens=256, temperature=0.1)
+    if err or not reply:
+        print(f"  LLM_VERIFY_SKIP: {err}", file=sys.stderr)
+        return None
+    nums = re.findall(r"\d+", reply)
+    result = {}
+    for n in nums:
+        idx = int(n)
+        if idx in check_indices:
+            result[idx] = "llm_reject"
+    if len(result) > len(check_indices) // 2:
+        print(f"  LLM_VERIFY_SUSPICIOUS: {len(result)}/"
+              f"{len(check_indices)} flagged — rejecting",
+              file=sys.stderr)
+        return None
+    return result
 
 
 def _scan_capability(page):
@@ -160,6 +223,27 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         break
                 fallbacks = []
 
+            from apply.act.helpers import _resolve_standalone_form_url
+            standalone = _resolve_standalone_form_url(page)
+            if standalone and standalone != page.url:
+                print(f"  CROSS-ORIGIN FORM: {page.url[:80]} -> {standalone[:80]}",
+                      file=sys.stderr)
+                try:
+                    page.goto(standalone, wait_until="domcontentloaded", timeout=30000)
+                    time.sleep(2)
+                    state["external_url"] = page.url or standalone
+                    url = state["external_url"]
+                    reg = resolve_registry(url) or resolve_registry(orig_url)
+                    tag_page(page, jid)
+                except Exception as e:
+                    print(f"  CROSS-ORIGIN REDIRECT FAILED: {e}", file=sys.stderr)
+                    if page.url != url:
+                        try:
+                            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        except Exception:
+                            pass
+                        time.sleep(2)
+
             tag_page(page, jid)
 
             if "linkedin.com/jobs" in (page.url or "").lower():
@@ -290,6 +374,53 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                     state["external_url"] = page.url
                     url = page.url
                 fields = pr.fields or []
+
+                # ── Value validation cascade ──────────────────────────
+                # Level 1: cheap code checks (validate.py) on ALL fields.
+                # Marks suspect values but does NOT clear them — the fill
+                # loop skips suspect values so the orchestrator can supply
+                # correct answers via the LLM. Level 2 (LLM batch review)
+                # can override Level 1 decisions (see _batch_verify hook).
+                from apply.common.validate import validate_value
+                for f in fields:
+                    val = f.get("value")
+                    if val:
+                        ok, reason = validate_value(f, val)
+                        f["_validation"] = {"valid": ok, "reason": reason}
+                        if not ok:
+                            f["_suspect"] = True
+
+                # ── Level 2 hook: LLM batch verification ──────────────
+                # If the local LLM is available, send ALL field→value pairs
+                # (both suspect and clear, MIXED — no labels) for independent
+                # review. The LLM sees only raw field data, not what Level 1
+                # decided. Cross-reference results to clear confirmed-wrong
+                # values without biasing the LLM.
+                _llm_resolved = False
+                try:
+                    from lib.ask_api import available as _llm_avail
+                    if _llm_avail():
+                        _llm_results = _batch_verify(fields)
+                        if _llm_results is not None:
+                            _llm_resolved = True
+                            for idx in _llm_results:
+                                f = fields[idx]
+                                f["_original_value"] = f["value"]
+                                f["value"] = None
+                                f["_cleared_by"] = "code+llm" if f.get("_suspect") else "llm_only"
+                except Exception as _llm_err:
+                    print(f"  LLM_VERIFY_ERR: {_llm_err}", file=sys.stderr)
+
+                if not _llm_resolved:
+                    # No LLM available, error, or suspicious result —
+                    # Level 1 alone decides: clear suspect values so the
+                    # orchestrator re-fills them
+                    for f in fields:
+                        if f.get("_suspect") and f.get("value"):
+                            f["_original_value"] = f["value"]
+                            f["value"] = None
+                            f["_cleared_by"] = "code"
+
                 field_total += len(fields)
                 if not fields:
                     print(f"  No fields detected (page {page_num}, strategy={pr.strategy})", file=sys.stderr)

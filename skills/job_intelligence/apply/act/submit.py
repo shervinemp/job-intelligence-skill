@@ -537,14 +537,73 @@ def cmd_submit(jid, confirm=False, force=False):
                     emit_status("no_apply_path", "no form or submit button — job may be expired")
                     emit_next("none", "check if job is still active or apply via external URL")
                     return 1
-                print("  Playwright could not click submit — using Skyvern", file=sys.stderr)
-                from apply.common.skyvern_bridge import click_submit
-                result = click_submit(url=page.url, browser_session_id=browser_session_id, timeout=60)
-                if result.get("status") == "completed":
-                    mark_applied(jid)
-                    emit_status("submitted", "Skyvern clicked submit")
+
+                # Keyboard-based submit — works even across cross-origin
+                # iframes since keyboard events propagate natively.
+                # Tries several strategies before falling back to Skyvern.
+                print("  Submit not found — trying keyboard methods", file=sys.stderr)
+                keyboard_clicked = False
+                url_before_kb = page.url or ""
+                submit_text_before_kb = ""
+
+                # 1. Ctrl+Enter — universal web form shortcut
+                try:
+                    page.keyboard.press('Control+Enter')
+                    time.sleep(2)
+                    pages_after = {id(p) for p in ctx.pages}
+                    outcome, reason = _determine_outcome(
+                        page, ctx, pages_after, url_before_kb, submit_text_before_kb)
+                    if outcome == "success":
+                        keyboard_clicked = True
+                        print(f"  KEYBOARD: Ctrl+Enter succeeded ({reason})",
+                              file=sys.stderr)
+                except Exception:
+                    pass
+
+                # 2. Tab+Enter — move focus past last field and click
+                if not keyboard_clicked:
+                    for tab_count in range(1, 4):
+                        try:
+                            for _ in range(tab_count):
+                                page.keyboard.press('Tab')
+                                time.sleep(0.3)
+                            page.keyboard.press('Enter')
+                            time.sleep(2)
+                            pages_after = {id(p) for p in ctx.pages}
+                            outcome, reason = _determine_outcome(
+                                page, ctx, pages_after, url_before_kb, submit_text_before_kb)
+                            if outcome == "success":
+                                keyboard_clicked = True
+                                print(f"  KEYBOARD: {tab_count}×Tab+Enter ({reason})",
+                                      file=sys.stderr)
+                                break
+                        except Exception:
+                            continue
+
+                if keyboard_clicked:
+                    was_new = mark_applied(jid)
+                    if was_new:
+                        emit_status("submitted", "keyboard submit")
+                    else:
+                        emit_status("already applied")
                     emit_next("verify")
                     return 0
+
+                # 3. Skyvern — absolute last resort
+                print("  Keyboard methods failed — trying Skyvern", file=sys.stderr)
+                try:
+                    from apply.common.skyvern_bridge import click_submit
+                    result = click_submit(url=page.url,
+                                          browser_session_id=browser_session_id,
+                                          timeout=60)
+                    if result.get("status") == "completed":
+                        mark_applied(jid)
+                        emit_status("submitted", "Skyvern clicked submit")
+                        emit_next("verify")
+                        return 0
+                except ImportError:
+                    print("  Skyvern not available (module not installed)",
+                          file=sys.stderr)
 
             # Only reach here if we could not click submit at all
             emit_status("submit_failed", "could not click submit button")

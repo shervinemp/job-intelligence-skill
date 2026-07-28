@@ -50,6 +50,14 @@ def validate_value(field, value):
             return False, "not in options"
         return True, "option"
 
+    # Reverse URL check: value is a URL but field isn't asking for one.
+    # Catches linkedin_url/github_url/portfolio_url matched to non-URL fields
+    # (e.g. "LinkedIn URL" filled into a "Location" field).
+    if _URL.match(val):
+        url_hints = ("url", "website", "profile", "link", "portfolio", "site")
+        if ftype != "url" and tag != "URL" and not any(h in label for h in url_hints):
+            return False, "url value in non-url field"
+
     # Format checks for typed inputs (type attr primary, label as hint).
     if ftype == "email" or "email" in label:
         return (True, "email") if _EMAIL.match(val) else (False, "bad email")
