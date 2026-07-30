@@ -40,7 +40,7 @@ class ImportSmoke(unittest.TestCase):
                 try:
                     importlib.import_module(name)
                 except ModuleNotFoundError as exc:
-                    if exc.name in ("fpdf", "playwright", "yaml"):
+                    if exc.name in ("fpdf", "playwright", "yaml", "PIL", "pdf2image", "fitz"):
                         self.skipTest(f"optional dependency '{exc.name}' not installed")
                     raise
 

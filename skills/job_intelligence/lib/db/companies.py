@@ -23,8 +23,8 @@ def company_upsert(name, **kw):
     else:
         c.execute(
             """INSERT INTO companies (id, name, domain, description, size, industry,
-               culture_notes, rating, source_url, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+               culture_notes, rating, source_url, linkedin_id, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid,
                 name,
@@ -35,6 +35,7 @@ def company_upsert(name, **kw):
                 kw.get("culture_notes", ""),
                 kw.get("rating"),
                 kw.get("source_url", ""),
+                kw.get("linkedin_id", ""),
                 now,
                 now,
             ),

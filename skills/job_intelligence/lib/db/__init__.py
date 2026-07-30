@@ -21,6 +21,7 @@ __all__ = [
     # companies / contacts / events
     "company_get", "company_list_jobs", "company_search", "company_upsert",
     "contact_add", "contact_list", "contact_update",
+    "attempt_add", "attempt_list",
     "event_add", "event_complete", "event_list",
     # settings
     "search_threads_clear", "search_threads_pending", "search_threads_save",
@@ -79,6 +80,7 @@ from .docs import (  # noqa: F401
 )
 from .companies import company_get, company_list_jobs, company_search, company_upsert  # noqa: F401
 from .contacts import contact_add, contact_list, contact_update  # noqa: F401
+from .contacts import attempt_add, attempt_list  # noqa: F401
 from .events import event_add, event_complete, event_list  # noqa: F401
 from .settings import (  # noqa: F401
     search_threads_clear,

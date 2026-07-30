@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """gmail_cli.py — Gmail API CLI for the job intelligence pipeline.
 
-Provides gmail search + get and auth management via the Google Gmail API.
+Provides gmail search + get, auth management, and email send via the Google Gmail API.
 
 Supported commands:
   gmail-cli auth credentials <path>
@@ -10,6 +10,7 @@ Supported commands:
   gmail-cli auth remove <email>
   gmail-cli gmail search <query> [--all] [--json|-j] [--max N]
   gmail-cli gmail get <messageId>
+  gmail-cli send <to> <subject> --body <text> | --body-file <path>
 """
 
 import argparse
@@ -30,8 +31,9 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-VERSION = "1.0.0-replacement"
+VERSION = "1.1.0-reach"
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+SEND_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 CONFIG_DIR = Path.home() / ".config" / "gmail-cli"
 CREDENTIALS_PATH = CONFIG_DIR / "credentials.json"
 TOKENS_DIR = CONFIG_DIR / "tokens"
@@ -43,6 +45,9 @@ TOKENS_DIR = CONFIG_DIR / "tokens"
 
 def _token_path(email):
     return TOKENS_DIR / f"{email}.json"
+
+def _send_token_path(email):
+    return TOKENS_DIR / f"{email}.send.json"
 
 
 def _get_creds(email=None):
@@ -58,11 +63,39 @@ def _get_creds(email=None):
     return None
 
 
+def _get_send_creds(email=None):
+    if email:
+        p = _send_token_path(email)
+        if p.exists():
+            c = Credentials.from_authorized_user_file(str(p), SEND_SCOPES)
+            if c and c.expired and c.refresh_token:
+                c.refresh(Request())
+                with open(str(p), "w") as f:
+                    f.write(c.to_json())
+            return c
+    return None
+
+
+def _get_send_service(email=None):
+    if acct := (os.environ.get("GMAIL_CLI_ACCOUNT") or os.environ.get("GOG_ACCOUNT")):
+        email = email or acct
+    if not email and TOKENS_DIR.exists():
+        send_tokens = sorted(TOKENS_DIR.glob("*.send.json"))
+        if send_tokens:
+            email = send_tokens[0].stem.replace(".send", "")
+    creds = _get_send_creds(email)
+    if not creds:
+        print("No send-capable token found. Run 'gmail-cli auth add <email> --services gmail.send' first.", file=sys.stderr)
+        sys.exit(1)
+    return build("gmail", "v1", credentials=creds)
+
+
 def _get_service(email=None):
     if acct := (os.environ.get("GMAIL_CLI_ACCOUNT") or os.environ.get("GOG_ACCOUNT")):
         email = email or acct
     if not email and TOKENS_DIR.exists():
-        tokens = sorted(TOKENS_DIR.glob("*.json"))
+        # Exclude send-scope tokens (.send.json) — read token discovery only
+        tokens = sorted(t for t in TOKENS_DIR.glob("*.json") if not t.stem.endswith(".send"))
         if tokens:
             email = tokens[0].stem
     creds = _get_creds(email)
@@ -114,11 +147,21 @@ def _cmd_auth_add(email, services):
         print("No credentials found. Run 'gmail-cli auth credentials <path>' first.", file=sys.stderr)
         sys.exit(1)
     TOKENS_DIR.mkdir(parents=True, exist_ok=True)
-    flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SCOPES)
-    creds = flow.run_local_server(port=0, open_browser=True)
-    with open(str(_token_path(email)), "w") as f:
-        f.write(creds.to_json())
-    print(f"Authenticated as {email}")
+    svcs = [s.strip() for s in services.split(",")] if services else ["gmail"]
+    for svc in svcs:
+        if svc == "gmail.send":
+            flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SEND_SCOPES)
+            creds = flow.run_local_server(port=0, open_browser=True)
+            with open(str(_send_token_path(email)), "w") as f:
+                f.write(creds.to_json())
+            print(f"Authenticated send scope for {email}")
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SCOPES)
+            creds = flow.run_local_server(port=0, open_browser=True)
+            with open(str(_token_path(email)), "w") as f:
+                f.write(creds.to_json())
+            print(f"Authenticated read scope for {email}")
+    print(f"Done. Authenticated as {email}")
 
 
 def _cmd_auth_list():
@@ -131,14 +174,20 @@ def _cmd_auth_list():
         return
     print("Authenticated accounts:")
     for t in tokens:
-        print(f"  {t.stem}")
+        stem = t.stem
+        scope = "read+send" if stem.endswith(".send") else "read"
+        label = stem.replace(".send", "") if stem.endswith(".send") else stem
+        print(f"  {label}  [{scope}]")
 
 
 def _cmd_auth_remove(email):
-    p = _token_path(email)
-    if p.exists():
-        p.unlink()
-        print(f"Removed {email}")
+    removed = 0
+    for p in (_token_path(email), _send_token_path(email)):
+        if p.exists():
+            p.unlink()
+            removed += 1
+    if removed:
+        print(f"Removed {email} ({removed} token(s))")
     else:
         print(f"No token found for {email}", file=sys.stderr)
         sys.exit(1)
@@ -226,6 +275,55 @@ def _cmd_gmail_get(message_id):
 
 
 # ---------------------------------------------------------------------------
+# Email send
+# ---------------------------------------------------------------------------
+
+def _build_mime(to, subject, body, cc=None, bcc=None):
+    from email.mime.text import MIMEText
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["To"] = to
+    msg["Subject"] = subject
+    if cc:
+        msg["Cc"] = cc
+    if bcc:
+        msg["Bcc"] = bcc
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    return {"raw": raw}
+
+
+def _cmd_email_send(to, subject, body, cc=None, bcc=None, email=None, json_out=False):
+    service = _get_send_service(email)
+    message = _build_mime(to, subject, body, cc, bcc)
+    try:
+        sent = service.users().messages().send(userId="me", body=message).execute()
+        msg_id = sent.get("id", "")
+        if json_out:
+            print(json.dumps({"status": "sent", "message_id": msg_id, "to": to, "subject": subject}, ensure_ascii=False))
+        else:
+            print(f"Sent: {msg_id}")
+            print(f"  To: {to}")
+            print(f"  Subject: {subject}")
+        return True
+    except HttpError as e:
+        err = str(e)
+        if json_out:
+            print(json.dumps({"status": "failed", "error": err[:500], "to": to, "subject": subject}, ensure_ascii=False))
+        else:
+            print(f"Failed: {err[:500]}", file=sys.stderr)
+        return False
+
+
+def _cmd_email_send_file(to, subject, body_file, cc=None, bcc=None, email=None, json_out=False):
+    try:
+        with open(body_file, "r", encoding="utf-8") as f:
+            body = f.read()
+    except FileNotFoundError:
+        print(f"Body file not found: {body_file}", file=sys.stderr)
+        sys.exit(1)
+    return _cmd_email_send(to, subject, body, cc=cc, bcc=bcc, email=email, json_out=json_out)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -262,7 +360,7 @@ def _build_parser():
 
     add_p = auth_subs.add_parser("add", help="Authenticate a Google account")
     add_p.add_argument("email", help="Email address to authenticate")
-    add_p.add_argument("--services", default="gmail", help="Comma-separated services (gmail only in this build)")
+    add_p.add_argument("--services", default="gmail", help="Comma-separated services: gmail (read) and/or gmail.send (send)")
 
     auth_subs.add_parser("list", help="List authenticated accounts")
     rm_p = auth_subs.add_parser("remove", help="Remove an authenticated account")
@@ -280,6 +378,18 @@ def _build_parser():
 
     get_p = gmail_subs.add_parser("get", aliases=["info", "show"], help="Get message content")
     get_p.add_argument("message_id", help="Message or thread ID")
+
+    # ---- email send ----
+    email_subs = subs.add_parser("send", help="Send email via Gmail")
+    email_subs.add_argument("to", help="Recipient email address")
+    email_subs.add_argument("subject", help="Email subject")
+    body_group = email_subs.add_mutually_exclusive_group(required=True)
+    body_group.add_argument("--body", help="Inline email body text")
+    body_group.add_argument("--body-file", help="Path to file containing email body")
+    email_subs.add_argument("--cc", help="CC recipient")
+    email_subs.add_argument("--bcc", help="BCC recipient")
+    email_subs.add_argument("--account", "--email", dest="email", help="Sender email account")
+    email_subs.add_argument("--json", "-j", action="store_true", dest="json_out", help="Output JSON")
 
     return p
 
@@ -306,6 +416,11 @@ def main():
             _cmd_auth_remove(args.email)
         else:
             _die("Usage: gmail-cli auth <credentials|add|list|remove> [args]")
+    elif cmd in ("send",):
+        if args.body:
+            _cmd_email_send(args.to, args.subject, args.body, cc=args.cc, bcc=args.bcc, email=args.email, json_out=args.json_out)
+        else:
+            _cmd_email_send_file(args.to, args.subject, args.body_file, cc=args.cc, bcc=args.bcc, email=args.email, json_out=args.json_out)
     elif cmd in ("gmail", "mail", "email"):
         gc = args.gmail_command
         if gc in ("search", "find", "query", "ls", "list"):

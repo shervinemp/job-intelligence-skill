@@ -80,6 +80,19 @@ def cmd_stats():
     print(f"Need tailoring: {described}")
     print(f"Ready to apply: {tailored}")
 
+    # Contact/outreach summary
+    total_contacts = conn.execute("SELECT COUNT(*) FROM contacts").fetchone()[0]
+    total_outreach = conn.execute("SELECT COUNT(*) FROM contacts WHERE reached_out=1").fetchone()[0]
+    pending_email = conn.execute("SELECT COUNT(*) FROM contacts WHERE email_sent=0 AND email != '' AND email IS NOT NULL").fetchone()[0]
+    pending_dm = conn.execute("SELECT COUNT(*) FROM contacts WHERE message_sent=0 AND linkedin_url != '' AND linkedin_url IS NOT NULL").fetchone()[0]
+    if total_contacts:
+        print()
+        print(f"Contacts: {total_contacts}")
+        print(f"  Reached out: {total_outreach}")
+        print(f"  Pending email: {pending_email}")
+        print(f"  Pending DM:    {pending_dm}")
+        print(f"  NEXT: reach.py discover <jid>  OR  reach.py email <jid> --contact N")
+
 
 def cmd_candidates(limit=None):
     """List tailored jobs ready to apply, surfacing guard-state flags

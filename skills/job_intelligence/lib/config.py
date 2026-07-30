@@ -40,6 +40,7 @@ PROFILE_PATH = str(Path(__file__).resolve().parent.parent / "profile.json")
 REGISTRY_PATH = os.path.join(STATE_DIR, "page_registry.json")
 AUTH_WALLS_PATH = os.path.join(STATE_DIR, "needs_auth.json")
 CHROME_CONFIG = os.path.join(JI_HOME, "chrome-config.json")
+TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
 
 
 def atomic_write_json(path, obj, indent=2):

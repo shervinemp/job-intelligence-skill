@@ -326,7 +326,11 @@ def cmd_admit(*jids, **fields):
             print(f"  Usage: enrich.py admit {jid} --category <name>", file=sys.stderr)
             continue
         updates = {k: v for k, v in fields.items() if v is not None}
+        # Map --team to team_name DB column
+        if "team" in updates:
+            updates["team_name"] = updates.pop("team")
         advance(entry, "described", **updates)
+        print(f"  NEXT: reach.py discover {jid}  (contact discovery — optional)", file=sys.stderr)
         count += 1
     print(f"ADMITTED:{count}", file=sys.stderr)
     if count:
@@ -485,6 +489,7 @@ def main():
     admit_p.add_argument("--category", help="Job category (tech/general)")
     admit_p.add_argument("--notes", help="Job notes/context")
     admit_p.add_argument("--url", help="External apply URL")
+    admit_p.add_argument("--team", help="Team/department name (e.g. 'AI/ML', 'Product')")
     sub.add_parser("reject", help="Skip (garbage/closed)").add_argument("jids", nargs="+")
     sub.add_parser("flag", help="Mark as auth wall").add_argument("jids", nargs="*")
     sub.add_parser("open", help="Open job in Chrome").add_argument("jid", nargs="?")
@@ -497,7 +502,7 @@ def main():
     args = parser.parse_args()
     
     if args.command == "admit":
-        cmd_admit(*args.jids, title=args.title, company=args.company, location=args.location, salary=args.salary, category=args.category, notes=args.notes, url=args.url)
+        cmd_admit(*args.jids, title=args.title, company=args.company, location=args.location, salary=args.salary, category=args.category, notes=args.notes, url=args.url, team=args.team)
     elif args.command == "reject":
         cmd_reject(*args.jids)
     elif args.command == "flag":

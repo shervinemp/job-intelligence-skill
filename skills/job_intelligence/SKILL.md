@@ -14,8 +14,10 @@ Before running pipeline, read these:
 | `stage_emails.py [--days N]` | Auto |
 | `extract.py` | `admit --category <name> <jid>` / reject |
 | `linkedin.py [--url] [--count N]` | admit/reject |
-| `enrich.py` | admit/reject/flag |
-| `tailor.py [--auto]` | admit/reject/undo/retry. See tailoring section |
+| `enrich.py` | admit/reject/flag (add `--team <name>` for team discovery) |
+| `tailor.py [--auto]` | admit/reject/undo/retry |
+| `reach.py discover/list <jid>` | Contact discovery + outreach |
+| `reach.py email/message/connect <jid>` | Send email / LinkedIn DM / connect request |
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
 
 > `tailor.py` crafts one job at a time. Use `--auto` to process all described jobs with rate-limit handling.
@@ -44,6 +46,18 @@ Before running pipeline, read these:
 | `extract.py reset` | Wipe DB, fresh start |
 | `lib/ask_api.py [--img <path>] --prompt <text>` | Query LLM API |
 | `report.py stats` | Pipeline state + next step |
+| `reach.py discover <jid> [--team <name>]` | Discover contacts (recruiters, team members, connections) |
+| `reach.py discover --all [--limit N]` | Discover for all described/tailored jobs without contacts |
+| `reach.py list <jid>` | Show discovered contacts for a job |
+| `reach.py email <jid> --contact N [--body <text>] [--force]` | Send email via Gmail |
+| `reach.py message <jid> --contact N [--body <text>] [--force]` | Send LinkedIn DM |
+| `reach.py connect <jid> --contact N [--note <text>]` | Send LinkedIn connection request |
+| `reach.py update <jid> --contact N [--email <addr>] [--note <text>] [--set-sent email\|message]` | Backfill/edit contact fields |
+| `reach.py status` | Pipeline state with contact/outreach summary |
+| `reach.py retry <jid>` | Re-run contact discovery |
+| `reach.py undo <jid>` | Reset contact state for a job |
+| `gmail-cli send <to> <subject> --body <text>` | Send email (low-level) |
+| `gmail-cli auth add <email> --services gmail.send` | Auth Gmail send scope |
 
 
 ## Tailoring
@@ -171,6 +185,19 @@ verify → Confirm the application was received.
 - EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `common_answers.eeo` for reuse.
 - Platform registry (`apply/registry/*.yaml`): per-ATS config. `handler_class` field loads `PlatformHandler` from `apply/handlers/`. See `handler_base.py` header for add-platform guide.
 
+## Reach (outreach)
+
+Optional parallel track after `enrich`/`tailor`. Contact discovery finds recruiters (job page), team members (company LinkedIn people page, filtered by team keywords), and my 1st-degree connections (LinkedIn search with numeric company ID).
+
+- **Flow**: `enrich.py admit --team <name>` → `reach.py discover <jid>` (or `reach.py discover --all` after a batch) → `reach.py list <jid>` → outreach.
+- **One-shot guards**: `email_sent` / `message_sent` prevent re-sending. `--force` re-sends after human verification. `reach.py undo <jid>` resets.
+- **Uncertain sends**: if a DM send is clicked but unconfirmed, status is `uncertain` (attempt logged as `pending`) — check the LinkedIn inbox manually, then `reach.py update --set-sent message` to confirm or retry with `--force`. Never silently resend.
+- **Premium**: 2nd/3rd-degree contacts use the InMail composer (`.msg-inmail-credits-display`); the pipeline proceeds and reports `INMAIL_COMPOSER`. `CONNECT_REQUIRED` → run `reach.py connect`. Free accounts always see InMail only for non-connections.
+- **Contact indices**: `--contact N` matches the numbering printed by `discover`/`list` (DB order).
+- **Email suggestions** from the LLM are never sent automatically — backfill with `reach.py update --email <addr>` after human verification.
+- **Attempts**: every outreach is recorded in `contact_attempts` (status: pending/sent/failed).
+- **Verified LinkedIn selectors** (2026-07 live DOM): people cards `li.org-people-profile-card__profile-card-spacing`; DM = typeahead flow (`input.msg-connections-typeahead__search-field` → mouse-click suggestion → `div.msg-form__contenteditable` → `button.msg-form__send-btn`); compose URL recipient params do NOT work. See `lib/linkedin_messaging.py` header.
+
 ## Orchestrator rules
 
 1. **Don't guess personal data.** Check profile + resume first. Missing → ask (critical) or skip (optional).
@@ -251,6 +278,10 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 | Chrome crash | Auto-restarted — do nothing |
 | DB crash | `extract.py reset` |
 | Auth wall stuck | `enrich.py open` + `--refresh` |
+| Gmail send auth | `gmail-cli auth add <email> --services gmail.send` |
+| Contact discovery stuck | `reach.py retry <jid>` |
+| LinkedIn not signed in | Open Chrome to linkedin.com, sign in manually, then retry |
+| LinkedIn rate limited | Wait 5 min, `reach.py retry <jid>` |
 
 
 

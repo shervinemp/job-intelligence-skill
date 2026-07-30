@@ -99,6 +99,7 @@ def _create_v3_tables():
             culture_notes TEXT DEFAULT '',
             rating REAL,
             source_url TEXT DEFAULT '',
+            linkedin_id TEXT DEFAULT '',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -112,6 +113,37 @@ def _create_v3_tables():
             linkedin_url TEXT DEFAULT '',
             notes TEXT DEFAULT '',
             reached_out INTEGER DEFAULT 0,
+            source TEXT DEFAULT '',
+            confidence REAL DEFAULT 0.0,
+            message_sent INTEGER DEFAULT 0,
+            email_sent INTEGER DEFAULT 0,
+            last_contacted_at TEXT,
+            profile_picture_url TEXT DEFAULT '',
+            headline TEXT DEFAULT '',
+            connection_degree TEXT DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS company_connections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id TEXT REFERENCES companies(id) ON DELETE CASCADE,
+            contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            linkedin_url TEXT DEFAULT '',
+            headline TEXT DEFAULT '',
+            connection_degree TEXT DEFAULT '1st',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS contact_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+            channel TEXT NOT NULL CHECK(channel IN ('email','linkedin_message','linkedin_connect')),
+            direction TEXT NOT NULL DEFAULT 'outbound' CHECK(direction IN ('outbound','inbound')),
+            subject TEXT DEFAULT '',
+            body TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','opened','replied')),
+            message_id TEXT DEFAULT '',
+            error TEXT DEFAULT '',
+            sent_at TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS search_threads (
@@ -142,12 +174,35 @@ def _create_v3_tables():
         "external_url TEXT NOT NULL DEFAULT ''",
         "recruiter_name TEXT NOT NULL DEFAULT ''",
         "recruiter_url TEXT NOT NULL DEFAULT ''",
+        "team_name TEXT NOT NULL DEFAULT ''",
+        "contact_discovered INTEGER DEFAULT 0",
+        "outreach_attempted INTEGER DEFAULT 0",
     ]:
         try:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
+    for col in [
+        "source TEXT DEFAULT ''",
+        "confidence REAL DEFAULT 0.0",
+        "message_sent INTEGER DEFAULT 0",
+        "email_sent INTEGER DEFAULT 0",
+        "last_contacted_at TEXT",
+        "profile_picture_url TEXT DEFAULT ''",
+        "headline TEXT DEFAULT ''",
+        "connection_degree TEXT DEFAULT ''",
+    ]:
+        try:
+            c.execute(f"ALTER TABLE contacts ADD COLUMN {col}")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+    try:
+        c.execute("ALTER TABLE companies ADD COLUMN linkedin_id TEXT DEFAULT ''")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e).lower():
+            raise
     _import_legacy_auth_walls()
 
     for idx in [
@@ -180,5 +235,5 @@ _JOBS_COLS = (
     "job_type, department, source, source_url, stage, state, fit_score,"
     "fit_summary, company_vibe, error, scripts, response_path,"
     "notes, created_at, updated_at, applied_at, category, external_url,"
-    "recruiter_name, recruiter_url"
+    "recruiter_name, recruiter_url, team_name, contact_discovered, outreach_attempted"
 )

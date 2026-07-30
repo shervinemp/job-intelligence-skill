@@ -16,7 +16,7 @@ import time
 from playwright.sync_api import TimeoutError, expect
 
 from lib.chrome_manager import connect
-from lib.db import add_job, desc_get, desc_save, get_conn
+from lib.db import add_job, desc_get, desc_save, get_conn, contact_add
 from lib.platforms import clean as clean_desc
 
 
@@ -225,6 +225,14 @@ def scrape_linkedin(page_url, max_jobs=None, max_pages=DEFAULT_MAX_PAGES):
                                 "UPDATE jobs SET recruiter_name=?, recruiter_url=? WHERE id=?",
                                 (rc["name"], rc.get("linkedin_url", ""), jid),
                             ).connection.commit()
+                            contact_add(
+                                jid, rc["name"],
+                                role=rc.get("role", ""),
+                                linkedin_url=rc.get("linkedin_url", ""),
+                                source="recruiter_auto",
+                                confidence=0.8,
+                                notes="Auto-discovered from LinkedIn job page",
+                            )
                             print(f"  RECRUITER: {rc['name']} ({rc.get('role','')})", file=sys.stderr)
                         except Exception:
                             pass
