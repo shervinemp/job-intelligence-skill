@@ -37,6 +37,15 @@ def _determine_outcome(page, ctx, pages_before, url_before, submit_text_before):
     if success:
         return "success", "check_submit_success"
 
+    # 2.5 Validation errors — the form was rejected. Checked BEFORE the
+    # URL/form-gone signals below: a submit click can navigate to a
+    # review step (URL changes, form briefly absent) that carries
+    # validation errors — claiming success there would be a false
+    # positive that can never be corrected (job already marked applied).
+    errors = _get_validation_errors(page)
+    if errors:
+        return "rejected", f"{len(errors)} validation error(s)"
+
     # 3. URL change — if we navigated away from the form URL, likely success
     url_after = page.url or ""
     if url_before and url_after and url_after != url_before:
@@ -57,11 +66,6 @@ def _determine_outcome(page, ctx, pages_before, url_before, submit_text_before):
             # Submit button is gone — did the form get replaced?
             if not _form_still_present(page):
                 return "success", "submit button and form disappeared"
-
-    # 5. Validation errors — form was rejected
-    errors = _get_validation_errors(page)
-    if errors:
-        return "rejected", f"{len(errors)} validation error(s)"
 
     # 6. Vision API — screenshot and ask the LLM
     try:

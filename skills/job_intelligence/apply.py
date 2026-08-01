@@ -31,6 +31,7 @@ Use `registry` to inspect or override the learned state.
 import os, sys
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
+import json
 
 
 def _auto_jid():
@@ -190,7 +191,29 @@ def main():
                 save_state(_st)
             print(f"UNDO: {args.jid} {stage} -> {new_stage}", file=sys.stderr)
     elif args.command == "mappings":
-        print("MAPPINGS: removed in Skyvern migration", file=sys.stderr)
+        from lib.config import STATE_DIR as _STATE_DIR
+        _mp = os.path.join(_STATE_DIR, "field_mappings.json")
+        if args.action == "list":
+            try:
+                with open(_mp, encoding="utf-8") as _f:
+                    _data = json.load(_f)
+            except Exception:
+                _data = {}
+            print(f"MAPPINGS: {len(_data)} learned label→value mapping(s) "
+                  f"(promoted automatically by resolve.learn_mapping)", file=sys.stderr)
+            for _k, _v in sorted(_data.items()):
+                print(f"  {_k[:60]} -> {str(_v)[:40]}", file=sys.stderr)
+            print(f"  file: {_mp}", file=sys.stderr)
+        elif args.action == "confirm":
+            print("MAPPINGS: nothing pending — learned mappings are promoted "
+                  "automatically via resolve.learn_mapping (ADR-001 successor "
+                  "of the old pending-mapping store)", file=sys.stderr)
+        elif args.action == "clear":
+            try:
+                os.remove(_mp)
+                print("MAPPINGS: cleared all learned mappings", file=sys.stderr)
+            except FileNotFoundError:
+                print("MAPPINGS: nothing to clear", file=sys.stderr)
     elif args.command == "creds":
         from lib.credentials import cmd_creds
         cmd_creds(args.args)

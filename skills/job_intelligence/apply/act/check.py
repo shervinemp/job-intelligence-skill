@@ -77,6 +77,10 @@ def cmd_check(jid):
 
             ans_dict = _build_ans_dict(profile)
             ephemeral = _build_ephemeral(profile)
+            # The effective answers used at fill time (includes LLM key-mapped
+            # --answers that aren't in the profile). Verify against them, not
+            # just the profile, so ephemeral answers aren't invisible.
+            ans_override = state.get("fill_answers") or None
 
             for f in fields:
                 label = (f.get("label") or "").strip()
@@ -100,8 +104,8 @@ def cmd_check(jid):
 
                 # Read what's actually in the DOM
                 actual = _read_element_value(page, sel, ans=ans_dict.get(label, ""), field=f)
-                # Resolve what we expected to fill
-                res = resolve(label, profile, None,
+                # Resolve what we expected to fill (profile + fill-time override)
+                res = resolve(label, profile, ans_override,
                               autocomplete=f.get("autocomplete", ""),
                               field_name=f.get("name", ""),
                               field_id=f.get("id", ""),

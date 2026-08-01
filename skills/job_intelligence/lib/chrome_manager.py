@@ -234,9 +234,39 @@ def start():
     return False
 
 
+def _kill_port_owner(port):
+    """Kill the process listening on `port` (the stale pipeline Chrome).
+    The port is pipeline-dedicated (never the user's Chrome), so killing
+    its owner is safe. Best-effort; no-op when nothing is listening."""
+    try:
+        if os.name == "nt":
+            r = subprocess.run(["netstat", "-ano", "-p", "tcp"],
+                               capture_output=True, text=True, timeout=10)
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if (len(parts) >= 5 and parts[0] == "TCP"
+                        and f"127.0.0.1:{port}" in parts[1]
+                        and parts[3] == "LISTENING"):
+                    subprocess.run(["taskkill", "/F", "/PID", parts[4]],
+                                   capture_output=True, timeout=10)
+                    return
+        else:
+            r = subprocess.run(["lsof", "-ti", f"tcp:{port}"],
+                               capture_output=True, text=True, timeout=10)
+            for pid in r.stdout.split():
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except (OSError, ValueError):
+                    continue
+    except Exception:
+        pass
+
+
 def connect(timeout=15):
     """Get a (browser, context) pair connected to a healthy dedicated Chrome.
-    Calls init() on first use. Returns (None, None) on failure."""
+    Calls init() on first use. Returns (None, None) on failure.
+    Recovers from a stale/unresponsive Chrome: kills the process bound to
+    the CDP port and relaunches a fresh instance."""
     global CDP_PORT, CDP_URL
     init()
     for attempt in range(3):
@@ -260,7 +290,10 @@ def connect(timeout=15):
                 if "Target closed" in err or "Connection" in err or "Not connected" in err:
                     break
                 time.sleep(1)
-        print(f"Chrome unresponsive (attempt {attempt+1}/3), restarting...", file=sys.stderr)
+        print(f"Chrome unresponsive (attempt {attempt+1}/3), killing stale instance and relaunching...",
+              file=sys.stderr)
         close()
+        _kill_port_owner(CDP_PORT)
         time.sleep(2)
-        return None, None
+    print("ERROR: could not connect to Chrome after 3 attempts", file=sys.stderr)
+    return None, None

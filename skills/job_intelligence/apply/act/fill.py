@@ -317,6 +317,21 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             if not _handle_login_wall(page, jid, quick):
                 return 1
 
+            # Post-login 2FA gate: some platforms (Workday, etc.) show the
+            # 6-digit code prompt on the page AFTER sign-in succeeds —
+            # _login_check can't see it because it runs mid-login. The
+            # capability scan catches it here so we stop instead of
+            # probing/filling a wall.
+            try:
+                from apply.common.capabilities import scan as _cap_scan
+                _login_profile = _cap_scan(page)
+                if _login_profile and _login_profile.get("two_factor_signals"):
+                    emit_status("2fa_required", "2FA interstitial after login — complete in Chrome then rerun")
+                    emit_next("login", f"jid={jid} — complete 2FA then rerun fill")
+                    return 1
+            except Exception:
+                pass
+
             seen = set()
             for page_num in range(1, max_pages + 1):
                 # Edge 1: dismiss any confirmed popups before probing —
@@ -550,6 +565,10 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
         for r in remaining
     ]
     state["skipped_fields"] = [r["label"] for r in skipped]
+    # Persist the effective answers used this run so `act --check` can
+    # verify the DOM against them (LLM key-mapped --answers are ephemeral
+    # and would otherwise be invisible to the pre-submit check).
+    state["fill_answers"] = dict(ans_dict)
     if not (skyvern_result and skyvern_result.get("run_id")):
         state.pop("fill_run_id", None)
         state.pop("fill_run_started", None)

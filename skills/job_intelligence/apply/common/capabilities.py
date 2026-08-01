@@ -427,13 +427,15 @@ def profile_hash(profile: Optional[dict]) -> str:
 def suggest_strategy(profile: Optional[dict]) -> Optional[str]:
     """Best-effort suggestion of which probe depth to try first.
 
-    Strategy order is by strength of signal. Returns None if no
-    signal fires (let the full cascade run in declaration order).
-    The caller always runs the cascade as a backstop regardless.
+    Uses the _CAPABILITY_TO_STRATEGY table (single source of truth for
+    capability→strategy mapping), checked in table order (strongest
+    signal first). Returns None if no signal fires (let the full
+    cascade run in declaration order). The caller always runs the
+    cascade as a backstop regardless.
 
-    Special-case: 2FA / dropzone / success-modal pages aren't forms
-    to probe — return None so the probe caller can short-circuit
-    via `_scan_capability` + caller decision before even probing.
+    Special-case: 2FA / success-modal pages aren't forms to probe —
+    return None so the probe caller can short-circuit via
+    `_scan_capability` + caller decision before even probing.
     """
     if not profile:
         return None
@@ -441,20 +443,9 @@ def suggest_strategy(profile: Optional[dict]) -> Optional[str]:
     # Caller should check these before calling probe().
     if profile.get("two_factor_signals") or profile.get("success_modal_text"):
         return None
-    # Prioritise by capability — dialog wins over iframe over widgets
-    # because modal forms hide standard inputs from a document-level
-    # querySelectorAll, while iframe/widget forms are detected by
-    # document-level scans anyway.
-    if profile.get("dialog") or profile.get("nested_dialog"):
-        return "dialog"
-    if profile.get("cross_origin_iframes"):
-        return "iframe_navigate"
-    if profile.get("iframes"):
-        return "iframe"
-    if profile.get("shadow_roots"):
-        return "shadow_dom"
-    if profile.get("listbox_buttons") or profile.get("comboboxes"):
-        return "custom_widgets"
+    for cap, strategy in _CAPABILITY_TO_STRATEGY:
+        if profile.get(cap):
+            return strategy
     return None
 
 

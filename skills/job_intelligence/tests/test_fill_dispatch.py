@@ -141,5 +141,123 @@ class HasFormExcludesHidden(unittest.TestCase):
         self.assertFalse(has_any_form(page))
 
 
+class FillAnswersPersisted(unittest.TestCase):
+    """cmd_fill must persist the effective answers (incl. --answers
+    overrides) into state so `act --check` can verify against them."""
+
+    @staticmethod
+    def _chrome_session(state):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _cm(state):
+            page = MagicMock()
+            page.url = "https://example.com/job"
+            yield page, MagicMock()
+        return _cm(state)
+
+    def _patch_fill(self, saved_states):
+        from apply.common.inspector import ProbeResult
+        conn = MagicMock()
+        conn.execute.return_value.fetchone.return_value = {"stage": "tailored"}
+        patches = [
+            patch("apply.act.fill.load_state",
+                  return_value={"jid": "testjid", "external_url": "https://example.com/job"}),
+            patch("apply.act.fill.save_state", side_effect=saved_states.append),
+            patch("apply.act.fill.get_conn", return_value=conn),
+            patch("apply.act.fill._load_profile",
+                  return_value={"answers": {"email": "a@b.com"}}),
+            patch("apply.act.fill.chrome_session", side_effect=self._chrome_session),
+            patch("apply.act.fill._host", return_value=""),
+            patch("apply.act.fill._url_fallbacks", return_value=[]),
+            patch("apply.act.fill._is_error_page", return_value=False),
+            patch("apply.act.helpers._resolve_standalone_form_url", return_value=None),
+            patch("apply.act.fill.tag_page"),
+            patch("apply.common.registry.resolve", return_value=None),
+            patch("apply.act.fill.handle_captcha", return_value=False),
+            patch("apply.common.page_state.wait_for_form", return_value=True),
+            patch("apply.common.page_state.has_form", return_value=True),
+            patch("apply.common.page_state.has_any_form", return_value=True),
+            patch("apply.act.fill._handle_login_wall", return_value=True),
+            patch("lib.ask_api.available", return_value=False),
+            patch("apply.act.fill._probe_form",
+                  return_value=ProbeResult(fields=[], strategy="standard")),
+            patch("apply.act.fill._scan_capability", return_value=None),
+            patch("apply.act.fill._dismiss_popups_if_present"),
+            patch("apply.act.fill._find_next_button", return_value=None),
+            patch("apply.act.fill._detect_submit_button", return_value=False),
+            patch("apply.act.fill._fill_with_playwright", return_value=([], [])),
+            patch("apply.act.fill.time.sleep"),
+        ]
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+    def test_fill_answers_saved_with_override(self):
+        from apply.act.fill import cmd_fill
+        saved = []
+        self._patch_fill(saved)
+        rc = cmd_fill("testjid", answers={"email": "override@x.com"},
+                      verify=False, max_pages=4, quick=True)
+        self.assertEqual(rc, 1)  # no fields found (quick, empty probe)
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["fill_answers"], {"email": "override@x.com"})
+
+    def test_fill_answers_saved_without_override(self):
+        from apply.act.fill import cmd_fill
+        saved = []
+        self._patch_fill(saved)
+        cmd_fill("testjid", answers=None, verify=False, max_pages=4, quick=True)
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["fill_answers"], {"email": "a@b.com"})
+
+
+class CheckUsesFillAnswers(unittest.TestCase):
+    """cmd_check must pass the fill-time answers as the resolve override,
+    so LLM key-mapped answers are verified instead of invisible."""
+
+    def test_resolve_called_with_override(self):
+        from apply.common.inspector import ProbeResult
+        from contextlib import contextmanager
+        from apply.act.check import cmd_check
+
+        fill_answers = {"email": "override@x.com"}
+
+        @contextmanager
+        def _cm(state):
+            page = MagicMock()
+            page.url = "https://example.com/job"
+            yield page, MagicMock()
+
+        conn = MagicMock()
+        conn.execute.return_value.fetchone.return_value = {"stage": "tailored"}
+        field = {
+            "label": "Email", "tag": "INPUT", "type": "email",
+            "_sel": "#email", "name": "email", "id": "",
+            "placeholder": "", "autocomplete": "", "role": "",
+        }
+        with patch("apply.act.check.get_conn", return_value=conn), \
+             patch("apply.act.check.load_state",
+                   return_value={"jid": "testjid",
+                                 "external_url": "https://example.com/job",
+                                 "fill_answers": fill_answers}), \
+             patch("apply.act.check._load_profile", return_value={"answers": {}}), \
+             patch("apply.act.check.resolve_registry", return_value=None), \
+             patch("apply.act.check.chrome_session", side_effect=_cm), \
+             patch("apply.act.check.tag_page"), \
+             patch("apply.act.check._probe_form",
+                   return_value=ProbeResult(fields=[field], strategy="standard")), \
+             patch("apply.act.check._build_ans_dict", return_value={}), \
+             patch("apply.act.check._build_ephemeral", return_value={}), \
+             patch("apply.act.check._read_element_value", return_value="override@x.com"), \
+             patch("apply.act.check.resolve") as resolve_mock, \
+             patch("apply.common.page_helpers.save_state"):
+            resolve_mock.return_value.value = "override@x.com"
+            rc = cmd_check("testjid")
+        self.assertEqual(rc, 0)
+        resolve_mock.assert_called_once()
+        self.assertEqual(resolve_mock.call_args[0][2], fill_answers)
+
+
 if __name__ == "__main__":
     unittest.main()
