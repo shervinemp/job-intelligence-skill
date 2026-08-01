@@ -409,13 +409,13 @@ def cmd_help():
 
 def cmd_retry(use_playwright=True):
     state = load()
-    failed = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "failed"]
+    failed = [(jid, e) for jid, e in state["jobs"].items() if e.get("state") == "failed"]
     if not failed:
         print("No failed.", file=sys.stderr)
         return
     fetched = 0
     for jid, entry in failed:
-        ok, result = _fetch_from_url(entry.get("url", ""), use_playwright=use_playwright)
+        ok, result, _pt, _rh = _fetch_from_url(entry.get("url", ""), use_playwright=use_playwright)
         if ok:
             save_description(jid, result)
             snippet = re.sub(r'\s+', ' ', result[:200].replace('\r', '')).strip()

@@ -20,9 +20,13 @@ def has_dialog(page) -> bool:
 
 def has_form(page) -> bool:
     """True if any form element (input, select, textarea) exists in the
-    main document. Does NOT check iframes — use has_any_form() for that."""
+    main document. Does NOT check iframes — use has_any_form() for that.
+    Hidden/submit inputs are excluded (CSRF/analytics hidden inputs exist
+    on nearly every page and would defeat no_apply_path detection)."""
     try:
-        return bool(page.query_selector('input, select, textarea'))
+        return bool(page.query_selector(
+            'input:not([type=hidden]):not([type=submit]), select, textarea'
+        ))
     except Exception:
         return False
 
@@ -34,7 +38,7 @@ def has_iframe_form(page) -> bool:
         if fr == page.main_frame:
             continue
         try:
-            if fr.query_selector('input, select, textarea'):
+            if fr.query_selector('input:not([type=hidden]):not([type=submit]), select, textarea'):
                 return True
         except Exception:
             continue

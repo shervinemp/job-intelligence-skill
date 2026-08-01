@@ -114,42 +114,6 @@ def _dismiss_popups_if_present(page, profile=None, *, verbose=True):
                 print(f"  POPUP_DISMISS_FAIL: {e}", file=sys.stderr)
 
 
-def _detect_2fa(page):
-    """Two-factor auth interstitial detection.
-
-    After login succeeds, some platforms require a 6-digit code
-    delivered via SMS/app. The capability scanner sees a numeric
-    input with maxlength 4-8 and `inputmode='numeric'` (or
-    autocomplete='one-time-code'). Returns True when this pattern
-    is detected — caller should emit `2fa_required` instead of
-    `login_succeeded` (otherwise the orchestrator would proceed to
-    fill as if logged-in, hitting a wall).
-    """
-    try:
-        return page.evaluate("""() => {
-            const inputs = document.querySelectorAll(
-                'input[autocomplete*="one-time-code" i],'  // explicit hint (ATS-aware browsers)
-                + ' input[inputmode="numeric"][maxlength],'
-                + ' input[type="tel"][maxlength],'
-                + ' input[pattern*="^[0-9]{N}" i]'  // rare, but some ATS use tel + pattern
-            );
-            for (const inp of inputs) {
-                if (inp.offsetParent === null) continue;
-                const ml = parseInt(inp.getAttribute('maxlength') || '0', 10);
-                if (ml >= 4 && ml <= 8) return true;
-                if (inp.getAttribute('autocomplete') &&
-                    /one-time-code/i.test(inp.getAttribute('autocomplete'))) return true;
-            }
-            // Body text hints — "Enter the 6-digit code sent to" etc.
-            const txt = (document.body.innerText || '').toLowerCase();
-            if (/\\b(\\d{1,2})-?digit (code|verification|otp)\\b/.test(txt)) return true;
-            if (/two-?factor|2fa|verification code|authentication code|enter the code/i.test(txt)) return true;
-            return false;
-        }""")
-    except Exception:
-        return False
-
-
 def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
              quick: bool = False):
     db_row = get_conn().execute(
@@ -441,7 +405,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                             pass
                         continue
 
-                filled, failed = _fill_with_playwright(page, fields, profile, answers)
+                filled, failed = _fill_with_playwright(page, fields, profile, answers,
+                                                       filled_keys=filled_keys)
                 for rec in filled:
                     if rec["key"] not in filled_keys:
                         filled_keys.add(rec["key"])
@@ -509,7 +474,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 if not new_fields:
                     break
                 print(f"  Sweep {sweep+1}: {len(new_fields)} new field(s) revealed", file=sys.stderr)
-                filled2, failed2 = _fill_with_playwright(page, new_fields, profile, answers)
+                filled2, failed2 = _fill_with_playwright(page, new_fields, profile, answers,
+                                                         filled_keys=filled_keys)
                 for rec in filled2:
                     if rec["key"] not in filled_keys:
                         filled_keys.add(rec["key"])

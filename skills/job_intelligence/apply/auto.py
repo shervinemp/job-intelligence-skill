@@ -11,7 +11,7 @@ Usage:
   python apply.py auto --quick                   Deterministic-only
   python apply.py auto --max-pages N             Max form pages (default 4)
 """
-import json, os, sys, time, re
+import os, sys, time, re
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -78,7 +78,6 @@ def _retry_fill_with_llm(jid, job, results):
     from apply.common.page_helpers import load_state
     from apply.act.fill import cmd_fill
     from apply.act.check import cmd_check
-    from apply.act.submit import cmd_submit
     from lib.ask_api import available as llm_avail
     from apply.act.helpers import _load_profile
     from apply.act.suggest import llm_field_key_mapping
@@ -172,7 +171,7 @@ def _process_one(jid, job, quick, max_pages, results):
     from apply.act.check import cmd_check
     from apply.act.submit import cmd_submit
     from apply.common.page_helpers import load_state
-    from lib.db import get_conn, find_duplicate, get_job
+    from lib.db import get_conn, find_duplicate
 
     def _stage():
         row = get_conn().execute("SELECT stage FROM jobs WHERE id=?", (jid,)).fetchone()

@@ -33,37 +33,37 @@ def cmd_investigate(jid):
             emit_next("act --fill")
             return 0
 
-    from lib.ask_api import available as _vision_available
-    if _vision_available():
-        from lib.ask_api import ask_bytes
-        from apply.common.inspect_lib import form_jpeg
-        print("  DOM probe found nothing — analyzing with vision (1 LLM call)...", file=sys.stderr)
-        try:
-            img = form_jpeg(page)
-            reply, err = ask_bytes(
-                img,
-                "Analyze this job application form. List every visible form field "
-                "as 'LABEL | TYPE | REQUIRED | OPTIONS' lines. "
-                "Also state: is this multi-page? What buttons exist (Next, Submit, etc.)?",
-                max_tokens=2048,
-            )
-            if not err and reply:
-                rd = os.path.join(RESULTS_DIR, jid)
-                os.makedirs(rd, exist_ok=True)
-                rpt_path = os.path.join(rd, "investigate_report.json")
-                with open(rpt_path, "w", encoding="utf-8") as fh:
-                    json.dump({"url": url, "method": "ask_api", "analysis": reply}, fh, indent=2)
-                state["investigate_report"] = rpt_path
-                save_state(state)
-                print(f"  Report saved: {rpt_path}", file=sys.stderr)
-                print(f"  Vision analysis:\n{reply[:500]}", file=sys.stderr)
-                emit_status("investigated", f"report at {rpt_path}")
-                emit_next("act --fill")
-                return 0
-            if err:
-                print(f"  VISION_FAIL: {err} — falling back to Skyvern", file=sys.stderr)
-        except Exception as ve:
-            print(f"  VISION_FAIL: {ve} — falling back to Skyvern", file=sys.stderr)
+        from lib.ask_api import available as _vision_available
+        if _vision_available():
+            from lib.ask_api import ask_bytes
+            from apply.common.inspect_lib import form_jpeg
+            print("  DOM probe found nothing — analyzing with vision (1 LLM call)...", file=sys.stderr)
+            try:
+                img = form_jpeg(page)
+                reply, err = ask_bytes(
+                    img,
+                    "Analyze this job application form. List every visible form field "
+                    "as 'LABEL | TYPE | REQUIRED | OPTIONS' lines. "
+                    "Also state: is this multi-page? What buttons exist (Next, Submit, etc.)?",
+                    max_tokens=2048,
+                )
+                if not err and reply:
+                    rd = os.path.join(RESULTS_DIR, jid)
+                    os.makedirs(rd, exist_ok=True)
+                    rpt_path = os.path.join(rd, "investigate_report.json")
+                    with open(rpt_path, "w", encoding="utf-8") as fh:
+                        json.dump({"url": url, "method": "ask_api", "analysis": reply}, fh, indent=2)
+                    state["investigate_report"] = rpt_path
+                    save_state(state)
+                    print(f"  Report saved: {rpt_path}", file=sys.stderr)
+                    print(f"  Vision analysis:\n{reply[:500]}", file=sys.stderr)
+                    emit_status("investigated", f"report at {rpt_path}")
+                    emit_next("act --fill")
+                    return 0
+                if err:
+                    print(f"  VISION_FAIL: {err} — falling back to Skyvern", file=sys.stderr)
+            except Exception as ve:
+                print(f"  VISION_FAIL: {ve} — falling back to Skyvern", file=sys.stderr)
 
     print("  Running Skyvern investigator (slow, 10-step agent)...", file=sys.stderr)
     from apply.common.skyvern_bridge import SkyvernExtraction

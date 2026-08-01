@@ -481,8 +481,11 @@ def _gap_fill_into_answers(fields, profile, answers_override, jid, ephemeral):
     return answers_override
 
 
-def _fill_with_playwright(page, fields, profile, answers_override) -> tuple[list[dict], list[dict]]:
+def _fill_with_playwright(page, fields, profile, answers_override,
+                          filled_keys=None) -> tuple[list[dict], list[dict]]:
     from apply.strategies.dispatch import field_deterministic
+    if filled_keys is None:
+        filled_keys = set()
 
     filled = []
     failed = []

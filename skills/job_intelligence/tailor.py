@@ -158,7 +158,7 @@ def cmd_craft(auto=False):
     state = load()
     described = [(jid, e) for jid, e in state["jobs"].items() if e.get("stage") == "described" and e.get("state") == "active"]
     if not described:
-        failed_count = state["stages"].get("failed", 0)
+        failed_count = state["states"].get("failed", 0)
         if failed_count:
             print(f"NO_PENDING ({failed_count} failed, use 'retry')", file=sys.stderr)
         else:
@@ -375,7 +375,7 @@ def cmd_relentless():
                      if e.get("stage") == "described" and e.get("state") == "active"]
         if not described:
             s = pipeline_status()
-            failed = state.get("stages", {}).get("failed", 0)
+            failed = state.get("states", {}).get("failed", 0)
             if failed:
                 print(f"DONE: {s['stages'].get('tailored', 0)} tailored, {failed} failed (use 'retry')", file=sys.stderr)
             else:

@@ -207,6 +207,9 @@ def cmd_reset(*jids, confirm=False):
             sys.exit(1)
         c = conn
         c.execute("PRAGMA foreign_keys=OFF")
+        c.execute("DELETE FROM contact_attempts")
+        c.execute("DELETE FROM company_connections")
+        c.execute("DELETE FROM contacts")
         c.execute("DELETE FROM events")
         c.execute("DELETE FROM job_documents")
         c.execute("DELETE FROM jobs")
