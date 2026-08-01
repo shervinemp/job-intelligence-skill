@@ -168,22 +168,28 @@ def _extract_company_id(html_text):
 
 
 def _resolve_company_id(ctx, company_slug):
-    """Resolve the numeric company ID by visiting the company page once."""
+    """Resolve the numeric company ID by visiting the company page once.
+
+    Retries once on transient failures (slow loads / rate limiting).
+    """
     if not company_slug:
         return None
-    page = ctx.new_page()
-    try:
-        company_url = f"https://www.linkedin.com/company/{company_slug}/"
-        if not _navigate_and_wait(page, company_url, timeout=15):
-            return None
-        return _extract_company_id(page.evaluate("() => document.body.innerHTML"))
-    except Exception:
-        return None
-    finally:
+    for attempt in range(2):
+        page = ctx.new_page()
         try:
-            page.close()
+            company_url = f"https://www.linkedin.com/company/{company_slug}/"
+            if not _navigate_and_wait(page, company_url, timeout=15):
+                continue
+            return _extract_company_id(page.evaluate("() => document.body.innerHTML"))
         except Exception:
-            pass
+            if attempt == 0:
+                time.sleep(2)
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +566,7 @@ def search_company_connections(ctx, company_slug=None, company_id=None):
                     return {"connections": connections, "used": "search",
                             "detail": f"currentCompany={resolved_id}"}
 
-        # Fallback: company people page
+        # Fallback: company people page (surfaces connections first)
         if company_slug:
             company_url = f"https://www.linkedin.com/company/{company_slug}/people/"
             if _navigate_and_wait(page, company_url, timeout=15) and _check_auth(page):
@@ -568,7 +574,8 @@ def search_company_connections(ctx, company_slug=None, company_id=None):
                 connections = _extract_company_people(page)
                 if connections:
                     return {"connections": connections, "used": "fallback",
-                            "detail": "no company ID — people page (all employees, not just connections)"}
+                            "detail": ("search returned 0 1st-degree results — "
+                                       "people page (connections-first, mixed degrees)")}
 
         return {"connections": [], "used": "none", "detail": "no results"}
 

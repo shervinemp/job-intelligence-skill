@@ -10,6 +10,7 @@ Orchestrates the multi-source discovery pipeline:
 """
 
 import json
+import sys
 
 from lib.chrome_manager import connect
 from lib.db import get_conn, get_job, company_get, company_upsert
@@ -157,8 +158,10 @@ def discover_contacts(jid, team_name=None, use_llm=True, use_browser=True):
 def _find_company_slug(ctx, company_name):
     """Find a company's LinkedIn slug by searching LinkedIn.
 
-    Verifies the result against the company name — the first search result
-    is not always the right company.
+    VERIFIED (2026-07-30): the search results layout has NO result-card
+    class (no .org-company-search-card / .reusable-search__result-container);
+    results are bare a[href*="/company/"] anchors inside div[role="list"].
+    Verification: the company name must appear in the result's own text.
     """
     page = ctx.new_page()
     try:
@@ -169,27 +172,28 @@ def _find_company_slug(ctx, company_name):
         except Exception:
             return None
 
-        js = """() => {
-          const cards = document.querySelectorAll('.org-company-search-card, .reusable-search__result-container, li');
-          const nameLower = {nameLower};
-          for (const card of cards) {
-            const link = card.querySelector('a[href*="/company/"]');
-            if (!link) continue;
-            const text = (card.textContent || '').trim();
+        js = """(companyName) => {
+          const nameLower = (companyName || '').toLowerCase();
+          const links = document.querySelectorAll('a[href*="/company/"]');
+          for (const link of links) {
             const m = link.href.match(/\\/company\\/([^\\/?#]+)/);
             if (!m || !m[1]) continue;
-            // Require the company name to appear in the card text
-            if (nameLower && text.toLowerCase().includes(nameLower)) {
-              return m[1];
+            const slug = m[1];
+            // Verify the company name against the result's own text.
+            // New layout: the card IS the anchor; old layout: card is a
+            // container around the anchor.
+            const card = link.closest('[role="list"] > div, .org-company-search-card, .reusable-search__result-container');
+            const scope = card || link;
+            const text = (scope.textContent || '').toLowerCase();
+            const linkText = (link.textContent || '').toLowerCase();
+            if (linkText.includes(nameLower) || (nameLower && text.includes(nameLower))) {
+              return slug;
             }
-            // Fallback: exact link-text match
-            const linkText = (link.textContent || '').trim().toLowerCase();
-            if (linkText === nameLower) return m[1];
           }
           return null;
-        }""".replace("{nameLower}", json.dumps(company_name.lower()[:40]))
+        }"""
         try:
-            return page.evaluate(js)
+            return page.evaluate(js, company_name.lower()[:40])
         except Exception:
             return None
     finally:

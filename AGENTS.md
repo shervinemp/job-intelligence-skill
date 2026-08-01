@@ -14,9 +14,11 @@
 ## Job Pipeline
 - **Flow:** `stage_emails.py` → `extract.py` → `enrich.py` → `tailor.py`. See `SKILL.md` for full commands.
 - **LinkedIn:** `linkedin.py [--max N]` as alt entry point.
+- **Reach (outreach):** after `enrich.py admit --team <name>` → `reach.py discover <jid>` (or `reach.py discover --all`). Then `reach.py list <jid>` → `reach.py email --dry-run` → send, or `reach.py message` / `reach.py connect`. Gmail send needs `gmail-cli auth add <email> --services gmail.send` once.
 - **Recovery:** auth → `gmail-cli auth add` | Chrome crash → `Start-Process ... --remote-debugging-port=9222` | FAILED → `retry` | SKIPPED → `retry-skipped`
 - **Output:** `~/.ji/results/{jid}/`
 - **Submit safety:** Submit is one-shot. `submit_clicked` flag prevents re-clicking. If outcome uncertain, pipeline investigates (success signals, URL change, form gone, validation errors, vision API) — never clicks twice. `--force` for manual retry only. `undo` clears the flag.
+- **Outreach safety:** same one-shot philosophy — `email_sent`/`message_sent` flags, `--force` re-send, `reach.py undo <jid>` resets. Unconfirmed DMs report `uncertain` (never silently resend; verify in inbox, then `reach.py update --set-sent`).
 - **When stuck:** Investigate (`act --inspect`) before retrying. Don't guess — read the page, check the HTML dump, analyze the screenshot. Only ask the human when all automated detection methods are exhausted.
 
 ## Tools & Automation

@@ -53,9 +53,12 @@ Before running pipeline, read these:
 | `reach.py message <jid> --contact N [--body <text>] [--force]` | Send LinkedIn DM |
 | `reach.py connect <jid> --contact N [--note <text>]` | Send LinkedIn connection request |
 | `reach.py update <jid> --contact N [--email <addr>] [--note <text>] [--set-sent email\|message]` | Backfill/edit contact fields |
+| `reach.py attempts [<jid>]` | Show outreach attempts |
 | `reach.py status` | Pipeline state with contact/outreach summary |
 | `reach.py retry <jid>` | Re-run contact discovery |
 | `reach.py undo <jid>` | Reset contact state for a job |
+| `report.py connections [company]` | My connections grouped by company |
+| `report.py outreach` | Outreach attempts + pending contacts |
 | `gmail-cli send <to> <subject> --body <text>` | Send email (low-level) |
 | `gmail-cli auth add <email> --services gmail.send` | Auth Gmail send scope |
 

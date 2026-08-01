@@ -8,6 +8,7 @@ Usage:
   reach.py message <jid> [--contact N] [--dry-run] [--force] [--body <text>] [--body-file <path>]
   reach.py connect <jid> [--contact N] [--note <text>]
   reach.py update <jid> [--contact N] [--email <addr>] [--note <text>] [--set-sent email|message]
+  reach.py attempts [<jid>]                 Show outreach attempts
   reach.py status                            Pipeline state with contact info
   reach.py retry <jid>                       Retry failed contact discovery
   reach.py undo <jid>                        Reset contact state
@@ -425,6 +426,21 @@ def cmd_update(jid, contact_idx=1, email=None, note=None, set_sent=None):
         print(f"  {k}: {v}", file=sys.stderr)
 
 
+def cmd_attempts(jid=None, contact_idx=None):
+    """Show outreach attempts, optionally filtered by job/contact."""
+    from lib.db.contacts import attempt_list
+    attempts = attempt_list(job_id=jid, limit=50)
+    if not attempts:
+        print("No outreach attempts." + (f" for {jid}" if jid else ""), file=sys.stderr)
+        return
+    print(f"Attempts ({len(attempts)}):", file=sys.stderr)
+    for a in attempts:
+        contact_name = a.get("contact_name", "")
+        print(f"  [{a['channel']:16s}] {a['status']:8s} {contact_name[:22]:22s} "
+              f"{a.get('sent_at') or a.get('created_at') or ''}"
+              + (f"  err: {a['error'][:50]}" if a.get("error") else ""), file=sys.stderr)
+
+
 # ---------------------------------------------------------------------------
 # Status / Retry / Undo
 # ---------------------------------------------------------------------------
@@ -539,6 +555,9 @@ def main():
     update_p.add_argument("--set-sent", choices=["email", "message"],
                           help="Mark contact as contacted (after manual confirmation)")
 
+    attempts_p = sub.add_parser("attempts", help="Show outreach attempts")
+    attempts_p.add_argument("jid", nargs="?", help="Job ID (optional filter)")
+
     sub.add_parser("status", help="Pipeline state with contact info")
 
     retry_p = sub.add_parser("retry", help="Retry contact discovery for a job")
@@ -568,6 +587,8 @@ def main():
         cmd_connect(args.jid, contact_idx=args.contact, note=args.note)
     elif args.command == "update":
         cmd_update(args.jid, contact_idx=args.contact, email=args.email, note=args.note, set_sent=args.set_sent)
+    elif args.command == "attempts":
+        cmd_attempts(jid=args.jid)
     elif args.command == "status":
         cmd_status()
     elif args.command == "retry":

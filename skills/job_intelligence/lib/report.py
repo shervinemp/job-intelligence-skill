@@ -12,6 +12,8 @@ Usage:
   python3 report.py companies [query]         List/search companies
   python3 report.py events [--upcoming]       List events
   python3 report.py contacts <jid>            Contacts for a job
+  python3 report.py connections [company]     My connections grouped by company
+  python3 report.py outreach [--limit N]      Outreach attempts + pending contacts
   python3 report.py archive                   Archive state/registry entries for reset jobs
 """
 
@@ -338,6 +340,65 @@ def cmd_contacts(jid=None):
         print(f"  {reached} {c['name']:20s} {c.get('role','') or '':25s} {c.get('email','') or ''}")
 
 
+def cmd_connections(company_query=None):
+    """Show connections (contacts) grouped by company — or for one company."""
+    conn = get_conn()
+    if company_query:
+        rows = conn.execute(
+            "SELECT j.company, c.* FROM contacts c JOIN jobs j ON j.id=c.job_id "
+            "WHERE j.company LIKE ? AND c.source='my_connection' "
+            "ORDER BY j.company, c.name",
+            (f"%{company_query}%",),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT j.company, c.* FROM contacts c JOIN jobs j ON j.id=c.job_id "
+            "WHERE c.source='my_connection' "
+            "ORDER BY j.company, c.name LIMIT 100"
+        ).fetchall()
+    if not rows:
+        print("No my-connection contacts found" + (f" for '{company_query}'" if company_query else ""))
+        return
+    print(f"Connections ({len(rows)}):")
+    for r in rows:
+        deg = r["connection_degree"] or ""
+        deg_s = f" ({deg})" if deg else ""
+        print(f"  {_clean(r['company'] or '')[:30]:30s} {r['name'][:25]:25s} "
+              f"{_clean(r['role'] or '')[:35]:35s} {r['linkedin_url'] or ''}{deg_s}")
+
+
+def cmd_outreach(limit=50):
+    """Show outreach attempts + pending contacts."""
+    conn = get_conn()
+    attempts = conn.execute(
+        "SELECT a.*, c.name as contact_name, c.job_id FROM contact_attempts a "
+        "JOIN contacts c ON c.id=a.contact_id ORDER BY a.created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    if attempts:
+        print(f"Attempts ({len(attempts)}):")
+        for a in attempts:
+            print(f"  [{a['channel']:16s}] {a['status']:8s} {a['contact_name'][:22]:22s} "
+                  f"{a.get('sent_at') or a.get('created_at') or ''}"
+                  + (f"  err: {a['error'][:40]}" if a.get("error") else ""))
+    else:
+        print("No outreach attempts yet.")
+
+    pending = conn.execute(
+        "SELECT j.company, c.name, c.email, c.linkedin_url FROM contacts c "
+        "JOIN jobs j ON j.id=c.job_id "
+        "WHERE c.reached_out=0 AND (c.email != '' OR c.linkedin_url != '') "
+        "ORDER BY j.company LIMIT 25"
+    ).fetchall()
+    if pending:
+        print(f"\nPending outreach ({len(pending)}):")
+        for p in pending:
+            addr = p["email"] or p["linkedin_url"]
+            print(f"  {_clean(p['company'] or '')[:25]:25s} {p['name'][:22]:22s} {addr or ''}")
+    else:
+        print("\nNo pending outreach.")
+
+
 def cmd_archive():
     """Move state/registry entries for reset jobs to archive files (preserves history)."""
     conn = get_conn()
@@ -424,6 +485,15 @@ def main():
         cmd_events(upcoming="--upcoming" in args)
     elif cmd == "contacts":
         cmd_contacts(args[0] if args else None)
+    elif cmd == "connections":
+        cmd_connections(" ".join(args) if args else None)
+    elif cmd == "outreach":
+        lim = 50
+        if "--limit" in args:
+            i = args.index("--limit")
+            if i + 1 < len(args):
+                lim = int(args[i + 1])
+        cmd_outreach(limit=lim)
     elif cmd == "archive":
         cmd_archive()
     else:
