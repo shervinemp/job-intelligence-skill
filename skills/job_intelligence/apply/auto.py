@@ -172,6 +172,7 @@ def _process_one(jid, job, quick, max_pages, results):
     from apply.act.submit import cmd_submit
     from apply.common.page_helpers import load_state
     from lib.db import get_conn, find_duplicate
+    from apply.common.policy import resolve_mode
 
     def _stage():
         row = get_conn().execute("SELECT stage FROM jobs WHERE id=?", (jid,)).fetchone()
@@ -226,8 +227,11 @@ def _process_one(jid, job, quick, max_pages, results):
             return
         st = load_state()
         if st.get("status") == "no_apply_path":
-            from lib.db import advance_job
-            advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
+            # Only auto-reject in live mode — shadow/hold runs are
+            # observability-only and must not mutate job state.
+            if resolve_mode() == "live":
+                from lib.db import advance_job
+                advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
             results["skipped"].append((jid, "no apply path (expired)"))
             return
         if st.get("status") in ("login_required", "login_failed"):
@@ -235,7 +239,7 @@ def _process_one(jid, job, quick, max_pages, results):
             return
         print("  FILL_FAILED — inspecting...", file=sys.stderr)
         try:
-            from apply.act.inspect import run as inspect_run
+            from apply.act.inspect import cmd_inspect as inspect_run
             inspect_run(jid)
         except Exception as ie:
             print(f"  INSPECT_ERR: {ie}", file=sys.stderr)
