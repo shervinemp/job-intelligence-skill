@@ -554,15 +554,16 @@ class CurveballFixtures(unittest.TestCase):
     def test_cookie_overlay_detects_both_dialogs(self):
         # Cookie + apply modals are siblings in DOM (real overlay
         # pattern, not nested inside each other). Both flag dialog=True.
-        # Neither qualifies as confirm_modal_signals because:
-        # - cookie banner has Accept/Manage buttons (no OK/confirm text)
-        # - apply modal has form inputs (so not a confirm modal)
+        # The cookie banner DOES qualify as a confirm modal (Accept/
+        # Agree button text) so mid-fill dismissal fires — cookie banners
+        # click-intercept form fields otherwise (Accenture, Workday).
+        # The apply modal has form inputs, so it does NOT count.
         p = self.CorpusPage.from_html(_COOKIE_OVERLAY,
                                        url="https://crowdstrike.wd5.myworkdayjobs.com/x")
         profile = self.scan(p)
         self.assertTrue(profile["dialog"], "Both modals are dialogs")
-        self.assertEqual(profile["confirm_modal_signals"], 0,
-                         "neither modal has OK/Confirm button text")
+        self.assertEqual(profile["confirm_modal_signals"], 1,
+                         "cookie banner with Accept button counts as dismissible")
         # The dialog scope uses the FIRST [role=dialog]. If the cookie
         # banner is first in DOM order, no fields are found there.
         # The cascade falls through to the document-level scan.

@@ -211,7 +211,9 @@ _SCAN_JS = r"""() => {
     // must fill, not just OK/Cancel buttons).
     const confirmKws = ['ok', 'confirm', 'continue', 'submit', 'yes',
                         'sure', 'i agree', 'dismiss', 'got it', 'close',
-                        'leave anyway', 'stay on page'];
+                        'leave anyway', 'stay on page',
+                        'accept', 'accept all', 'agree', 'allow',
+                        'allow all', 'accept and continue'];
     let confirmModalCount = 0;
     dialogs.forEach(d => {
         if (d.offsetParent === null) return;

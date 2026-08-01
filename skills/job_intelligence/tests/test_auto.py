@@ -58,6 +58,47 @@ class AutoProcessOne(unittest.TestCase):
         self.assertEqual(len(results["stopped"]), 1)
         self.assertEqual(len(results["submitted"]), 0)
 
+    def test_fill_exception_retried_once(self):
+        """A fill exception (no status set, e.g. execution-context destroyed)
+        must retry the fill once before declaring failure."""
+        results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
+        state = {"type": "ats_direct"}
+        conn = MagicMock()
+        conn.execute.return_value.fetchone.side_effect = [
+            {"stage": "tailored"},  # after first (failed) fill
+            {"stage": "tailored"},  # after retried fill
+            {"stage": "applied"},   # after submit
+        ]
+        with patch("apply.detect.run", return_value=0), \
+             patch("apply.common.page_helpers.load_state", return_value=state), \
+             patch("apply.act.fill.cmd_fill", side_effect=[1, 0]) as fill_mock, \
+             patch("apply.act.check.cmd_check", return_value=0), \
+             patch("apply.act.submit.cmd_submit", return_value=0), \
+             patch("apply.auto.time.sleep"), \
+             patch("lib.db.get_conn", return_value=conn):
+            _process_one("testjid", {}, False, 4, results)
+        self.assertEqual(fill_mock.call_count, 2)
+        self.assertEqual(len(results["submitted"]), 1)
+        self.assertEqual(len(results["stopped"]), 0)
+
+    def test_fill_exception_still_fails_after_retry(self):
+        """If the retry also throws, the job must be diagnosed+stopped,
+        not silently skipped."""
+        results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
+        state = {"type": "ats_direct"}
+        conn = MagicMock()
+        conn.execute.return_value.fetchone.return_value = {"stage": "tailored"}
+        with patch("apply.detect.run", return_value=0), \
+             patch("apply.common.page_helpers.load_state", return_value=state), \
+             patch("apply.act.fill.cmd_fill", return_value=1) as fill_mock, \
+             patch("apply.act.inspect.cmd_inspect"), \
+             patch("apply.auto._retry_fill_with_llm", return_value=False), \
+             patch("apply.auto.time.sleep"), \
+             patch("lib.db.get_conn", return_value=conn):
+            _process_one("testjid", {}, False, 4, results)
+        self.assertEqual(fill_mock.call_count, 2)
+        self.assertEqual(len(results["stopped"]), 1)
+
     def test_full_pipeline_submits(self):
         results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
         state = {"type": "ats_direct"}

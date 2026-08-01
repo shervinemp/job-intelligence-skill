@@ -289,8 +289,10 @@ def _try_filechooser_upload(page, label, path):
 def _dismiss_confirm_modal(page):
     try:
         page.evaluate("""() => {
-            const kws = ['yes', 'confirm', 'submit', 'ok', 'sure', 'continue'];
-            const modals = document.querySelectorAll('[role="dialog"], .modal, [class*="confirm"], [class*="popup"]');
+            const kws = ['yes', 'confirm', 'submit', 'ok', 'sure', 'continue',
+                         'accept', 'accept all', 'agree', 'allow', 'allow all',
+                         'accept and continue'];
+            const modals = document.querySelectorAll('[role="dialog"], .modal, [class*="confirm"], [class*="popup"], [class*="cookie"], [class*="consent"]');
             for (const m of modals) {
                 if (m.offsetParent === null) continue;
                 for (const btn of m.querySelectorAll('button, a, [role="button"]')) {

@@ -9,7 +9,7 @@ from apply.act.helpers import (
     _wait_for_fields, _probe_form, _fill_with_playwright, _find_next_button,
     _empty_required, _click_action, _verify_with_ask_api, _detect_submit_button,
     _field_key, _build_ans_dict, _resolve_linkedin_apply, _wire_dialogs,
-    _is_junk_field, _dismiss_confirm_modal,
+    _is_junk_field, _dismiss_confirm_modal, _get_validation_errors,
 )
 
 
@@ -841,6 +841,11 @@ def _handle_login_wall(page, jid, quick):
                 return True
             else:
                 print(f"  CREATE_FAIL: account creation rejected ({create_result})", file=sys.stderr)
+                try:
+                    for _e in _get_validation_errors(page)[:6]:
+                        print(f"    ! {_e[:110]}", file=sys.stderr)
+                except Exception:
+                    pass
                 emit_status("login_required", f"account creation rejected at {domain}")
                 emit_next("login", f"domain={domain} jid={jid} — create account manually, then 'apply.py creds set {domain} {defaults.get('email','<email>')}'")
                 return False

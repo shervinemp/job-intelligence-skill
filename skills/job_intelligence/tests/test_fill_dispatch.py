@@ -259,5 +259,27 @@ class CheckUsesFillAnswers(unittest.TestCase):
         self.assertEqual(resolve_mock.call_args[0][2], fill_answers)
 
 
+class NormalizeForCompare(unittest.TestCase):
+    """check.py _normalize_for_compare must mirror the filler's
+    fill-time normalizations so check doesn't false-warn."""
+
+    def test_phone_formatted_vs_e164(self):
+        from apply.act.check import _normalize_for_compare
+        self.assertEqual(_normalize_for_compare("Phone Number", "+1 (343) 558-1744"),
+                         _normalize_for_compare("Phone", "+13435581744"))
+
+    def test_postal_spaces_stripped(self):
+        from apply.act.check import _normalize_for_compare
+        self.assertEqual(_normalize_for_compare("Postal Code", "K2P 1J6"), "k2p1j6")
+
+    def test_normal_text_just_lowercased(self):
+        from apply.act.check import _normalize_for_compare
+        self.assertEqual(_normalize_for_compare("Email", "A@B.com"), "a@b.com")
+
+    def test_contact_label_counts_as_phone(self):
+        from apply.act.check import _normalize_for_compare
+        self.assertEqual(_normalize_for_compare("Contact Number", "+1 343 558 1744"), "13435581744")
+
+
 if __name__ == "__main__":
     unittest.main()

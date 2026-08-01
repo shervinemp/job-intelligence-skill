@@ -8,7 +8,9 @@ It reads the current form state from the DOM and cross-references against:
 
 Output is a structured report the orchestrator reviews before deciding to submit.
 """
-import sys, time
+import re
+import sys
+import time
 
 from lib.db import get_conn
 from apply.common.output import emit_error, emit_status
@@ -20,6 +22,21 @@ from apply.act.helpers import (
 from apply.common.registry import resolve as resolve_registry
 from apply.common.filler import _read_element_value
 from apply.common.resolve import resolve, _build_ephemeral
+
+
+_PHONE_RE = re.compile(r"phone|tel|contact|mobile|cell", re.I)
+_POSTAL_RE = re.compile(r"postal|zip", re.I)
+
+
+def _normalize_for_compare(label, value):
+    """Normalize a filled value the same way the filler does at fill time,
+    so check doesn't false-warn: phone → digits only (E.164), postal → no spaces."""
+    s = str(value or "").lower().strip()
+    if _PHONE_RE.search(label or ""):
+        return re.sub(r"\D", "", s)
+    if _POSTAL_RE.search(label or ""):
+        return s.replace(" ", "")
+    return s
 
 
 def cmd_check(jid):
@@ -197,7 +214,7 @@ def cmd_check(jid):
                                 "label": label,
                                 "expected": str(expected),
                                 "actual": selected,
-                                "severity": "WARN",
+                                "severity": "ERROR",
                                 "reason": "Radio selection doesn't match expected value",
                             })
                     continue
@@ -233,8 +250,8 @@ def cmd_check(jid):
 
                 # Text fields: compare actual vs expected
                 if actual and expected:
-                    actual_lower = actual.lower().strip()
-                    expected_lower = str(expected).lower().strip()
+                    actual_lower = _normalize_for_compare(label, actual)
+                    expected_lower = _normalize_for_compare(label, expected)
                     # Skip if they match (or prefix match)
                     if actual_lower == expected_lower or actual_lower.startswith(expected_lower) or expected_lower.startswith(actual_lower):
                         continue

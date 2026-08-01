@@ -226,30 +226,41 @@ def _process_one(jid, job, quick, max_pages, results):
             results["already_applied"].append((jid, "already applied"))
             return
         st = load_state()
-        if st.get("status") == "no_apply_path":
-            # Only auto-reject in live mode — shadow/hold runs are
-            # observability-only and must not mutate job state.
-            if resolve_mode() == "live":
-                from lib.db import advance_job
-                advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
-            results["skipped"].append((jid, "no apply path (expired)"))
-            return
-        if st.get("status") in ("login_required", "login_failed"):
-            results["skipped"].append((jid, f"fill failed: {st.get('status')}"))
-            return
-        print("  FILL_FAILED — inspecting...", file=sys.stderr)
-        try:
-            from apply.act.inspect import cmd_inspect as inspect_run
-            inspect_run(jid)
-        except Exception as ie:
-            print(f"  INSPECT_ERR: {ie}", file=sys.stderr)
-        succeeded = _retry_fill_with_llm(jid, job, results)
-        if succeeded:
-            print("  Fill succeeded on LLM retry", file=sys.stderr)
-        else:
-            results["stopped"].append((jid, "fill failed with diagnostic — review inspect output"))
-            print("  STOPPED — fill failed after LLM retry, inspect for context", file=sys.stderr)
-            return
+        # Transient exception (no status set — e.g. execution-context
+        # destroyed during a lazy page navigation): retry once before
+        # treating the job as failed. Re-fill is safe — filled fields
+        # are deduped and already-set values are skipped.
+        if not st.get("status"):
+            print("  FILL_EXCEPTION — retrying once...", file=sys.stderr)
+            time.sleep(3)
+            rc = cmd_fill(jid, answers=None, verify=not quick,
+                          max_pages=max_pages, quick=quick)
+            st = load_state()
+        if rc != 0:
+            if st.get("status") == "no_apply_path":
+                # Only auto-reject in live mode — shadow/hold runs are
+                # observability-only and must not mutate job state.
+                if resolve_mode() == "live":
+                    from lib.db import advance_job
+                    advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
+                results["skipped"].append((jid, "no apply path (expired)"))
+                return
+            if st.get("status") in ("login_required", "login_failed"):
+                results["skipped"].append((jid, f"fill failed: {st.get('status')}"))
+                return
+            print("  FILL_FAILED — inspecting...", file=sys.stderr)
+            try:
+                from apply.act.inspect import cmd_inspect as inspect_run
+                inspect_run(jid)
+            except Exception as ie:
+                print(f"  INSPECT_ERR: {ie}", file=sys.stderr)
+            succeeded = _retry_fill_with_llm(jid, job, results)
+            if succeeded:
+                print("  Fill succeeded on LLM retry", file=sys.stderr)
+            else:
+                results["stopped"].append((jid, "fill failed with diagnostic — review inspect output"))
+                print("  STOPPED — fill failed after LLM retry, inspect for context", file=sys.stderr)
+                return
 
     if _stage() == "applied":
         results["already_applied"].append((jid, "already applied"))
