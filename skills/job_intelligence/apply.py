@@ -92,6 +92,11 @@ def main():
     creds_p = sub.add_parser("creds", help="Credential vault for ATS sites")
     creds_p.add_argument("args", nargs="+", help="list | get <domain> | set <domain> <email> <password> | delete <domain>")
 
+    shadow_p = sub.add_parser("shadow", help="Observability-only batch run (fills+checks, never submits)")
+    shadow_p.add_argument("--jid", action="append", help="Job ID (repeatable; default: all tailored)")
+    shadow_p.add_argument("--limit", type=int, default=None, help="Cap jobs in this run (resumable)")
+    shadow_p.add_argument("--quick", action="store_true", help="Deterministic-only fill (no vision)")
+
     reg_p = sub.add_parser("registry", help="Probe observation + corpus management")
     reg_p.add_argument("action", choices=["candidates", "confirm", "clear", "corpus", "failures", "drift"],
                        help="candidates (list unconfirmed obs) | confirm <hash> (manual promote) | "
@@ -220,6 +225,9 @@ def main():
     elif args.command == "registry":
         from apply.common.registry_cli import cmd_registry
         return cmd_registry(args.action, args.hash, dry_run=getattr(args, "dry_run", False))
+    elif args.command == "shadow":
+        from apply.shadow import run as shadow_run
+        return shadow_run(jids=args.jid, limit=args.limit, quick=args.quick)
 
 
 if __name__ == "__main__":

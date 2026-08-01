@@ -14,6 +14,7 @@
 ## Job Pipeline
 - **Flow:** `stage_emails.py` → `extract.py` → `enrich.py` → `tailor.py`. See `SKILL.md` for full commands.
 - **LinkedIn:** `linkedin.py [--max N]` as alt entry point.
+- **Shadow run:** `apply.py shadow [--jid <jid>] [--limit N] [--quick]` — fills+checks tailored jobs WITHOUT submitting; resumable log at `~/.ji/state/shadow_run.jsonl`; never mutates job state.
 - **Reach (outreach):** after `enrich.py admit --team <name>` → `reach.py discover <jid>` (or `reach.py discover --all`). Then `reach.py list <jid>` → `reach.py email --dry-run` → send, or `reach.py message` / `reach.py connect`. Gmail send needs `gmail-cli auth add <email> --services gmail.send` once.
 - **Recovery:** auth → `gmail-cli auth add` | Chrome crash → `Start-Process ... --remote-debugging-port=9222` | FAILED → `retry` | SKIPPED → `retry-skipped`
 - **Output:** `~/.ji/results/{jid}/`

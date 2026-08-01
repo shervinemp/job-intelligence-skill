@@ -522,6 +522,25 @@ class AutocompleteFiller(FieldFiller):
             return True
         return False
 
+    @staticmethod
+    def _selection_verdict(page, sel, ans_lower):
+        """Read the combobox's SELECTED value via ARIA/React readers.
+
+        Returns:
+          True  — a selection readable AND it matches the answer
+          False — a selection readable but it does NOT match (wrong option)
+          None  — no reader can determine the selection (can't verify)
+        """
+        try:
+            from apply.common.value_reader import AriaComboboxReader, ReactSelectReader
+            for reader in (AriaComboboxReader(), ReactSelectReader()):
+                v = reader.read(page, sel, ans=ans_lower)
+                if v:
+                    return (ans_lower in v.lower() or v.lower() in ans_lower)
+        except Exception:
+            pass
+        return None
+
     def fill(self, page, f, ans):
         sel = f.get("_sel", "")
         if not sel:
@@ -537,19 +556,44 @@ class AutocompleteFiller(FieldFiller):
             # Type character by character so React/autcomplete picks up events
             el.type(str(ans), delay=80)
             time.sleep(1.5)
-            # Look for autocomplete dropdown suggestions
-            suggestion_clicked = page.evaluate("""() => {
-                // Look for visible suggestion/option elements near the input
+            # Click the first suggestion (legacy behavior), then VERIFY the
+            # selection actually matches. Only when a reader proves the
+            # option was wrong do we try the next suggestion; when nothing
+            # is readable we keep the first click's outcome.
+            suggestion_clicked = page.evaluate("""(idx) => {
                 const sels = '[role="option"], [class*="suggestion"], [class*="dropdown-item"], [class*="list-item"], [class*="menu-item"], li[class*="option"]';
                 const all = [...document.querySelectorAll(sels)].filter(el => el.offsetParent !== null);
-                if (all.length > 0) {
-                    all[0].click();
-                    return true;
-                }
-                return false;
-            }""")
+                const target = (idx === null) ? all[0] : all[idx];
+                if (!target) return false;
+                target.click();
+                return true;
+            }""", None)
             if suggestion_clicked:
                 time.sleep(0.5)
+                ans_lower = str(ans).lower().strip()
+                verdict = self._selection_verdict(page, sel, ans_lower)
+                if verdict is True:
+                    return True
+                if verdict is False:
+                    # First suggestion was provably wrong — try the next one.
+                    time.sleep(0.5)
+                    next_clicked = page.evaluate("""(idx) => {
+                        const sels = '[role="option"], [class*="suggestion"], [class*="dropdown-item"], [class*="list-item"], [class*="menu-item"], li[class*="option"]';
+                        const all = [...document.querySelectorAll(sels)].filter(el => el.offsetParent !== null);
+                        const target = all[idx];
+                        if (!target) return false;
+                        target.click();
+                        return true;
+                    }""", 1)
+                    if next_clicked:
+                        time.sleep(0.5)
+                        if self._selection_verdict(page, sel, ans_lower) is True:
+                            return True
+                    # Wrong option selected and no better one available —
+                    # surface as failed so the orchestrator can supply a
+                    # clean answer instead of submitting a wrong choice.
+                    return False
+                # None: unverifiable — accept the first click (legacy).
                 return True
             # No dropdown appeared — press Tab to keep typed value without submitting
             el.press("Tab")

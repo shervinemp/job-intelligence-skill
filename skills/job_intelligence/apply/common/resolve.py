@@ -237,6 +237,20 @@ def resolve(
         if normalize(key.replace("_", " ")) == norm:
             return Resolution(val, key, label, "ephemeral")
 
+    # Step 2.5: date-part derivation — Greenhouse-style work-history
+    # "Start date month/year" fields. The profile carries "Immediately"
+    # for start; stuffing it into a month picker always fails. Derive the
+    # current month/year instead (start-as-soon-as-possible semantics).
+    # "End date" parts are deliberately NOT derived (ambiguous — the last
+    # role is usually still current).
+    if re.search(r"\b(start date|start)\b", norm):
+        if re.search(r"\bmonth\b", norm):
+            from datetime import datetime as _dt
+            return Resolution(_dt.now().strftime("%B"), "derived", label, "derived")
+        if re.search(r"\byear\b", norm):
+            from datetime import datetime as _dt
+            return Resolution(str(_dt.now().year), "derived", label, "derived")
+
     # Step 3: keyword-level match — profile answer keys often contain key terms
     # that appear inside the field label (e.g. profile:willing_to_relocate →
     # field:"Are you willing to relocate"). Match when profile key's keywords

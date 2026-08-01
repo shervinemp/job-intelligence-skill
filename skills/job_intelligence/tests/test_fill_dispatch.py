@@ -178,7 +178,7 @@ class FillAnswersPersisted(unittest.TestCase):
             patch("apply.common.page_state.wait_for_form", return_value=True),
             patch("apply.common.page_state.has_form", return_value=True),
             patch("apply.common.page_state.has_any_form", return_value=True),
-            patch("apply.act.fill._handle_login_wall", return_value=True),
+            patch("apply.act.fill._handle_login_wall", return_value=""),
             patch("lib.ask_api.available", return_value=False),
             patch("apply.act.fill._probe_form",
                   return_value=ProbeResult(fields=[], strategy="standard")),
@@ -279,6 +279,53 @@ class NormalizeForCompare(unittest.TestCase):
     def test_contact_label_counts_as_phone(self):
         from apply.act.check import _normalize_for_compare
         self.assertEqual(_normalize_for_compare("Contact Number", "+1 343 558 1744"), "13435581744")
+
+
+class AutoConsentScoped(unittest.TestCase):
+    """JI_AUTO_CONSENT=1 must only auto-check consent-type checkboxes —
+    never work-history/sponsorship/location checkboxes."""
+
+    def test_consent_checkbox_auto_checked(self):
+        from apply.act.helpers import _fill_with_playwright
+        page = MagicMock()
+        page.evaluate.return_value = ""
+        field = {
+            "label": "I agree to the terms and conditions", "tag": "INPUT",
+            "type": "checkbox", "_sel": "#agree", "name": "", "id": "",
+            "placeholder": "", "autocomplete": "", "role": "",
+            "accept": None,
+        }
+        with patch("apply.act.helpers.load_state", return_value={}), \
+             patch("apply.strategies.dispatch.field_deterministic", return_value=True), \
+             patch("apply.act.helpers.resolve") as resolve_mock, \
+             patch("apply.common.resolve._build_ephemeral", return_value={}), \
+             patch.dict(os.environ, {"JI_AUTO_CONSENT": "1"}):
+            resolve_mock.return_value.value = None
+            resolve_mock.return_value.provenance = "no_match"
+            filled, failed = _fill_with_playwright(page, [field], {"location": ""}, None)
+        self.assertEqual(len(filled), 1)
+        self.assertEqual(len(failed), 0)
+
+    def test_non_consent_checkbox_not_auto_checked(self):
+        """'Current role' (work-history) must stay unfilled, not auto-true."""
+        from apply.act.helpers import _fill_with_playwright
+        page = MagicMock()
+        field = {
+            "label": "Current role", "tag": "INPUT", "type": "checkbox",
+            "_sel": "#current_role", "name": "", "id": "",
+            "placeholder": "", "autocomplete": "", "role": "",
+            "accept": None,
+        }
+        with patch("apply.act.helpers.load_state", return_value={}), \
+             patch("apply.act.helpers.resolve") as resolve_mock, \
+             patch("apply.common.resolve._build_ephemeral", return_value={}), \
+             patch.dict(os.environ, {"JI_AUTO_CONSENT": "1"}):
+            resolve_mock.return_value.value = None
+            resolve_mock.return_value.provenance = "no_match"
+            filled, failed = _fill_with_playwright(page, [field], {"location": ""}, None)
+        self.assertEqual(len(filled), 0)
+        self.assertEqual(len(failed), 1)
+        self.assertEqual(failed[0]["_why"], "no_answer")
 
 
 if __name__ == "__main__":

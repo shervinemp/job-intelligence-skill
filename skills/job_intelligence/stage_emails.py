@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from html import unescape
 
 from lib.db import stage_save, setting_get, setting_set
-from lib.db import search_threads_save, search_threads_pending, search_threads_clear, get_conn
+from lib.db import search_threads_save, search_threads_pending, search_threads_clear
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 GMAIL_CLI = os.path.join(SKILL_DIR, "..", "gmail-cli", "gmail_cli.py")

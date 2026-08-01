@@ -314,7 +314,13 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 emit_next("none", "job may be expired — skip or apply via external URL")
                 return 1
 
-            if not _handle_login_wall(page, jid, quick):
+            login_status = _handle_login_wall(page, jid, quick)
+            if login_status:
+                # Persist so the orchestrator can classify the failure
+                # (login wall vs generic exception) instead of treating
+                # it as a transient fill error.
+                state["status"] = login_status
+                save_state(state)
                 return 1
 
             # Post-login 2FA gate: some platforms (Workday, etc.) show the
@@ -328,6 +334,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 if _login_profile and _login_profile.get("two_factor_signals"):
                     emit_status("2fa_required", "2FA interstitial after login — complete in Chrome then rerun")
                     emit_next("login", f"jid={jid} — complete 2FA then rerun fill")
+                    state["status"] = "2fa_required"
+                    save_state(state)
                     return 1
             except Exception:
                 pass
@@ -618,7 +626,12 @@ _LOGIN_JS = r"""() => {
 
 def _handle_login_wall(page, jid, quick):
     """Detect login walls and auto-login or auto-create account.
-    Returns True if we should continue to form fill, False to stop."""
+
+    Returns a status string: "" to continue to form fill, or one of
+    "login_required" / "login_failed" / "2fa_required" to stop. The
+    caller persists it into state so the orchestrator can classify
+    the fill failure instead of treating it as a generic exception.
+    """
     from lib.credentials import (
         get_creds, save_creds, get_account_defaults, _domain_from_url,
     )
@@ -626,9 +639,9 @@ def _handle_login_wall(page, jid, quick):
     try:
         info = page.evaluate(_LOGIN_JS)
     except Exception:
-        return True
+        return ""
     if not info:
-        return True
+        return ""
 
     domain = _domain_from_url(page.url)
     print(f"  LOGIN_WALL: {domain}", file=sys.stderr)
@@ -646,7 +659,7 @@ def _handle_login_wall(page, jid, quick):
                     btn.click(timeout=5000)
                     time.sleep(2)
                     print(f"  GUEST_APPLY: clicked '{pattern}'", file=sys.stderr)
-                    return True
+                    return ""
             except Exception:
                 continue
 
@@ -707,7 +720,7 @@ def _handle_login_wall(page, jid, quick):
                             print(f"  LOGIN: promoted this password to primary for {domain}", file=sys.stderr)
                         except Exception:
                             pass
-                    return True
+                    return ""
                 if result == "2fa":
                     # Login credentials accepted — platform wants a 2FA
                     # code now. Don't try more passwords (they're all
@@ -727,7 +740,7 @@ def _handle_login_wall(page, jid, quick):
                                 "complete 2FA manually then rerun")
                     emit_next("login",
                               f"domain={domain} jid={jid} — complete 2FA in Chrome then rerun fill")
-                    return False
+                    return "2fa_required"
                 if result == "uncertain":
                     # SPA may be slow — wait longer and re-check once.
                     time.sleep(5)
@@ -741,17 +754,17 @@ def _handle_login_wall(page, jid, quick):
                                 save_creds(domain, creds["email"], tried_pw, passwords=remaining)
                             except Exception:
                                 pass
-                        return True
+                        return ""
                     # Re-check said "no" — fall through to try next
                 # result == "no" — try next candidate
                 _re_open_signin_form(page)
             print(f"  LOGIN: all {len(creds['passwords'])} password(s) failed", file=sys.stderr)
             emit_status("login_failed", f"all {len(creds['passwords'])} password(s) rejected by {domain}")
             emit_next("login", f"domain={domain} jid={jid} — update creds via 'apply.py creds set {domain} <email>'")
-            return False
+            return "login_failed"
         except Exception as e:
             print(f"  LOGIN_FAIL: {e}", file=sys.stderr)
-            return True
+            return ""
 
     if info.get("createText"):
         print(f"  CREATE_ACCOUNT: clicking '{info['createText']}'", file=sys.stderr)
@@ -770,14 +783,14 @@ def _handle_login_wall(page, jid, quick):
         print(f"  LOGIN_REQUIRED: no creds for {domain}, no profile email", file=sys.stderr)
         emit_status("login_required", f"create account at {domain}")
         emit_next("login", f"domain={domain} jid={jid}")
-        return False
+        return "login_required"
 
     pw_inputs = page.query_selector_all('input[type="password"]')
     if not pw_inputs:
         print(f"  LOGIN_REQUIRED: no creds for {domain}", file=sys.stderr)
         emit_status("login_required", f"sign in or create account at {domain}")
         emit_next("login", f"domain={domain} jid={jid}")
-        return False
+        return "login_required"
 
     # Pick a password that satisfies platform complexity rules, preferring
     # the user's shared password pool entries when applicable so account
@@ -838,7 +851,7 @@ def _handle_login_wall(page, jid, quick):
                 except Exception:
                     pass
                 print(f"  ACCOUNT_CREATED: {defaults['email']} @ {domain} — creds saved (also added to shared pool)", file=sys.stderr)
-                return True
+                return ""
             else:
                 print(f"  CREATE_FAIL: account creation rejected ({create_result})", file=sys.stderr)
                 try:
@@ -848,12 +861,12 @@ def _handle_login_wall(page, jid, quick):
                     pass
                 emit_status("login_required", f"account creation rejected at {domain}")
                 emit_next("login", f"domain={domain} jid={jid} — create account manually, then 'apply.py creds set {domain} {defaults.get('email','<email>')}'")
-                return False
+                return "login_required"
     except Exception as e:
         print(f"  CREATE_FAIL: {e}", file=sys.stderr)
     emit_status("login_required", f"account creation failed at {domain}")
     emit_next("login", f"domain={domain} jid={jid}")
-    return False
+    return "login_required"
 
 
 def _check_account_created(page):

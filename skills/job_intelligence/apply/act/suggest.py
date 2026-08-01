@@ -5,7 +5,7 @@ Probes the form, runs the LLM to map field labels to profile KEYS
 The heuristic resolve always runs first — only unresolvable fields
 are sent to the LLM.
 """
-import json, os, sys, time
+import json, os, sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 

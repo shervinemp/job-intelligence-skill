@@ -238,5 +238,41 @@ class Step3bWordLimit(unittest.TestCase):
         )
 
 
+class DatePartDerivation(unittest.TestCase):
+    """'Start date month/year' fields (Greenhouse work-history) must derive
+    the current month/year instead of stuffing 'Immediately' into a picker."""
+
+    def _prof(self):
+        return dict(PROFILE, answers={
+            **PROFILE["answers"],
+            "available_start": "Immediately",
+            "start_date": "Immediately",
+        })
+
+    def test_start_date_month_derives_current_month(self):
+        from datetime import datetime as _dt
+        r = resolve("Start date month*", self._prof())
+        self.assertEqual(r.value, _dt.now().strftime("%B"))
+        self.assertEqual(r.provenance, "derived")
+
+    def test_start_date_year_derives_current_year(self):
+        from datetime import datetime as _dt
+        r = resolve("Start date year*", self._prof())
+        self.assertEqual(r.value, str(_dt.now().year))
+
+    def test_month_you_can_start_derives(self):
+        from datetime import datetime as _dt
+        r = resolve("Month you can start", self._prof())
+        self.assertEqual(r.value, _dt.now().strftime("%B"))
+
+    def test_when_can_you_start_still_uses_answer(self):
+        r = resolve("When can you start?", self._prof())
+        self.assertEqual(r.value, "Immediately")
+
+    def test_end_date_parts_not_derived(self):
+        r = resolve("End date month*", self._prof())
+        self.assertIsNone(r.value)
+
+
 if __name__ == "__main__":
     unittest.main()

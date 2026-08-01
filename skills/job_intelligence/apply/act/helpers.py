@@ -483,6 +483,19 @@ def _gap_fill_into_answers(fields, profile, answers_override, jid, ephemeral):
     return answers_override
 
 
+_CONSENT_KW = ("agree", "consent", "accept", "terms", "certify", "understand",
+               "authorize", "privacy", "notice", "marketing", "updates",
+               "confirm", "acknowledge")
+
+
+def _is_consent_field(f):
+    """True if a checkbox label reads like a consent/acknowledgement.
+    JI_AUTO_CONSENT=1 must only auto-check these — a blunt check-all
+    would silently answer work-history or sponsorship checkboxes wrong."""
+    lbl = (f.get("label") or "").lower()
+    return any(kw in lbl for kw in _CONSENT_KW)
+
+
 def _fill_with_playwright(page, fields, profile, answers_override,
                           filled_keys=None) -> tuple[list[dict], list[dict]]:
     from apply.strategies.dispatch import field_deterministic
@@ -586,7 +599,9 @@ def _fill_with_playwright(page, fields, profile, answers_override,
                       ephemeral=ephemeral)
         ans = res.value
         if ans is None:
-            if tag == "input" and ftype == "checkbox" and os.environ.get("JI_AUTO_CONSENT") == "1":
+            if (tag == "input" and ftype == "checkbox"
+                    and os.environ.get("JI_AUTO_CONSENT") == "1"
+                    and _is_consent_field(f)):
                 ans = "true"
             else:
                 failed.append({**f, "_why": "no_answer"})

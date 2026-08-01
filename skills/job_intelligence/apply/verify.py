@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_conn
 from apply.common.page_helpers import load_state, page_text, mark_applied
 from apply.common.output import emit_next, emit_status, emit_error
-from apply.common.signals import SUCCESS_STRICT, has_success_text
+from apply.common.signals import has_success_text
 
 _CONFIRM_URL_TOKENS = (
     "thank", "thankyou", "success", "confirmation", "confirmed",
@@ -157,15 +157,7 @@ def _playwright_verify(page, jid, state):
     except Exception:
         pass
 
-    # Strategy 2: Success text (including shadow DOM)
-    for signal in SUCCESS_STRICT:
-        if signal in text:
-            mark_applied(jid)
-            emit_status(f"submitted (text: '{signal}')")
-            emit_next("none")
-            return True
-
-    # Strategy 3: "Applied" button visible
+    # Strategy 2: "Applied" button visible
     try:
         buttons = page.evaluate(
             """() => {

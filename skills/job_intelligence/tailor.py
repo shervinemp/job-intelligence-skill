@@ -13,12 +13,11 @@ Usage:
   tailor.py reset --state <state>     Reset by state (failed, skipped)
 """
 
-import hashlib, json, os, re, subprocess, sys
-from datetime import datetime
+import hashlib, json, os, re, sys
 
 from lib.db import load, advance, get_failed, pipeline_status
-from lib.db import desc_get, app_save, app_get, app_list
-from lib.call_gemini import call_gemini_node, list_gems
+from lib.db import desc_get, app_save
+from lib.call_gemini import call_gemini_node
 from lib.config import RESULTS_DIR
 # JSON extraction is done inline in the gem route
 from lib.platforms import clean as clean_desc

@@ -21,17 +21,17 @@ _LOGIN_JS_INFO = {
 
 
 class LoginWallNoWall(unittest.TestCase):
-    def test_no_password_field_returns_true(self):
+    def test_no_password_field_returns_empty(self):
         from apply.act.fill import _handle_login_wall
         page = MagicMock()
         page.evaluate.return_value = None
-        self.assertTrue(_handle_login_wall(page, "jid", quick=False))
+        self.assertEqual(_handle_login_wall(page, "jid", quick=False), "")
 
-    def test_evaluate_error_returns_true(self):
+    def test_evaluate_error_returns_empty(self):
         from apply.act.fill import _handle_login_wall
         page = MagicMock()
         page.evaluate.side_effect = Exception("detached")
-        self.assertTrue(_handle_login_wall(page, "jid", quick=False))
+        self.assertEqual(_handle_login_wall(page, "jid", quick=False), "")
 
 
 class LoginWallAutoLogin(unittest.TestCase):
@@ -43,7 +43,7 @@ class LoginWallAutoLogin(unittest.TestCase):
         self.sleep_patch.start()
         self.addCleanup(self.sleep_patch.stop)
 
-    def test_login_success_returns_true(self):
+    def test_login_success_returns_empty(self):
         from apply.act.fill import _handle_login_wall
         creds = {"email": "a@b.com", "password": "pw1", "passwords": ["pw1", "pw2"]}
         with patch("apply.common.registry.resolve", return_value=None), \
@@ -51,7 +51,7 @@ class LoginWallAutoLogin(unittest.TestCase):
              patch("lib.credentials.save_creds") as save_mock, \
              patch("apply.act.fill._fill_signin_form"), \
              patch("apply.act.fill._login_check", return_value="yes"):
-            self.assertTrue(_handle_login_wall(self.page, "jid", quick=False))
+            self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "")
         # primary password worked — nothing promoted
         save_mock.assert_not_called()
 
@@ -63,14 +63,14 @@ class LoginWallAutoLogin(unittest.TestCase):
              patch("lib.credentials.save_creds") as save_mock, \
              patch("apply.act.fill._fill_signin_form"), \
              patch("apply.act.fill._login_check", side_effect=["no", "yes"]):
-            self.assertTrue(_handle_login_wall(self.page, "jid", quick=False))
+            self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "")
         save_mock.assert_called_once()
         args = save_mock.call_args[0]
         self.assertEqual(args[1], "a@b.com")
         self.assertEqual(args[2], "pw2")  # winner promoted to primary
         self.assertEqual(save_mock.call_args[1]["passwords"], ["pw1"])  # winner → primary, others stay alternates
 
-    def test_2fa_required_returns_false_and_does_not_try_more(self):
+    def test_2fa_required_status(self):
         from apply.act.fill import _handle_login_wall
         creds = {"email": "a@b.com", "password": "pw1", "passwords": ["pw1", "pw2"]}
         with patch("apply.common.registry.resolve", return_value=None), \
@@ -78,11 +78,11 @@ class LoginWallAutoLogin(unittest.TestCase):
              patch("lib.credentials.save_creds") as save_mock, \
              patch("apply.act.fill._fill_signin_form") as fill_mock, \
              patch("apply.act.fill._login_check", return_value="2fa"):
-            self.assertFalse(_handle_login_wall(self.page, "jid", quick=False))
+            self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "2fa_required")
         fill_mock.assert_called_once()  # never tried the second password
         save_mock.assert_not_called()  # 2FA = credentials accepted, nothing promoted
 
-    def test_all_passwords_fail_returns_false(self):
+    def test_all_passwords_fail_status(self):
         from apply.act.fill import _handle_login_wall
         creds = {"email": "a@b.com", "password": "pw1", "passwords": ["pw1", "pw2"]}
         with patch("apply.common.registry.resolve", return_value=None), \
@@ -90,7 +90,7 @@ class LoginWallAutoLogin(unittest.TestCase):
              patch("apply.act.fill._fill_signin_form"), \
              patch("apply.act.fill._login_check", return_value="no"), \
              patch("apply.act.fill._re_open_signin_form"):
-            self.assertFalse(_handle_login_wall(self.page, "jid", quick=False))
+            self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "login_failed")
 
 
 class LoginWallNoCreds(unittest.TestCase):
@@ -103,7 +103,7 @@ class LoginWallNoCreds(unittest.TestCase):
         with patch("apply.common.registry.resolve", return_value=None), \
              patch("lib.credentials.get_creds", return_value=None), \
              patch("lib.credentials.get_account_defaults", return_value={}):
-            self.assertFalse(_handle_login_wall(page, "jid", quick=False))
+            self.assertEqual(_handle_login_wall(page, "jid", quick=False), "login_required")
 
 
 class AutoLLMRetryFill(unittest.TestCase):

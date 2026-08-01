@@ -56,6 +56,15 @@ def mark_applied(jid):
         _as_clear(jid)
     except Exception:
         pass
+    # Clear the one-shot submit guard from the shared apply state so a
+    # later run for the same job can't dead-end on submit_clicked.
+    try:
+        st = load_state()
+        if st.get("jid") == jid and st.get("submit_clicked"):
+            st["submit_clicked"] = False
+            save_state(st)
+    except Exception:
+        pass
     return was_new
 
 
