@@ -368,6 +368,16 @@ def cmd_check(jid):
             state["check_infos"] = infos
             save_state(state)
 
+            # Merge into the latest dossier so the handoff stays current
+            # after check runs (the orchestrator reads one surface).
+            try:
+                from lib.automation.dossier import merge_check
+                from lib.config import RESULTS_DIR as _RD
+                merge_check(jid, _RD, passed=(not errors),
+                            errors=errors, warnings=warnings, infos=infos)
+            except Exception:
+                pass
+
     except Exception as e:
         emit_error(f"check failed: {e}")
         return 1

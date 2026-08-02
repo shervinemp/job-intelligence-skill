@@ -23,6 +23,24 @@ def load_handoffs(jid, results_dir):
     return out
 
 
+def stale_vs_dossier(rec, dossier):
+    """True when a run record is contradicted by a NEWER dossier (e.g.,
+    the log says ready-to-submit but the dossier shows required gaps).
+    Domain-free: works on any record/dossier pair with the standard
+    shape."""
+    if not dossier:
+        return False
+    summary = dossier.get("summary") or {}
+    failed = summary.get("failed", 0)
+    blockers = dossier.get("blockers") or []
+    rec_outcome = rec.get("outcome", "")
+    if rec_outcome in ("held_shadow", "ready_to_submit", "submitted"):
+        # claimed ready, but the dossier says otherwise
+        if failed or blockers:
+            return True
+    return False
+
+
 def compare_handoffs(new, old):
     """Field-level comparison of two dossiers.
 

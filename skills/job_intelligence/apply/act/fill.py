@@ -1,5 +1,4 @@
 """act/fill.py — Hybrid fill command: Playwright-first, Skyvern-fallback."""
-import json
 import os
 import random, re, sys, time
 
@@ -117,7 +116,7 @@ def _dismiss_popups_if_present(page, profile=None, *, verbose=True):
                 print(f"  POPUP_DISMISS_FAIL: {e}", file=sys.stderr)
 
 
-def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
+def _write_handoff(jid, url, filled_recs, failed_all, state,
                    mode="unknown", error=""):
     """Write a complete structured dossier for the orchestrator (LLM):
     every field's outcome with evidence, blockers, suggested decisions,
@@ -129,27 +128,45 @@ def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
 
     fields = []
     for r in filled_recs:
-        fields.append({"label": r.get("label", ""), "answer": r.get("answer", ""),
-                       "outcome": "filled", "method": "deterministic",
-                       "reason": "verified_or_accepted"})
+        fields.append({
+            "label": r.get("label", ""), "answer": r.get("answer", ""),
+            "outcome": "filled",
+            # The epistemic truth: verified by read-back, or accepted
+            # without confirmation (check arbitrates).
+            "kind": "unverified" if r.get("unverified") else "verified",
+            "method": r.get("method", "deterministic"),
+            "reason": "accepted_unverified" if r.get("unverified") else "verified",
+        })
     for r in failed_all:
         diag = r.get("_diag") or {}
+        is_no_answer = r.get("_why") == "no_answer"
+        if is_no_answer:
+            kind = "needs_data"
+        else:
+            kind = ("interaction_failed" if diag.get("reason") == "exception"
+                    else "rejected_by_form")
         fields.append({
             "label": r.get("label", ""), "answer": r.get("attempted", ""),
-            "outcome": "no_answer" if r.get("_why") == "no_answer" else "failed",
+            "outcome": "no_answer" if is_no_answer else "failed",
+            "kind": kind,
             "required": bool(r.get("required")),
             "method": diag.get("method", ""),
             "reason": diag.get("reason", ""),
             "selector": r.get("_sel") or r.get("selector") or "",
-            "after": diag.get("after", ""),
+            "selected_text": diag.get("after", ""),
             "diag": diag,  # full evidence: options_seen, top_options, stage flags
         })
 
-    # HONEST accounting: a required field with no answer is a failure —
-    # it would fail validation on submit.
+    # HONEST accounting: rejected/interaction-failed fields and REQUIRED
+    # fields with no data are failures — they'd fail validation on submit.
     failed_labels = [f["label"] for f in fields
-                     if f["outcome"] == "failed"
-                     or (f["outcome"] == "no_answer" and f.get("required"))]
+                     if f["kind"] in ("rejected_by_form", "interaction_failed")
+                     or (f["kind"] == "needs_data" and f.get("required"))]
+    # skipped-optional fields (no data, not required) — EXCLUDED from the
+    # failed count so summary.filled + summary.failed + summary.skipped
+    # equals the unique field total (no double counting).
+    skipped_labels = [f["label"] for f in fields
+                      if f["kind"] == "needs_data" and not f.get("required")]
 
     blockers = []
     status = state.get("status", "")
@@ -189,8 +206,11 @@ def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
         "jid": jid, "url": url, "mode": mode,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "error": error,
-        "summary": {"filled": len(filled_recs), "failed": len(failed_all),
-                    "skipped_optional": len(skipped)},
+        # Mutually exclusive counts: filled + failed + skipped_optional =
+        # the unique field total (failed EXCLUDES optional no-data fields).
+        "summary": {"filled": len(filled_recs),
+                    "failed": len(failed_all) - len(skipped_labels),
+                    "skipped_optional": len(skipped_labels)},
         "fields": fields,
         "blockers": blockers,
         "decisions": decisions,
@@ -200,14 +220,16 @@ def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
         },
     }
     # Standard handover format (lib/automation) — writes handoff.json +
-    # timestamped history for run-diffing.
+    # timestamped history for run-diffing, linked to the event timeline.
     try:
         from lib.automation.dossier import write_dossier
+        from lib.automation.obs import current_run_id
         path = write_dossier(
             jid, RESULTS_DIR,
             summary=handoff["summary"], fields=handoff["fields"],
             blockers=blockers, decisions=decisions,
-            artifacts=handoff["artifacts"], mode=mode, error=error, url=url)
+            artifacts=handoff["artifacts"], mode=mode, error=error, url=url,
+            run_id=current_run_id())
     except Exception:
         try:
             from lib.config import atomic_write_json
@@ -221,12 +243,13 @@ def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
         obs("fill", "end", jid=jid,
             outcome="ok" if not failed_labels and not blockers else "incomplete",
             detail=f"filled={len(filled_recs)} failed={len(failed_labels)} "
-                   f"skipped={len(skipped)} blockers={len(blockers)}")
+                   f"skipped={len(skipped_labels)} blockers={len(blockers)}")
         for f in fields:
-            if f["outcome"] == "failed":
+            if f["kind"] in ("rejected_by_form", "interaction_failed",
+                             "needs_data"):
                 obs("fill", "field", jid=jid, target=f["label"],
-                    pre=f.get("answer", ""), post=f.get("after", ""),
-                    outcome="failed",
+                    pre=f.get("answer", ""), post=f.get("selected_text", ""),
+                    outcome=f["kind"],
                     detail=f"{f.get('method', '')}:{f.get('reason', '')} "
                            f"{f.get('selector', '')}")
         for b in blockers:
@@ -236,13 +259,25 @@ def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
         pass
 
     # Compact machine-parseable decision block for the orchestrator.
-    print(f"DECISION: job {jid} fill {'OK' if not failed_labels and not blockers else 'INCOMPLETE'}"
-          f" (filled={len(filled_recs)} failed={len(failed_labels)}"
-          f" skipped={len(skipped)} blockers={len(blockers)})", file=sys.stderr)
+    # Vocabulary: filled / rejected (form rejected or interaction failed) /
+    # needs_data (no answer; required ones block) / skipped (optional
+    # no-data) / blockers. Counts are mutually exclusive.
+    n_rejected = len([f for f in fields
+                      if f["kind"] in ("rejected_by_form", "interaction_failed")])
+    n_needs = len([f for f in fields
+                   if f["kind"] == "needs_data" and f.get("required")])
+    n_skipped = len(skipped_labels)
+    ok = not failed_labels and not blockers
+    print(f"DECISION: job {jid} fill {'OK' if ok else 'INCOMPLETE'}"
+          f" (filled={len(filled_recs)} rejected={n_rejected}"
+          f" needs_data={n_needs} skipped={n_skipped}"
+          f" blockers={len(blockers)})", file=sys.stderr)
     for f in fields:
-        if f["outcome"] == "failed":
+        if f["kind"] in ("rejected_by_form", "interaction_failed",
+                         "needs_data"):
             why = f"[{f['method']}:{f['reason']}]" if f["method"] else ""
-            print(f"  FAIL {f['label'][:50]} {why}", file=sys.stderr)
+            print(f"  {f['kind'].upper()} {f['label'][:50]} {why}",
+                  file=sys.stderr)
     for b in blockers:
         print(f"  BLOCK {b['type']} -> {b.get('next', '')}", file=sys.stderr)
     print(f"HANDOFF: {path}", file=sys.stderr)
@@ -709,7 +744,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     except Exception as e:
         emit_error(f"Playwright fill failed: {e}")
         try:
-            _write_handoff(jid, orig_url, filled_recs, failed_all, [], state,
+            _write_handoff(jid, orig_url, filled_recs, failed_all, state,
                            mode="shadow" if os.environ.get("JI_APPLY_MODE") == "shadow" else "live",
                            error=str(e)[:200])
         except Exception:
@@ -772,7 +807,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
     # Hand the structured dossier to the orchestrator.
     try:
-        _write_handoff(jid, orig_url, filled_recs, failed_all, skipped, state,
+        _write_handoff(jid, orig_url, filled_recs, failed_all, state,
                        mode="shadow" if os.environ.get("JI_APPLY_MODE") == "shadow" else "live")
     except Exception:
         pass

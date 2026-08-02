@@ -109,24 +109,47 @@ def _pick_best(options, candidates):
     return best, second
 
 
-def _collect_visible_options(page):
-    """Visible option dicts {text, id, x, y} from the whole document.
-
-    Greenhouse renders options as bare <li> or <div class="Option"> WITHOUT
-    role=option — so matching is broad (li + class*="option", case-
-    insensitive) and noise is filtered by the scorer + click verification."""
+def _listbox_root_id(page, sel):
+    """The listbox element id (aria-controls/owns) for the input, or ''
+    when none exists. Scoping collection to the listbox root is what
+    separates REAL suggestions from page text ('Candidates may not
+    apply more than 4 times...' noise)."""
     try:
-        opts = page.evaluate("""() => {
+        return page.evaluate("""(sel) => {
+            //LISTBOXROOT
+            const input = document.querySelector(sel);
+            const owns = input ? (input.getAttribute('aria-controls')
+                                  || input.getAttribute('aria-owns')) : null;
+            const root = owns ? document.getElementById(owns) : null;
+            return root && root !== document ? (root.id || '') : '';
+        }""", sel) or ""
+    except Exception:
+        return ""
+
+
+def _collect_visible_options(page, root_id=""):
+    """Visible option dicts {text, id, x, y} from the listbox root (when
+    known) or the whole document.
+
+    Greenhouse renders options as bare <li> or <div class="Option"> without
+    role=option; Ashby's portal listbox can use <button> items. Matching is
+    therefore broad INSIDE the root; when no root exists the document scan
+    stays as before (noise is filtered by the scorer + click verification)."""
+    try:
+        opts = page.evaluate("""(args) => {
             //COLLECT
-            const out = [];
-            const nodes = document.querySelectorAll(
+            const [rootId] = args;
+            const root = rootId ? (document.getElementById(rootId) || document) : document;
+            const nodes = root.querySelectorAll(
                 '[role="option"], li, [role="menuitem"], [class*="option"], '
-                + '[class*="menu-item"], .select2-results__option');
+                + '[class*="menu-item"], .select2-results__option, button');
+            const out = [];
             for (const o of nodes) {
                 if (o.offsetParent === null) continue;
                 const cls = (o.className || '').toString().toLowerCase();
                 const isOpt = o.getAttribute('role') === 'option'
                     || o.tagName === 'LI'
+                    || o.tagName === 'BUTTON'
                     || cls.includes('option') || cls.includes('menu-item');
                 if (!isOpt) continue;
                 const t = (o.textContent || '').trim();
@@ -144,31 +167,32 @@ def _collect_visible_options(page):
                 });
             }
             return out;
-        }""")
+        }""", [root_id])
     except Exception:
         return []
     return opts or []
 
 
-def _collect_with_scroll(page, sel, max_passes=5):
+def _collect_with_scroll(page, sel, root_id="", max_passes=5):
     """Collect options from a (possibly virtualized) listbox, scrolling
     it between passes until the option set stabilizes."""
-    root_id = ""
-    try:
-        root_id = page.evaluate("""(sel) => {
-            //SCROLLROOT
-            const input = document.querySelector(sel);
-            const owns = input ? (input.getAttribute('aria-controls')
-                                  || input.getAttribute('aria-owns')) : null;
-            const root = owns ? document.getElementById(owns) : null;
-            return root && root !== document ? (root.id || '') : '';
-        }""", sel) or ""
-    except Exception:
-        pass
+    if not root_id:
+        try:
+            root_id = page.evaluate("""(sel) => {
+                //SCROLLROOT
+                const input = document.querySelector(sel);
+                const owns = input ? (input.getAttribute('aria-controls')
+                                      || input.getAttribute('aria-owns')) : null;
+                const root = owns ? document.getElementById(owns) : null;
+                return root && root !== document ? (root.id || '') : '';
+            }""", sel) or ""
+        except Exception:
+            pass
     seen = set()
     all_opts = []
     for _ in range(max_passes):
-        opts = [o for o in _collect_visible_options(page) if o["text"] not in seen]
+        opts = [o for o in _collect_visible_options(page, root_id)
+                if o["text"] not in seen]
         if not opts:
             break
         all_opts.extend(opts)
@@ -198,7 +222,7 @@ def _collect_with_scroll(page, sel, max_passes=5):
     return all_opts
 
 
-def _open_menu(page, sel):
+def _open_menu(page, sel, root_id=""):
     """Click (with Enter escalation) until options are visible. Returns True
     if the menu is open and at least one option can be seen."""
     for attempt in range(2):
@@ -211,7 +235,7 @@ def _open_menu(page, sel):
         except Exception:
             pass
         time.sleep(0.6)
-        n = len(_collect_visible_options(page))
+        n = len(_collect_visible_options(page, root_id))
         _trace("open", sel, "click", "options=" + str(n))
         if n:
             return True
@@ -222,7 +246,7 @@ def _open_menu(page, sel):
         except Exception:
             pass
         time.sleep(0.6)
-        n = len(_collect_visible_options(page))
+        n = len(_collect_visible_options(page, root_id))
         _trace("open", sel, "enter", "options=" + str(n))
         if n:
             return True
@@ -239,7 +263,7 @@ def _close_menu(page):
     time.sleep(0.2)
 
 
-def _type_and_poll(page, sel, text):
+def _type_and_poll(page, sel, text, root_id=""):
     """Clear the input, type `text`, poll for options (async typeaheads
     debounce + fetch). Returns the visible options."""
     before = _read_input(page, sel)
@@ -264,12 +288,12 @@ def _type_and_poll(page, sel, text):
            "after_clear=" + repr(after_clear), "after_type=" + repr(typed_value))
     for wait in (0.6, 1.4, 2.5):
         time.sleep(wait)
-        opts = _collect_visible_options(page)
+        opts = _collect_visible_options(page, root_id)
         if opts:
             _trace("poll", repr(text), f"+{wait}s", "options=" + str(len(opts)),
                    "first=" + repr(opts[0]["text"][:40]))
             return opts
-    opts = _collect_visible_options(page)
+    opts = _collect_visible_options(page, root_id)
     _trace("poll", repr(text), "final", "options=" + str(len(opts)))
     return opts
 
@@ -505,6 +529,10 @@ def fill(page, f, ans, time_budget=25.0):
 
         _close_menu(page)
         opened = _open_menu(page, sel)
+        # The listbox root (aria-controls/owns) scopes option collection —
+        # without it, page text pollutes the candidates (the Ashby
+        # "Candidates may not apply more than 4 times..." noise).
+        root_id = _listbox_root_id(page, sel)
         typeahead = False
         if not opened:
             # Typeahead class (Location/City autocompletes): the menu only
@@ -534,7 +562,7 @@ def fill(page, f, ans, time_budget=25.0):
                 diag["detail"] = "per-field time budget exceeded"
                 f["_diag"] = diag
                 return False
-            opts = _type_and_poll(page, sel, cand)
+            opts = _type_and_poll(page, sel, cand, root_id)
             typed_seen += len(opts)
             last_opts = opts
             if opts:
@@ -560,8 +588,8 @@ def fill(page, f, ans, time_budget=25.0):
             f["_diag"] = diag
             return False
         _close_menu(page)
-        if _open_menu(page, sel):
-            opts = _collect_with_scroll(page, sel)
+        if _open_menu(page, sel, root_id):
+            opts = _collect_with_scroll(page, sel, root_id)
             ok, picked, verdict = _try_click_best(page, sel, ans, opts, candidates)
             if ok:
                 diag["reason"] = "unfiltered_match"
@@ -577,11 +605,11 @@ def fill(page, f, ans, time_budget=25.0):
 
         diag["reason"] = "no_option_match"
         diag["typed_options"] = typed_seen
-        diag["options_seen"] = len(_collect_visible_options(page))
+        diag["options_seen"] = len(_collect_visible_options(page, root_id))
         diag["candidates"] = candidates[:3]
         # Evidence for the orchestrator: the top-scoring options.
         try:
-            opts = _collect_visible_options(page)
+            opts = _collect_visible_options(page, root_id)
             cnorms = [_norm(c) for c in candidates]
             top = sorted(
                 ({"text": o["text"][:60], "score": _score_option(o["text"], cnorms)}

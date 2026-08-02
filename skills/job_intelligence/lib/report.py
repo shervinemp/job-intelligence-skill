@@ -437,10 +437,12 @@ def cmd_archive():
 
 def cmd_shadow():
     """Aggregate the shadow-run log (apply.py shadow) into an actionable
-    review: outcome counts, per-job lines with check errors, and links to
-    the saved inspect artifacts."""
+    review: outcome counts, per-job lines with check errors, links to the
+    saved inspect artifacts, and OUTDATED markers where a log entry is
+    contradicted by a newer dossier."""
     import os
     from .config import JI_HOME
+    from .automation.diff import stale_vs_dossier, load_handoffs
     log = os.path.join(JI_HOME, "state", "shadow_run.jsonl")
     if not os.path.exists(log):
         print("No shadow log yet — run 'apply.py shadow' first.", file=sys.stderr)
@@ -477,8 +479,15 @@ def cmd_shadow():
         for r in sorted(group, key=lambda x: x.get("ts", "")):
             jid = r.get("jid", "?")
             detail = r.get("detail", "")[:90]
+            stale = ""
+            try:
+                hs = load_handoffs(jid, RESULTS_DIR)
+                if hs and stale_vs_dossier(r, hs[0]):
+                    stale = "  *** OUTDATED (newer dossier contradicts this) ***"
+            except Exception:
+                pass
             line = f"  {jid[:12]} {r.get('title', '?')[:38]:38s} {r.get('secs', '?')}s {detail}"
-            print(line)
+            print(line + stale)
             for e in (r.get("check_errors") or [])[:4]:
                 print(f"      ! {e.get('label', '?')[:50]} — {e.get('reason', '')[:60]}")
             art = os.path.join(shots, f"inspect_inspect_{jid}.jpg")

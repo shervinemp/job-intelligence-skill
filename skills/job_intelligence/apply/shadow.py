@@ -64,9 +64,22 @@ def _load_done():
 
 
 def _append(rec):
+    """Record a job's outcome, REPLACING any older entries for the same
+    job — the log is a per-job LATEST-state map. Stale entries that
+    contradict newer dossiers mislead the orchestrator."""
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec) + "\n")
+    lines = []
+    if os.path.exists(LOG_PATH):
+        for line in open(LOG_PATH, encoding="utf-8"):
+            try:
+                if json.loads(line).get("jid") == rec["jid"]:
+                    continue
+            except Exception:
+                continue
+            lines.append(line)
+    lines.append(json.dumps(rec) + "\n")
+    with open(LOG_PATH, "w", encoding="utf-8") as f:
+        f.write("".join(lines))
 
 
 def run(jids=None, limit=None, quick=False):

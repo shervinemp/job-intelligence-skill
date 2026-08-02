@@ -90,6 +90,12 @@ def _clip(v, n):
     return s[:n]
 
 
+def current_run_id():
+    """The active run id ('' before begin_run) — for linking artifacts
+    (dossiers, shadow records) back to their event timeline."""
+    return _state["run_id"]
+
+
 def load(run_id=None):
     """Load events: latest run when run_id is None. Returns list of dicts."""
     d = session_dir()

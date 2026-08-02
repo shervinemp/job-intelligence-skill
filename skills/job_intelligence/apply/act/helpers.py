@@ -676,7 +676,10 @@ def _fill_with_playwright(page, fields, profile, answers_override,
                     filled.append({"label": label, "key": key})
                     continue
             if field_deterministic(page, f, ans):
-                filled.append({"label": label, "key": key})
+                _diag = f.get("_diag") or {}
+                filled.append({"label": label, "key": key, "answer": str(ans),
+                               "unverified": bool(_diag.get("unverified")),
+                               "method": _diag.get("method", "deterministic")})
                 if res.provenance == "answers_override":
                     learn_mapping(label, ans)
                 if jid:
@@ -684,7 +687,8 @@ def _fill_with_playwright(page, fields, profile, answers_override,
                     log_field(jid, label, str(ans), res.provenance, filled=True,
                               selector=sel)
             else:
-                failed.append({**f, "_why": "fill_failed", "attempted": str(ans)[:50]})
+                failed.append({**f, "_why": "fill_failed",
+                               "attempted": str(ans)[:200]})
                 if jid:
                     from apply.common.audit import log_field
                     _diag = f.get("_diag") or {}

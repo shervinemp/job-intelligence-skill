@@ -118,6 +118,8 @@ class FakePage:
 
     def evaluate(self, js, arg=None):
         self.evaluate_calls.append((js[:60], arg))
+        if "//LISTBOXROOT" in js:
+            return ""
         if "//SCROLLMOVE" in js:
             return False
         if "//SCROLLROOT" in js:

@@ -99,13 +99,85 @@ class DossierLib(unittest.TestCase):
             "j1", tmp,
             summary={"filled": 1, "failed": 0, "skipped_optional": 0},
             fields=[{"label": "A", "outcome": "filled"}],
-            blockers=[], decisions=[], mode="shadow", url="u")
+            blockers=[], decisions=[], mode="shadow", url="u", run_id="r1")
         self.assertTrue(os.path.exists(path))
         doc = json.load(open(path, encoding="utf-8"))
         self.assertEqual(doc["summary"]["filled"], 1)
         self.assertEqual(doc["fields"][0]["label"], "A")
+        self.assertEqual(doc["run_id"], "r1")  # timeline linkage
         # history retained
         self.assertEqual(len(os.listdir(os.path.join(tmp, "j1", "handoffs"))), 1)
+
+    def test_merge_check_updates_dossier(self):
+        from lib.automation.dossier import write_dossier, merge_check
+        tmp = tempfile.mkdtemp()
+        write_dossier("j1", tmp, summary={}, fields=[],
+                      blockers=[], decisions=[])
+        merge_check("j1", tmp, passed=False,
+                    errors=[{"label": "X", "reason": "required empty"}],
+                    warnings=[], infos=[])
+        doc = json.load(open(os.path.join(tmp, "j1", "handoff.json"),
+                             encoding="utf-8"))
+        self.assertFalse(doc["check"]["passed"])
+        self.assertEqual(doc["check"]["errors"][0]["label"], "X")
+
+
+class StaleVsDossier(unittest.TestCase):
+    def test_ready_record_stale_when_dossier_has_gaps(self):
+        from lib.automation.diff import stale_vs_dossier
+        rec = {"outcome": "held_shadow"}
+        dossier = {"summary": {"failed": 8, "filled": 19},
+                   "blockers": []}
+        self.assertTrue(stale_vs_dossier(rec, dossier))
+
+    def test_not_stale_when_consistent(self):
+        from lib.automation.diff import stale_vs_dossier
+        rec = {"outcome": "held_shadow"}
+        dossier = {"summary": {"failed": 0, "filled": 19},
+                   "blockers": []}
+        self.assertFalse(stale_vs_dossier(rec, dossier))
+
+    def test_stopped_record_never_stale(self):
+        from lib.automation.diff import stale_vs_dossier
+        self.assertFalse(stale_vs_dossier({"outcome": "stopped"}, None))
+
+
+class HandoffVocabulary(unittest.TestCase):
+    """The unified outcome vocabulary (kind) + honest counts."""
+
+    def test_write_handoff_kinds_and_counts(self):
+        from apply.act.fill import _write_handoff
+        from apply.common.obs import current_run_id
+        tmp = tempfile.mkdtemp()
+        filled = [{"label": "A", "answer": "x", "unverified": False,
+                   "method": "deterministic"},
+                  {"label": "Country", "answer": "Canada +1",
+                   "unverified": True, "method": "combobox"}]
+        failed = [
+            {"label": "Company", "_why": "no_answer", "required": True,
+             "attempted": "", "_sel": "#c", "_diag": {}},
+            {"label": "Optional", "_why": "no_answer", "required": False,
+             "attempted": "", "_sel": "#o", "_diag": {}},
+            {"label": "Work Auth", "_why": "fill_failed", "required": True,
+             "attempted": "Yes...", "_sel": "#w",
+             "_diag": {"method": "combobox", "reason": "no_option_match"}},
+        ]
+        with patch("apply.act.fill.RESULTS_DIR", tmp):
+            _write_handoff("j1", "u", filled, failed, {}, mode="shadow")
+        doc = json.load(open(os.path.join(tmp, "j1", "handoff.json"),
+                             encoding="utf-8"))
+        kinds = {f["label"]: f["kind"] for f in doc["fields"]}
+        self.assertEqual(kinds["A"], "verified")
+        self.assertEqual(kinds["Country"], "unverified")
+        self.assertEqual(kinds["Company"], "needs_data")
+        self.assertEqual(kinds["Optional"], "needs_data")
+        self.assertEqual(kinds["Work Auth"], "rejected_by_form")
+        # Honest mutually-exclusive counts: 2 filled, 2 failed
+        # (Company + Work Auth), 1 skipped-optional (Optional).
+        self.assertEqual(doc["summary"]["filled"], 2)
+        self.assertEqual(doc["summary"]["failed"], 2)
+        self.assertEqual(doc["summary"]["skipped_optional"], 1)
+        self.assertTrue(doc["run_id"] or current_run_id())
 
 
 if __name__ == "__main__":
