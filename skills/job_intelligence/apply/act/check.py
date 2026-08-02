@@ -28,6 +28,40 @@ _PHONE_RE = re.compile(r"phone|tel|contact|mobile|cell", re.I)
 _POSTAL_RE = re.compile(r"postal|zip", re.I)
 
 
+def _is_react_widget(page, sel):
+    """True when a field's value isn't readable via the DOM because it's a
+    React-controlled/custom widget (Ashby autocomplete, react-select, ...).
+    Used to avoid false 'required field appears empty' errors."""
+    try:
+        return bool(page.evaluate("""(args) => {
+            const [sel] = args;
+            const el = document.querySelector(sel);
+            if (!el) return false;
+            const parent = el.parentElement;
+            if (parent) {
+                const pc = parent.className || '';
+                if (pc.includes('ashby') || pc.includes('autocomplete')
+                    || pc.includes('combo') || pc.includes('typeahead')
+                    || pc.includes('inputContainer')
+                    || pc.includes('_inputContainer')) return true;
+            }
+            let p = el;
+            for (let i = 0; i < 3; i++) {
+                p = p.parentElement;
+                if (!p) break;
+                const pc = p.className || '';
+                if (pc.includes('inputContainer') || pc.includes('autocomplete')
+                    || pc.includes('ashby')) return true;
+            }
+            if (el._valueTracker !== undefined && el.value === '') return true;
+            if (el.type === 'hidden' || el.tabIndex === -1) return true;
+            if (el.placeholder === 'Start typing...' && !el.id && !el.name) return true;
+            return false;
+        }""", [sel]))
+    except Exception:
+        return False
+
+
 def _normalize_for_compare(label, value):
     """Normalize a filled value the same way the filler does at fill time,
     so check doesn't false-warn: phone → digits only (E.164), postal → no spaces."""
@@ -134,8 +168,28 @@ def cmd_check(jid):
 
                 checked += 1
 
-                # Skip if no expected value (optional field)
+                # Required field with NO answer: surface it instead of
+                # silently passing — an empty required field is a submit
+                # blocker. React widgets that are merely unreadable are
+                # flagged INFO (verify visually) rather than ERROR.
                 if expected is None:
+                    if f.get("required") and not actual:
+                        if _is_react_widget(page, sel):
+                            issues.append({
+                                "label": label,
+                                "expected": "(no answer supplied)",
+                                "actual": "(unreadable)",
+                                "severity": "INFO",
+                                "reason": "Required field with no answer — React widget, verify visually",
+                            })
+                        else:
+                            issues.append({
+                                "label": label,
+                                "expected": "(no answer supplied)",
+                                "actual": "(empty)",
+                                "severity": "ERROR",
+                                "reason": "Required field has no answer supplied — would fail submit",
+                            })
                     continue
 
                 # Radio groups: check which option was selected
@@ -264,40 +318,7 @@ def cmd_check(jid):
                         "reason": "Filled value doesn't match expected",
                     })
                 elif expected and not actual:
-                    # Check if this is a React-controlled field (Ashby autocomplete, custom widget)
-                    # that we can't read via DOM value attribute — don't false-positive
-                    is_react_widget = page.evaluate("""(args) => {
-                        const [sel] = args;
-                        const el = document.querySelector(sel);
-                        if (!el) return false;
-                        // Ashby autocomplete: parent has typeahead/combo/inputContainer class
-                        const parent = el.parentElement;
-                        if (parent) {
-                            const pc = parent.className || '';
-                            if (pc.includes('ashby') ||
-                                pc.includes('autocomplete') ||
-                                pc.includes('combo') ||
-                                pc.includes('typeahead') ||
-                                pc.includes('inputContainer') ||
-                                pc.includes('_inputContainer')) return true;
-                        }
-                        // Walk up 3 levels for Ashby autocomplete container
-                        let p = el;
-                        for (let i = 0; i < 3; i++) {
-                            p = p.parentElement;
-                            if (!p) break;
-                            const pc = p.className || '';
-                            if (pc.includes('inputContainer') || pc.includes('autocomplete') || pc.includes('ashby')) return true;
-                        }
-                        // React-controlled: value attribute empty but _valueTracker exists
-                        if (el._valueTracker !== undefined && el.value === '') return true;
-                        // Custom widget with hidden input
-                        if (el.type === 'hidden' || el.tabIndex === -1) return true;
-                        // Ashby autocomplete: placeholder "Start typing..." with no id/name
-                        if (el.placeholder === 'Start typing...' && !el.id && !el.name) return true;
-                        return false;
-                    }""", [sel])
-                    if is_react_widget:
+                    if _is_react_widget(page, sel):
                         issues.append({
                             "label": label,
                             "expected": str(expected),

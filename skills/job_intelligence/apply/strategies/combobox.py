@@ -324,33 +324,25 @@ def _click_option(page, best):
     return False
 
 
-def _verify(page, sel, ans, candidates):
-    """True=selection verified, False=provably wrong, None=unverifiable.
-
-    Verdicts use the SAME shared scoring that selected the option. Reads
-    MULTIPLE sources: the DOM readers, the input's own value (react-select
-    stores the label there), and the value-container's text — a reader can
-    grab the wrong fragment ("Canada +1" → "+1")."""
-    from apply.common.match import scoring_candidates as _msc
-    cnorms = _msc(candidates)
+def _read_selection_values(page, sel):
+    """All readable texts describing the current selection: DOM readers,
+    the input value, and the value-container (joined single-values or
+    raw text). Returns a list of strings (possibly empty)."""
     values = []
     try:
         from apply.common.value_reader import (AriaComboboxReader,
                                                ReactSelectReader,
                                                FuzzyComboboxReader)
-        ans_l = str(ans).lower().strip()
         for reader in (AriaComboboxReader(), ReactSelectReader(), FuzzyComboboxReader()):
-            v = reader.read(page, sel, ans=ans_l)
-            _trace("verify", reader.name, "read=" + repr(str(v)[:40]))
+            v = reader.read(page, sel, ans="")
             if v:
                 values.append(str(v))
-    except Exception as e:
-        _trace("verify", "readers-error", str(e)[:80])
+    except Exception:
+        pass
     try:
         iv = page.evaluate(f"document.querySelector({json.dumps(sel)})?.value || ''")
         if iv:
             values.append(str(iv))
-            _trace("verify", "input_value", repr(iv[:40]))
     except Exception:
         pass
     try:
@@ -362,19 +354,46 @@ def _verify(page, sel, ans, candidates):
             const parts = Array.from(scope.querySelectorAll('.select__single-value'))
                 .map(s => (s.textContent || '').trim()).filter(Boolean);
             const joined = parts.join(' ');
-            // The full label ("Canada +1") can live in raw textContent while
-            // only a fragment ("+1") renders as a single-value span — take
-            // whichever is more informative.
             const all = (scope.textContent || '').trim().slice(0, 120);
             return joined.length >= all.length ? joined : all;
         }""", sel)
         if vc:
             values.append(str(vc))
-            _trace("verify", "value_container", repr(vc[:40]))
     except Exception:
         pass
+    return values
+
+
+def _verify(page, sel, ans, candidates):
+    """True=selection verified, False=provably wrong, None=unverifiable.
+
+    Verdicts use the SAME shared scoring that selected the option. Reads
+    MULTIPLE sources: the DOM readers, the input's own value (react-select
+    stores the label there), and the value-container's text — a reader can
+    grab the wrong fragment ("Canada +1" → "+1")."""
+    from apply.common.match import scoring_candidates as _msc
+    cnorms = _msc(candidates)
+    values = _read_selection_values(page, sel)
+    for v in values:
+        _trace("verify", "read", repr(str(v)[:40]))
     if not values:
         _trace("verify", "verdict=None (nothing readable)")
+        # intl-tel country picker: the selection's identity is the flag
+        # class (iti__ca = Canada). Verify it directly when the answer is
+        # a country.
+        try:
+            from apply.common.match import country_iso
+            iso = country_iso(ans)
+            if iso:
+                flag = page.evaluate("""() => {
+                    const f = document.querySelector('.select__control .iti__flag, [class*="iti__flag"]');
+                    return f ? (f.className || '') : '';
+                }""")
+                if iso in str(flag):
+                    _trace("verify", "verdict=True (intl-tel flag)", iso)
+                    return True
+        except Exception:
+            pass
         return None
     for v in values:
         if _score_option(v, cnorms) >= 2:
@@ -418,6 +437,77 @@ def _try_click_best(page, sel, ans, opts, candidates):
                 continue  # provably wrong — try the next best
             return True, cand, v
     return False, None, None
+
+
+def _llm_pick(page, sel, opts, label, ans):
+    """Expectation-free last resort: when deterministic scoring is
+    inconclusive, send the REAL captured option texts + the question
+    label + the answer to the local LLM and let it choose. No hardcoded
+    aliases or phrasing expectations. Returns the chosen option dict or
+    None (unavailable / no reply / no match)."""
+    if not opts:
+        return None
+    try:
+        from lib.ask_api import available, ask_text
+        if not available():
+            return None
+    except Exception:
+        return None
+    try:
+        lines = [
+            f"Job application field: {(label or '')[:120]}",
+            f"Answer from the user's profile: {str(ans)[:200]}",
+            "Options on the form:",
+        ]
+        for i, o in enumerate(opts[:30]):
+            lines.append(f"[{i}] {o.get('text', '')[:80]}")
+        lines.append(
+            "Choose the option index that matches the answer. "
+            "Reply with ONLY the index number. If none match, reply NONE.")
+        reply, err = ask_text("\n".join(lines), temperature=0.1, max_tokens=16)
+        if err or not reply:
+            return None
+        m = re.search(r"\d+", reply)
+        if not m:
+            return None
+        idx = int(m.group(0))
+        if 0 <= idx < len(opts):
+            return opts[idx]
+    except Exception:
+        return None
+    return None
+
+
+def _try_llm(page, sel, opts, label, ans, candidates, diag, stage):
+    """Click the LLM-chosen option, then verify by MECHANICAL IDENTITY:
+    the selection must equal what we clicked (no semantic expectations on
+    the LLM's choice — deterministic scoring can't judge it). Unreadable
+    selections are accepted with a flag for check to arbitrate."""
+    if not opts:
+        return False
+    pick = _llm_pick(page, sel, opts, label, ans)
+    diag["llm_tried"] = True
+    if not pick:
+        diag["llm_reply"] = "no_match"
+        return False
+    diag["llm_reply"] = pick.get("text", "")[:60]
+    if _click_option(page, pick):
+        time.sleep(0.5)
+        picked_norm = _norm(pick.get("text", ""))
+        values = _read_selection_values(page, sel)
+        matched = any(
+            picked_norm and (vn == picked_norm or vn in picked_norm or picked_norm in vn)
+            for vn in (_norm(v) for v in values) if vn)
+        if values and not matched:
+            diag["reason"] = "llm_wrong"
+            diag["after"] = pick.get("text", "")[:60]
+            return False
+        diag["reason"] = f"llm_{stage}"
+        diag["after"] = pick.get("text", "")[:60]
+        if not matched:
+            diag["unverified"] = True
+        return True
+    return False
 
 
 def fill(page, f, ans, time_budget=25.0):
@@ -468,6 +558,7 @@ def fill(page, f, ans, time_budget=25.0):
 
         candidates = _typing_candidates(ans)
         typed_seen = 0
+        last_opts = []
         for cand in candidates[:3]:
             if _over_budget():
                 diag["reason"] = "slow"
@@ -476,6 +567,7 @@ def fill(page, f, ans, time_budget=25.0):
                 return False
             opts = _type_and_poll(page, sel, cand)
             typed_seen += len(opts)
+            last_opts = opts
             if opts:
                 ok, picked, verdict = _try_click_best(page, sel, ans, opts, candidates)
                 if ok:
@@ -485,6 +577,12 @@ def fill(page, f, ans, time_budget=25.0):
                         diag["unverified"] = True
                     f["_diag"] = diag
                     return True
+
+        # Expectation-free fallback on the typed-filtered list.
+        if _try_llm(page, sel, last_opts, f.get("label", ""), ans, candidates,
+                    diag, "typed"):
+            f["_diag"] = diag
+            return True
 
         # Unfiltered fallback: clear, reopen, score the FULL list.
         if _over_budget():
@@ -501,6 +599,10 @@ def fill(page, f, ans, time_budget=25.0):
                 diag["after"] = picked["text"][:60]
                 if verdict is None:
                     diag["unverified"] = True
+                f["_diag"] = diag
+                return True
+            if _try_llm(page, sel, opts, f.get("label", ""), ans, candidates,
+                        diag, "unfiltered"):
                 f["_diag"] = diag
                 return True
 

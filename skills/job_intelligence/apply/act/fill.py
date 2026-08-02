@@ -137,12 +137,19 @@ def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
         fields.append({
             "label": r.get("label", ""), "answer": r.get("attempted", ""),
             "outcome": "no_answer" if r.get("_why") == "no_answer" else "failed",
+            "required": bool(r.get("required")),
             "method": diag.get("method", ""),
             "reason": diag.get("reason", ""),
             "selector": r.get("_sel") or r.get("selector") or "",
             "after": diag.get("after", ""),
             "diag": diag,  # full evidence: options_seen, top_options, stage flags
         })
+
+    # HONEST accounting: a required field with no answer is a failure —
+    # it would fail validation on submit.
+    failed_labels = [f["label"] for f in fields
+                     if f["outcome"] == "failed"
+                     or (f["outcome"] == "no_answer" and f.get("required"))]
 
     blockers = []
     status = state.get("status", "")
@@ -166,7 +173,6 @@ def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
         blockers.append({"type": "timed_out",
                          "next": "raise job_timeout_sec or run again (resumable)"})
 
-    failed_labels = [f["label"] for f in fields if f["outcome"] == "failed"]
     decisions = []
     if failed_labels:
         decisions.append({
@@ -782,6 +788,9 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
         msg += f", to Skyvern: {len(skyvern_fields)}"
     if skipped:
         msg += f", skipped optional: {len(skipped)}"
+    req_no_answer = [r for r in remaining if r.get("required")]
+    if req_no_answer:
+        msg += f", {len(req_no_answer)} REQUIRED unanswered"
     if skyvern_result:
         msg += f" + Skyvern: {skyvern_result.get('status', 'unknown')}"
     emit_status("filled", msg)

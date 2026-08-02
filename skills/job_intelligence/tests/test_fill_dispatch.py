@@ -379,5 +379,98 @@ class UploadFieldSelection(unittest.TestCase):
                                         f, "/r.pdf", "/c.pdf"), "/r.pdf")
 
 
+class RequiredNoAnswerSurfaced(unittest.TestCase):
+    """Check must flag required fields with no answer — the old blind
+    spot silently passed them (they'd fail on submit)."""
+
+    def test_required_empty_no_answer_is_error(self):
+        from apply.common.inspector import ProbeResult
+        from contextlib import contextmanager
+        from apply.act.check import cmd_check
+
+        @contextmanager
+        def _cm(state):
+            page = MagicMock()
+            page.url = "https://example.com/job"
+            yield page, MagicMock()
+
+        conn = MagicMock()
+        conn.execute.return_value.fetchone.return_value = {"stage": "tailored"}
+        field = {
+            "label": "This position is required to work out of a Lyft Office",
+            "tag": "INPUT", "type": "text",
+            "_sel": "#q1", "name": "", "id": "", "placeholder": "",
+            "autocomplete": "", "role": "", "required": True,
+        }
+        with patch("apply.act.check.get_conn", return_value=conn), \
+             patch("apply.act.check.load_state",
+                   return_value={"jid": "testjid",
+                                 "external_url": "https://example.com/job",
+                                 "fill_answers": None}), \
+             patch("apply.act.check._load_profile", return_value={"answers": {}}), \
+             patch("apply.act.check.resolve_registry", return_value=None), \
+             patch("apply.act.check.chrome_session", side_effect=_cm), \
+             patch("apply.act.check.tag_page"), \
+             patch("apply.act.check._probe_form",
+                   return_value=ProbeResult(fields=[field], strategy="standard")), \
+             patch("apply.act.check._build_ans_dict", return_value={}), \
+             patch("apply.act.check._build_ephemeral", return_value={}), \
+             patch("apply.act.check._read_element_value", return_value=""), \
+             patch("apply.act.check._is_react_widget", return_value=False), \
+             patch("apply.act.check.resolve") as resolve_mock, \
+             patch("apply.common.page_helpers.save_state"):
+            resolve_mock.return_value.value = None
+            rc = cmd_check("testjid")
+        self.assertEqual(rc, 1)  # check FAILS — required field surfaced
+
+    def test_required_react_widget_is_info_not_error(self):
+        from apply.common.inspector import ProbeResult
+        from contextlib import contextmanager
+        from apply.act.check import cmd_check
+
+        @contextmanager
+        def _cm(state):
+            page = MagicMock()
+            page.url = "https://example.com/job"
+            yield page, MagicMock()
+
+        conn = MagicMock()
+        conn.execute.return_value.fetchone.return_value = {"stage": "tailored"}
+        field = {
+            "label": "Location", "tag": "INPUT", "type": "text",
+            "_sel": "#loc", "name": "", "id": "", "placeholder": "",
+            "autocomplete": "", "role": "combobox", "required": True,
+        }
+        with patch("apply.act.check.get_conn", return_value=conn), \
+             patch("apply.act.check.load_state",
+                   return_value={"jid": "testjid",
+                                 "external_url": "https://example.com/job",
+                                 "fill_answers": None}), \
+             patch("apply.act.check._load_profile", return_value={"answers": {}}), \
+             patch("apply.act.check.resolve_registry", return_value=None), \
+             patch("apply.act.check.chrome_session", side_effect=_cm), \
+             patch("apply.act.check.tag_page"), \
+             patch("apply.act.check._probe_form",
+                   return_value=ProbeResult(fields=[field], strategy="standard")), \
+             patch("apply.act.check._build_ans_dict", return_value={}), \
+             patch("apply.act.check._build_ephemeral", return_value={}), \
+             patch("apply.act.check._read_element_value", return_value=""), \
+             patch("apply.act.check._is_react_widget", return_value=True), \
+             patch("apply.act.check.resolve") as resolve_mock, \
+             patch("apply.common.page_helpers.save_state"):
+            resolve_mock.return_value.value = None
+            rc = cmd_check("testjid")
+        self.assertEqual(rc, 0)  # INFO only — passes, flagged for visual review
+
+
+class CountryIso(unittest.TestCase):
+    def test_country_iso(self):
+        from apply.common.match import country_iso
+        self.assertEqual(country_iso("Canada"), "ca")
+        self.assertEqual(country_iso("United States"), "us")
+        self.assertEqual(country_iso("Germany"), "de")
+        self.assertEqual(country_iso("Atlantis"), "")
+
+
 if __name__ == "__main__":
     unittest.main()

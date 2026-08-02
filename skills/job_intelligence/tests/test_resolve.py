@@ -139,10 +139,16 @@ class AttrMatchGuard(unittest.TestCase):
                     field_name="candidate_country", field_role="combobox")
         self.assertIsNone(r.value)
 
-    def test_text_input_still_uses_attr_match(self):
+    def test_text_input_weak_attr_requires_label_corroboration(self):
+        # EEOC 'other' free-text with a location-ish name must NOT be
+        # filled (the Scribd race-field false positive).
         r = resolve("Are you Hispanic/Latino?", PROFILE,
                     field_name="custom_question_location", field_tag="INPUT")
-        self.assertIsNotNone(r.value)
+        self.assertIsNone(r.value)
+        # With a corroborating label, weak attr tokens still work.
+        r2 = resolve("Enter your city", PROFILE,
+                     field_name="custom_question_location", field_tag="INPUT")
+        self.assertIsNotNone(r2.value)
 
     def test_disability_excludes_accommodation(self):
         r = resolve("Will you require disability accommodations?", PROFILE)
@@ -272,6 +278,24 @@ class DatePartDerivation(unittest.TestCase):
     def test_end_date_parts_not_derived(self):
         r = resolve("End date month*", self._prof())
         self.assertIsNone(r.value)
+
+
+class AttrWeakTokenGuard(unittest.TestCase):
+    """EEOC-free-text guard: a 'location'-named OTHER field must not be
+    filled with the user's city (the Scribd race-field false positive)."""
+
+    def test_other_race_field_not_filled_with_city(self):
+        r = resolve("Other race, ethnicity, or origin", PROFILE,
+                    None, field_name="location_other")
+        self.assertIsNone(r.value)
+
+    def test_location_field_still_fills_from_name(self):
+        r = resolve("Location (City)*", PROFILE, None, field_name="location")
+        self.assertEqual(r.value, "Ottawa, ON, Canada")
+
+    def test_email_strong_token_ignores_label(self):
+        r = resolve("Contact details", PROFILE, None, field_name="email")
+        self.assertEqual(r.value, "john.smith@example.com")
 
 
 if __name__ == "__main__":

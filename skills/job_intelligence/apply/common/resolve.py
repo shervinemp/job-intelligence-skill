@@ -138,6 +138,26 @@ _ATTR_MAP = {
     "resume": "resume_path",
 }
 
+# Strong tokens: safe to trust from the name/id alone (their labels are
+# near-universally predictable). Everything else is WEAK — the label must
+# corroborate, or an EEOC free-text 'other' input whose id happens to
+# contain "location" gets filled with the user's city.
+_STRONG_ATTR = {"email", "phone", "tel", "first_name", "firstname",
+                "last_name", "lastname", "surname", "zip", "postalcode",
+                "postal_code", "country"}
+
+_ATTR_HINTS = {
+    "city": ("city", "location", "where", "based", "reside"),
+    "location": ("location", "city", "where", "based", "reside"),
+    "state": ("state", "province", "region"),
+    "address": ("address", "street", "residence"),
+    "website": ("website", "portfolio", "site", "url", "link"),
+    "portfolio_url": ("portfolio", "website", "site", "url"),
+    "linkedin_url": ("linkedin",),
+    "github_url": ("github",),
+    "resume_path": ("resume", "cv"),
+}
+
 
 def _autocomplete_key(token: str) -> Optional[str]:
     """'section-blue shipping tel' → 'tel' → 'phone'."""
@@ -224,6 +244,17 @@ def resolve(
             av = attr_val.lower().replace("-", "_")
             for pat, ekey in _ATTR_MAP.items():
                 if pat in av:
+                    # Weak tokens (city/location/website/...) require the
+                    # LABEL to corroborate — prevents EEOC 'other' inputs
+                    # (id contains "location") being filled with the city.
+                    # Word-boundary match: "ethnicity" must not count as
+                    # containing "city".
+                    if pat not in _STRONG_ATTR:
+                        hints = _ATTR_HINTS.get(ekey, ())
+                        if not re.search(
+                                r"\b(" + "|".join(re.escape(h) for h in hints) + r")\b",
+                                label.lower()):
+                            continue
                     val = _find_ephemeral_value(ekey, ephemeral)
                     if val:
                         if "country_code" in av or "countrycode" in av:

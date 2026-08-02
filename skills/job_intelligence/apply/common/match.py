@@ -113,6 +113,29 @@ def score_option(text, candidates_norm):
     return best
 
 
+# Country names → ISO-2 codes for intl-tel country pickers, whose
+# selection is only readable via the flag class (iti__ca = Canada).
+COUNTRY_ISO = {
+    "canada": "ca", "united states": "us", "usa": "us", "united states of america": "us",
+    "australia": "au", "new zealand": "nz", "united kingdom": "gb", "uk": "gb",
+    "england": "gb", "germany": "de", "france": "fr", "netherlands": "nl",
+    "belgium": "be", "switzerland": "ch", "austria": "at", "italy": "it",
+    "spain": "es", "portugal": "pt", "ireland": "ie", "sweden": "se",
+    "norway": "no", "denmark": "dk", "finland": "fi", "poland": "pl",
+    "czech republic": "cz", "india": "in", "brazil": "br", "mexico": "mx",
+    "japan": "jp", "south korea": "kr", "singapore": "sg", "israel": "il",
+}
+
+
+def country_iso(answer):
+    """ISO-2 code from a country answer ('Canada' -> 'ca'), or ''."""
+    an = norm(answer)
+    for name, iso in COUNTRY_ISO.items():
+        if name in an or (len(name) <= 6 and an and an in name):
+            return iso
+    return ""
+
+
 def scoring_candidates(candidates):
     """Full normalized candidate set (originals + aliases) for scoring."""
     cn = [norm(c) for c in candidates]

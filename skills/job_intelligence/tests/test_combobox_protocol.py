@@ -224,5 +224,76 @@ class FillFlow(unittest.TestCase):
         self.assertEqual(field["_diag"]["reason"], "no_selector")
 
 
+class LLMFallback(unittest.TestCase):
+    """Expectation-free last resort: deterministic scoring fails, the
+    LLM picks from the REAL option texts."""
+
+    def _field(self):
+        return {"label": "Custom question", "tag": "INPUT", "type": "text",
+                "_sel": "#q", "id": "q", "name": "",
+                "placeholder": "", "autocomplete": "", "role": "combobox"}
+
+    def test_llm_pick_parses_index(self):
+        from apply.strategies.combobox import _llm_pick
+        page = MagicMock()
+        opts = [{"text": "Option A", "id": "a", "x": 1, "y": 1},
+                {"text": "Option B", "id": "b", "x": 2, "y": 2}]
+        with patch("lib.ask_api.available", return_value=True), \
+             patch("lib.ask_api.ask_text", return_value=("1", None)):
+            picked = _llm_pick(page, "#q", opts, "Question?", "Some answer")
+        self.assertEqual(picked["text"], "Option B")
+
+    def test_llm_pick_none_returns_none(self):
+        from apply.strategies.combobox import _llm_pick
+        page = MagicMock()
+        opts = [{"text": "Option A", "id": "a", "x": 1, "y": 1}]
+        with patch("lib.ask_api.available", return_value=True), \
+             patch("lib.ask_api.ask_text", return_value=("NONE", None)):
+            self.assertIsNone(_llm_pick(page, "#q", opts, "Q", "A"))
+
+    def test_llm_pick_unavailable_returns_none(self):
+        from apply.strategies.combobox import _llm_pick
+        with patch("lib.ask_api.available", return_value=False):
+            self.assertIsNone(_llm_pick(MagicMock(), "#q", [{"text": "A"}], "Q", "A"))
+
+    def test_fill_uses_llm_when_deterministic_fails(self):
+        """Deterministic scoring finds no confident option; the LLM picks
+        one and it gets clicked and accepted."""
+        from apply.strategies.combobox import fill
+        placeholder = [{"text": "Select...", "id": "ph", "x": 1, "y": 1}]
+        options = [
+            {"text": "I am willing to relocate", "id": "r1", "x": 1, "y": 1},
+            {"text": "I am not willing to relocate", "id": "r2", "x": 2, "y": 2},
+        ]
+        page = FakePage(typed_options=[], menu_options=placeholder,
+                        unfiltered_options=options, collect_budget=3)
+        field = self._field()
+        with patch("lib.ask_api.available", return_value=True), \
+             patch("lib.ask_api.ask_text", return_value=("0", None)), \
+             patch("apply.common.value_reader.AriaComboboxReader") as ac, \
+             patch("apply.common.value_reader.ReactSelectReader") as rs, \
+             patch("apply.common.value_reader.FuzzyComboboxReader") as fc:
+            ac.return_value.read.return_value = None
+            rs.return_value.read.return_value = "I am willing to relocate"
+            fc.return_value.read.return_value = None
+            self.assertTrue(fill(page, field,
+                                 "Currently open to relocation"))
+        self.assertEqual(field["_diag"]["reason"], "llm_unfiltered")
+        self.assertTrue(field["_diag"]["llm_tried"])
+
+    def test_fill_fails_when_llm_unavailable(self):
+        from apply.strategies.combobox import fill
+        placeholder = [{"text": "Select...", "id": "ph", "x": 1, "y": 1}]
+        page = FakePage(typed_options=[], menu_options=placeholder,
+                        unfiltered_options=[{"text": "I am willing to relocate",
+                                             "id": "r1", "x": 1, "y": 1}],
+                        collect_budget=3)
+        field = self._field()
+        with patch("lib.ask_api.available", return_value=False):
+            self.assertFalse(fill(page, field, "Currently open to relocation"))
+        self.assertEqual(field["_diag"]["reason"], "no_option_match")
+        self.assertTrue(field["_diag"]["llm_tried"])
+
+
 if __name__ == "__main__":
     unittest.main()
