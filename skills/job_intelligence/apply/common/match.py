@@ -40,11 +40,10 @@ ALIASES = [
 
 
 def norm(s):
-    """Accent/case/punctuation-normalized text for scoring."""
-    s = unicodedata.normalize("NFD", s or "")
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    s = re.sub(r"[^a-z0-9]+", " ", s.lower())
-    return re.sub(r"\s+", " ", s).strip()
+    """Accent/case/punctuation-normalized text for scoring — shared pure
+    normalizer (lib/automation)."""
+    from lib.automation.normalize import norm as _anorm
+    return _anorm(s)
 
 
 def content_words(norm_text):

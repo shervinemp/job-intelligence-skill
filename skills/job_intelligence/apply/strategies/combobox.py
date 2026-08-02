@@ -440,42 +440,11 @@ def _try_click_best(page, sel, ans, opts, candidates):
 
 
 def _llm_pick(page, sel, opts, label, ans):
-    """Expectation-free last resort: when deterministic scoring is
-    inconclusive, send the REAL captured option texts + the question
-    label + the answer to the local LLM and let it choose. No hardcoded
-    aliases or phrasing expectations. Returns the chosen option dict or
-    None (unavailable / no reply / no match)."""
-    if not opts:
-        return None
-    try:
-        from lib.ask_api import available, ask_text
-        if not available():
-            return None
-    except Exception:
-        return None
-    try:
-        lines = [
-            f"Job application field: {(label or '')[:120]}",
-            f"Answer from the user's profile: {str(ans)[:200]}",
-            "Options on the form:",
-        ]
-        for i, o in enumerate(opts[:30]):
-            lines.append(f"[{i}] {o.get('text', '')[:80]}")
-        lines.append(
-            "Choose the option index that matches the answer. "
-            "Reply with ONLY the index number. If none match, reply NONE.")
-        reply, err = ask_text("\n".join(lines), temperature=0.1, max_tokens=16)
-        if err or not reply:
-            return None
-        m = re.search(r"\d+", reply)
-        if not m:
-            return None
-        idx = int(m.group(0))
-        if 0 <= idx < len(opts):
-            return opts[idx]
-    except Exception:
-        return None
-    return None
+    """Expectation-free last resort — delegates to the shared library
+    (lib.automation.llm.pick_option): real captured option texts + the
+    question + the answer to the local LLM. No hardcoded expectations."""
+    from lib.automation.llm import pick_option
+    return pick_option(opts, label, ans)
 
 
 def _try_llm(page, sel, opts, label, ans, candidates, diag, stage):

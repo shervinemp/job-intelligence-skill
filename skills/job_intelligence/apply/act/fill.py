@@ -199,23 +199,21 @@ def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
             "handoff": path,
         },
     }
+    # Standard handover format (lib/automation) — writes handoff.json +
+    # timestamped history for run-diffing.
     try:
-        from lib.config import atomic_write_json
-        atomic_write_json(path, handoff)
+        from lib.automation.dossier import write_dossier
+        path = write_dossier(
+            jid, RESULTS_DIR,
+            summary=handoff["summary"], fields=handoff["fields"],
+            blockers=blockers, decisions=decisions,
+            artifacts=handoff["artifacts"], mode=mode, error=error, url=url)
     except Exception:
-        pass
-    # Handoff history (last 5) so consecutive runs can be diffed —
-    # the regression detector (report.py diff <jid>).
-    try:
-        hist_dir = os.path.join(d, "handoffs")
-        os.makedirs(hist_dir, exist_ok=True)
-        hist_path = os.path.join(hist_dir, time.strftime("%Y%m%d_%H%M%S") + ".json")
-        with open(hist_path, "w", encoding="utf-8") as hf:
-            json.dump(handoff, hf, indent=2)
-        for old in sorted(os.listdir(hist_dir))[:-5]:
-            os.remove(os.path.join(hist_dir, old))
-    except Exception:
-        pass
+        try:
+            from lib.config import atomic_write_json
+            atomic_write_json(path, handoff)
+        except Exception:
+            pass
 
     # Emit structured observations for the session log (always on).
     try:
