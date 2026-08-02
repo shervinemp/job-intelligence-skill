@@ -1,7 +1,10 @@
 """act/fill.py — Hybrid fill command: Playwright-first, Skyvern-fallback."""
+import json
+import os
 import random, re, sys, time
 
 from lib.db import get_conn
+from lib.config import RESULTS_DIR
 from apply.common.output import emit_next, emit_status, emit_error, emit_fill_report
 from apply.common.page_helpers import load_state, save_state, handle_captcha, handle_session_timeout, tag_page
 from apply.act.helpers import (
@@ -114,6 +117,133 @@ def _dismiss_popups_if_present(page, profile=None, *, verbose=True):
                 print(f"  POPUP_DISMISS_FAIL: {e}", file=sys.stderr)
 
 
+def _write_handoff(jid, url, filled_recs, failed_all, skipped, state,
+                   mode="unknown", error=""):
+    """Write a complete structured dossier for the orchestrator (LLM):
+    every field's outcome with evidence, blockers, suggested decisions,
+    and artifact links. The orchestrator reads this instead of parsing
+    stderr fragments."""
+    d = os.path.join(RESULTS_DIR, jid)
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "handoff.json")
+
+    fields = []
+    for r in filled_recs:
+        fields.append({"label": r.get("label", ""), "answer": r.get("answer", ""),
+                       "outcome": "filled", "method": "deterministic",
+                       "reason": "verified_or_accepted"})
+    for r in failed_all:
+        diag = r.get("_diag") or {}
+        fields.append({
+            "label": r.get("label", ""), "answer": r.get("attempted", ""),
+            "outcome": "no_answer" if r.get("_why") == "no_answer" else "failed",
+            "method": diag.get("method", ""),
+            "reason": diag.get("reason", ""),
+            "selector": r.get("_sel") or r.get("selector") or "",
+            "after": diag.get("after", ""),
+            "diag": diag,  # full evidence: options_seen, top_options, stage flags
+        })
+
+    blockers = []
+    status = state.get("status", "")
+    if status == "login_required":
+        domain = ""
+        try:
+            from urllib.parse import urlparse as _up
+            domain = _up(url or "").netloc
+        except Exception:
+            pass
+        blockers.append({"type": "login_required", "domain": domain,
+                         "needs": "account or creds",
+                         "next": f"apply.py creds set {domain} <email>  then re-run fill"})
+    elif status == "captcha_required":
+        blockers.append({"type": "captcha_required",
+                         "needs": "human solve (or policy captcha_skip)"})
+    elif status == "2fa_required":
+        blockers.append({"type": "2fa_required",
+                         "needs": "complete 2FA in Chrome then re-run fill"})
+    elif status == "timed_out":
+        blockers.append({"type": "timed_out",
+                         "next": "raise job_timeout_sec or run again (resumable)"})
+
+    failed_labels = [f["label"] for f in fields if f["outcome"] == "failed"]
+    decisions = []
+    if failed_labels:
+        decisions.append({
+            "action": "fill --answers",
+            "command": f"apply.py act --fill {jid} --answers '{{\"<label>\": \"<value>\"}}'",
+            "for": failed_labels[:10],
+        })
+    for b in blockers:
+        decisions.append({"action": b["type"], "for": [b.get("next", "")]})
+    decisions.append({"action": "review",
+                      "command": f"python3 report.py handoff {jid}"})
+
+    handoff = {
+        "jid": jid, "url": url, "mode": mode,
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "error": error,
+        "summary": {"filled": len(filled_recs), "failed": len(failed_all),
+                    "skipped_optional": len(skipped)},
+        "fields": fields,
+        "blockers": blockers,
+        "decisions": decisions,
+        "artifacts": {
+            "audit": os.path.join(d, "apply_audit.jsonl"),
+            "handoff": path,
+        },
+    }
+    try:
+        from lib.config import atomic_write_json
+        atomic_write_json(path, handoff)
+    except Exception:
+        pass
+    # Handoff history (last 5) so consecutive runs can be diffed —
+    # the regression detector (report.py diff <jid>).
+    try:
+        hist_dir = os.path.join(d, "handoffs")
+        os.makedirs(hist_dir, exist_ok=True)
+        hist_path = os.path.join(hist_dir, time.strftime("%Y%m%d_%H%M%S") + ".json")
+        with open(hist_path, "w", encoding="utf-8") as hf:
+            json.dump(handoff, hf, indent=2)
+        for old in sorted(os.listdir(hist_dir))[:-5]:
+            os.remove(os.path.join(hist_dir, old))
+    except Exception:
+        pass
+
+    # Emit structured observations for the session log (always on).
+    try:
+        from apply.common.obs import obs
+        obs("fill", "end", jid=jid,
+            outcome="ok" if not failed_labels and not blockers else "incomplete",
+            detail=f"filled={len(filled_recs)} failed={len(failed_labels)} "
+                   f"skipped={len(skipped)} blockers={len(blockers)}")
+        for f in fields:
+            if f["outcome"] == "failed":
+                obs("fill", "field", jid=jid, target=f["label"],
+                    pre=f.get("answer", ""), post=f.get("after", ""),
+                    outcome="failed",
+                    detail=f"{f.get('method', '')}:{f.get('reason', '')} "
+                           f"{f.get('selector', '')}")
+        for b in blockers:
+            obs("fill", "blocker", jid=jid, target=b.get("type", ""),
+                detail=b.get("next", ""))
+    except Exception:
+        pass
+
+    # Compact machine-parseable decision block for the orchestrator.
+    print(f"DECISION: job {jid} fill {'OK' if not failed_labels and not blockers else 'INCOMPLETE'}"
+          f" (filled={len(filled_recs)} failed={len(failed_labels)}"
+          f" skipped={len(skipped)} blockers={len(blockers)})", file=sys.stderr)
+    for f in fields:
+        if f["outcome"] == "failed":
+            why = f"[{f['method']}:{f['reason']}]" if f["method"] else ""
+            print(f"  FAIL {f['label'][:50]} {why}", file=sys.stderr)
+    for b in blockers:
+        print(f"  BLOCK {b['type']} -> {b.get('next', '')}", file=sys.stderr)
+    print(f"HANDOFF: {path}", file=sys.stderr)
+
+
 def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
              quick: bool = False):
     db_row = get_conn().execute(
@@ -179,6 +309,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
         return False
 
     filled_all, failed_all = [], []
+    filled_recs = []
     filled_keys = set()
     field_total = 0
     submit_visible = False
@@ -475,6 +606,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                     if rec["key"] not in filled_keys:
                         filled_keys.add(rec["key"])
                         filled_all.append(rec["label"])
+                        filled_recs.append(rec)
                 for rec in failed:
                     k = _field_key(rec)
                     if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
@@ -548,6 +680,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                     if rec["key"] not in filled_keys:
                         filled_keys.add(rec["key"])
                         filled_all.append(rec["label"])
+                        filled_recs.append(rec)
                 for rec in failed2:
                     k = _field_key(rec)
                     if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
@@ -571,6 +704,12 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
     except Exception as e:
         emit_error(f"Playwright fill failed: {e}")
+        try:
+            _write_handoff(jid, orig_url, filled_recs, failed_all, [], state,
+                           mode="shadow" if os.environ.get("JI_APPLY_MODE") == "shadow" else "live",
+                           error=str(e)[:200])
+        except Exception:
+            pass
         return 1
 
     remaining = [r for r in failed_all if _field_key(r) not in filled_keys]
@@ -626,6 +765,13 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
         state.pop("fill_run_id", None)
         state.pop("fill_run_started", None)
     save_state(state)
+
+    # Hand the structured dossier to the orchestrator.
+    try:
+        _write_handoff(jid, orig_url, filled_recs, failed_all, skipped, state,
+                       mode="shadow" if os.environ.get("JI_APPLY_MODE") == "shadow" else "live")
+    except Exception:
+        pass
 
     if field_total == 0 and not skyvern_result:
         emit_status("unknown", "no fields found by Playwright or Skyvern")

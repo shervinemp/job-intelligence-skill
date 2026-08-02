@@ -537,6 +537,192 @@ def cmd_audit(jid):
         print(f"No field records in {path}", file=sys.stderr)
 
 
+def cmd_handoff(jid):
+    """Render the orchestrator handoff dossier for a job (fill outcomes,
+    blockers, suggested decisions, artifact links)."""
+    import os
+    path = os.path.join(RESULTS_DIR, str(jid), "handoff.json")
+    if not os.path.exists(path):
+        print(f"No handoff for {jid} (no fill run yet).", file=sys.stderr)
+        return
+    with open(path, encoding="utf-8") as f:
+        h = json.load(f)
+    s = h.get("summary", {})
+    print(f"HANDOFF {jid}  {h.get('ts', '')}  mode={h.get('mode', '?')}")
+    print(f"  filled={s.get('filled', 0)} failed={s.get('failed', 0)} "
+          f"skipped={s.get('skipped_optional', 0)}  error={h.get('error', '') or '-'}")
+    print()
+    for fld in h.get("fields", []):
+        out = fld.get("outcome", "?")
+        lbl = fld.get("label", "?")[:42]
+        ans = fld.get("answer", "")[:30]
+        reason = fld.get("reason", "")
+        method = fld.get("method", "")
+        why = f"[{method}:{reason}]" if method and reason else (f"[{reason}]" if reason else "")
+        print(f"  {out:9s} {lbl:42s} {ans:30s} {why}")
+        d = fld.get("diag") or {}
+        if d.get("options_seen") is not None or d.get("top_options"):
+            top = ", ".join(f"{t.get('text', '')[:28]}({t.get('score')})"
+                            for t in d.get("top_options") or [])
+            print(f"            options={d.get('options_seen')} top={top}")
+        if d.get("typeahead_without_menu"):
+            print("            typeahead: menu appears only after typing")
+    for b in h.get("blockers", []):
+        print(f"\n  BLOCKER {b.get('type')} -> {b.get('next', b.get('needs', ''))}")
+    print("\n  DECISIONS:")
+    for d in h.get("decisions", []):
+        cmd = d.get("command", "")
+        print(f"    - {d.get('action')}: {cmd}")
+        if d.get("for"):
+            print(f"      for: {', '.join(str(x)[:60] for x in d['for'][:5])}")
+
+
+def cmd_session(run_id=None):
+    """Render the event timeline of a run (latest by default) — the
+    machine-readable observation log as a human/LLM timeline."""
+    from apply.common.obs import load as obs_load
+    events = obs_load(run_id)
+    if not events:
+        print("No session events found.", file=sys.stderr)
+        return
+    print(f"SESSION {events[0].get('run_id', '?')}  ({len(events)} events)")
+    for ev in events:
+        actor = ev.get("actor", "?")
+        action = ev.get("action", "")
+        jid = ev.get("jid", "")
+        target = (ev.get("target") or "")[:40]
+        outcome = ev.get("outcome") or ""
+        detail = (ev.get("detail") or "")[:70]
+        line = f"  {ev.get('ts', '')[:19]} {actor:10s} {action:10s} {jid[:8]:8s} {target:40s}"
+        if outcome:
+            line += f" {outcome}"
+        if detail:
+            line += f" {detail}"
+        print(line)
+
+
+def _load_handoffs(jid):
+    """Timestamped handoff history for a job, newest first."""
+    import os
+    d = os.path.join(RESULTS_DIR, str(jid), "handoffs")
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for f in sorted(os.listdir(d), reverse=True):
+        try:
+            with open(os.path.join(d, f), encoding="utf-8") as fh:
+                out.append(json.load(fh))
+        except Exception:
+            continue
+    return out
+
+
+def compare_handoffs(new, old):
+    """Field-level comparison of two fill dossiers.
+
+    Returns dict: {"regressed": [(label, now_outcome)], "improved": [labels],
+                   "still_failed": [labels], "filled_before": n, "filled_now": n}.
+    regressed = was filled, now not — the canary for broken changes."""
+    def index(h):
+        return {f.get("label"): f for f in h.get("fields", [])}
+
+    ni, oi = index(new), index(old)
+    labels = set(ni) | set(oi)
+    regressed, improved, still_failed = [], [], []
+    for lbl in sorted(labels):
+        nf, of = ni.get(lbl), oi.get(lbl)
+        no = nf.get("outcome") if nf else None
+        oo = of.get("outcome") if of else None
+        if no == "filled" and oo != "filled":
+            improved.append(lbl)
+        elif no != "filled" and oo == "filled":
+            regressed.append((lbl, no or "-"))
+        elif no != "filled" and oo is not None and oo != "filled":
+            still_failed.append(lbl)
+    return {"regressed": regressed, "improved": improved,
+            "still_failed": still_failed,
+            "filled_before": old.get("summary", {}).get("filled"),
+            "filled_now": new.get("summary", {}).get("filled")}
+
+
+def cmd_diff(jid):
+    """Field-level diff between the two most recent fill runs — the
+    regression detector (e.g., 'Country was filled, now fails')."""
+    hs = _load_handoffs(jid)
+    if len(hs) < 2:
+        print(f"Need ≥2 fill runs for {jid} to diff (have {len(hs)}).", file=sys.stderr)
+        return
+    new, old = hs[0], hs[1]
+    d = compare_handoffs(new, old)
+    print(f"DIFF {jid}: {new.get('ts', '')} vs {old.get('ts', '')}")
+    print(f"  filled: {d['filled_now']} (was {d['filled_before']})")
+    if d["regressed"]:
+        print("  REGRESSED (was filled):")
+        for lbl, now in d["regressed"]:
+            print(f"    - {lbl[:50]} -> {now}")
+    if d["improved"]:
+        print(f"  IMPROVED (now filled): {len(d['improved'])}")
+        for lbl in d["improved"][:10]:
+            print(f"    + {lbl[:50]}")
+    if d["still_failed"]:
+        print(f"  STILL FAILED: {len(d['still_failed'])}")
+        for lbl in d["still_failed"][:10]:
+            print(f"    = {lbl[:50]}")
+    if not any(d[k] for k in ("regressed", "improved", "still_failed")):
+        print("  (no field-level changes)")
+
+
+def cmd_observe(jid):
+    """The LLM observation brief: latest dossier + regression diff +
+    suggested decisions, in one view."""
+    cmd_handoff(jid)
+    print()
+    hs = _load_handoffs(jid)
+    if len(hs) >= 2:
+        cmd_diff(jid)
+
+
+def cmd_profile():
+    """Validate profile.json + the tailored resume data — the upstream
+    data-quality guide for the orchestrator."""
+    from .config import PROFILE_PATH
+    from .quality import validate_profile, validate_resume, GUIDE
+    try:
+        with open(PROFILE_PATH, encoding="utf-8") as f:
+            p = json.load(f)
+    except Exception as e:
+        print(f"Cannot read profile: {e}", file=sys.stderr)
+        return
+    issues = validate_profile(p)
+    print("PROFILE:")
+    if issues:
+        for i in issues:
+            print(f"  ! {i}")
+    else:
+        print("  complete (contact + work_history + education present)")
+    # Check a recent resume.json if any tailored results exist
+    import os
+    found = 0
+    for d in sorted(os.listdir(RESULTS_DIR))[:50]:
+        rp = os.path.join(RESULTS_DIR, d, "resume.json")
+        if os.path.exists(rp):
+            try:
+                with open(rp, encoding="utf-8") as f:
+                    r = json.load(f)
+                ri = validate_resume(r)
+                if ri:
+                    print(f"  resume.json {d[:8]}:")
+                    for x in ri[:3]:
+                        print(f"    ! {x}")
+                found += 1
+            except Exception:
+                continue
+        if found >= 3:
+            break
+    print()
+    print(GUIDE)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -596,6 +782,25 @@ def main():
             if i + 1 < len(args):
                 lim = int(args[i + 1])
         cmd_outreach(limit=lim)
+    elif cmd == "profile":
+        cmd_profile()
+    elif cmd == "session":
+        cmd_session(args[0] if args else None)
+    elif cmd == "diff":
+        if not args:
+            print("Usage: python3 report.py diff <jid>", file=sys.stderr)
+            sys.exit(1)
+        cmd_diff(args[0])
+    elif cmd == "observe":
+        if not args:
+            print("Usage: python3 report.py observe <jid>", file=sys.stderr)
+            sys.exit(1)
+        cmd_observe(args[0])
+    elif cmd == "handoff":
+        if not args:
+            print("Usage: python3 report.py handoff <jid>", file=sys.stderr)
+            sys.exit(1)
+        cmd_handoff(args[0])
     elif cmd == "audit":
         if not args:
             print("Usage: python3 report.py audit <jid>", file=sys.stderr)

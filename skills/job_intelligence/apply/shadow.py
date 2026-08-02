@@ -146,6 +146,28 @@ def run(jids=None, limit=None, quick=False):
 
         rec["secs"] = round(time.time() - t0)
         rec["shadow"] = True
+
+        # Regression canary: compare with the previous fill run's dossier.
+        # A field that WAS filled and now fails means a recent change
+        # broke something — surfaced loudly instead of silently.
+        try:
+            from lib.report import _load_handoffs, compare_handoffs
+            hs = _load_handoffs(jid)
+            if len(hs) >= 2:
+                d = compare_handoffs(hs[0], hs[1])
+                if d["regressed"]:
+                    rec["regressed"] = [lbl for lbl, _now in d["regressed"]]
+                    print("  *** REGRESSION *** fields that were filled and now fail:",
+                          file=sys.stderr)
+                    for lbl, now in d["regressed"]:
+                        print(f"      - {lbl[:50]} -> {now}", file=sys.stderr)
+                    print("      (investigate before relying on this run)",
+                          file=sys.stderr)
+                elif d["improved"]:
+                    rec["improved"] = len(d["improved"])
+        except Exception:
+            pass
+
         _append(rec)
         print(f"    -> {rec['outcome']} {rec.get('detail', '')} ({rec['secs']}s)",
               file=sys.stderr)

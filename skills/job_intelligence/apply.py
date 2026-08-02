@@ -45,6 +45,12 @@ def _auto_jid():
 
 def main():
     import argparse
+    import atexit
+
+    from apply.common.obs import begin_run, end_run
+    run_id, session_path = begin_run(name="apply")
+    atexit.register(end_run)
+    print(f"SESSION: {session_path}", file=sys.stderr)
 
     parser = argparse.ArgumentParser(prog="apply.py", description="Unified apply pipeline")
     sub = parser.add_subparsers(dest="command", required=True)

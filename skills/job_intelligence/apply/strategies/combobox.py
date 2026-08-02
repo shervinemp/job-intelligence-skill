@@ -1,176 +1,530 @@
-"""Combobox/dropdown fill — generalized for react-select, select2, and any
-widget that opens a menu on real click and filters on keystroke.
+"""Combobox/dropdown fill — the adaptive protocol.
 
-Single unified flow (no branching by widget type):
-  1. Scroll into view, real Playwright click to open menu (fires onMouseDown)
-  2. Type a short prefix of the answer (first word(s) before comma)
-  3. Dispatch input event (triggers API typeaheads that listen for onChange)
-  4. Poll for visible options, click best match by text/id/coordinates
-  5. On failure: clear typed text, fail honestly (no native_setter phantom)
+Single unified flow covering react-select, select2, Greenhouse typeaheads,
+and any widget that opens a menu on click and filters on keystroke:
 
-The Frame keyboard fix (frame.page) makes this work for comboboxes inside
-cross-origin iframes — the only difference between a Page and a Frame here
-is that Frames lack the keyboard attribute.
+  1. Open the menu (click → Enter → mousedown escalation; portals delayed).
+  2. Type the answer progressively (full text, then a yes/no-stripped
+     variant) and poll for options — async typeaheads need the longer
+     prefix and debounce time ("University" filters nothing, "University
+     of Ottawa" yields the exact match).
+  3. Score the visible options in PYTHON (accent/case-normalized word
+     overlap) — click only when confident (best score, ≥1 margin over
+     the runner-up). Ties stay unclicked and are recorded.
+  4. Unfiltered fallback: if typing produced no options (or nothing
+     confident), clear, reopen and score the FULL list — scrolling
+     virtualized react-select listboxes — so option texts that differ
+     from the answer phrasing ("Yes, I am legally authorized..." vs
+     "I am legally authorized...") still match.
+  5. Verify the selection via the value-reader cascade; a provably wrong
+     option is retried; unverifiable selections are accepted but marked
+     (check arbitrates later).
+
+Everything is recorded in f['_diag'] for the audit log: the failure
+stage (menu_closed / no_option_match / wrong_option), the option text
+clicked, and how many options were seen.
 """
-import json, time
+import json
+import re
+import sys
+import time
 
 
-def _select_option(page, sel, ans, max_polls=10):
-    """Poll for a visible option matching `ans`, then click it.
-    Click escalation: id-locator → JS click (in-evaluate) → text-locator
-    → coordinate click. Returns True on successful click."""
-    for i in range(max_polls):
-        time.sleep(0.3)
-        result = page.evaluate(f"""() => {{
-            const a = {json.dumps(ans)};
-            const input = document.querySelector({json.dumps(sel)});
-            if (!input) return null;
-            // Find the listbox: aria-owns → aria-controls → aria-describedby
-            // (react-select v5) → whole document (portal-rendered typeaheads)
-            const owns = input.getAttribute('aria-owns') || input.getAttribute('aria-controls');
-            let root = owns ? document.getElementById(owns) : null;
-            if (!root) {{
-                const desc = input.getAttribute('aria-describedby');
-                if (desc) {{
-                    const m = desc.match(/react-select-instance-(.*?)-placeholder/);
-                    if (m && m[1]) root = document.getElementById('react-select-instance-' + m[1] + '-listbox');
-                }}
-            }}
-            if (!root) root = document;
-            function parseNum(s) {{ const d = s.replace(/[^0-9]/g, ''); return d ? parseInt(d, 10) : null; }}
-            function score(aText, optText) {{
-                const aL = aText.toLowerCase().trim(), oL = optText.trim().toLowerCase();
-                if (oL === aL) return 4;
-                if (oL.startsWith(aL)) return 3;
-                if (oL.includes(aL) || aL.includes(oL)) return 2;
-                const words = aL.split(' ').filter(w => w.length > 2);
-                if (words.length) {{
-                    const mc = words.filter(w => oL.includes(w)).length;
-                    if (mc === words.length || mc / words.length >= 0.6) return 2;
-                }}
-                const aN = parseNum(aL);
-                if (aN !== null) {{
-                    const parts = oL.replace(/-/g, ' ').replace(/to/g, ' ').split(' ');
-                    const nums = parts.map(p => parseNum(p)).filter(n => n !== null);
-                    if (nums.length >= 2 && nums[0] <= aN && aN <= nums[nums.length - 1]) return 2;
-                }}
-                return 0;
-            }}
-            const opts = Array.from(root.querySelectorAll(
-                '[role="option"], li, [role="menuitem"], .select2-results__option'
-            )).filter(o => o.offsetParent !== null);
-            let best = null, bestScore = 0;
-            for (const o of opts) {{
-                const s = score(a, o.textContent.trim());
-                if (s > bestScore) {{ bestScore = s; best = o; }}
-            }}
-            if (!best) return null;
-            const rect = best.getBoundingClientRect();
-            if (!best.id) best.click();
-            return {{
-                text: best.textContent.trim().slice(0, 60),
-                id: best.id || '',
-                x: rect.x + rect.width / 2,
-                y: rect.y + rect.height / 2,
-            }};
-        }}""")
-        if not result or not (result.get("id") or result.get("text")):
-            continue
-        text = result.get("text", "")
-        oid = result.get("id", "")
-        x, y = result.get("x", 0), result.get("y", 0)
-        # Click escalation: id-locator → text-locator → coordinate click
-        if oid:
-            try:
-                page.locator(f'[id="{oid}"]').click(force=True, timeout=3000)
-                time.sleep(0.3)
-                return True
-            except Exception:
-                pass
-        if text:
-            try:
-                page.locator(f'[role="option"]:has-text("{text}")').first.click(force=True, timeout=2000)
-                time.sleep(0.3)
-                return True
-            except Exception:
-                pass
-        if x and y:
-            try:
-                page.mouse.click(x, y)
-                time.sleep(0.3)
-                return True
-            except Exception:
-                pass
-    return False
-
-
-def fill(page, f, ans):
-    """Fill a combobox/dropdown widget. Returns True when a selection is made.
-    Verification is handled by dispatch._element_value (combobox-aware reader
-    cascade), NOT here — checking here would kill non-react-select dropdowns.
-    On failure, f['_diag'] records the failure stage for the audit log."""
-    sel = f.get("_sel", "")
-    if not sel:
-        f["_diag"] = {"method": "combobox", "reason": "no_selector"}
-        return False
-    url_before = page.url
-
-    # Short prefix for typeahead filtering (full answer yields zero suggestions)
-    type_text = ans.split(",")[0].strip() if "," in ans else ans
-    words = type_text.split()
-    if len(words) > 2:
-        type_text = " ".join(words[:2])
-
+def _trace(stage, *args):
+    """Stage trace — printed to stderr AND emitted as an observation
+    event (always on; the session log is the machine-readable view)."""
+    msg = " ".join(str(a) for a in args)
+    print(f"  [CBX:{stage}] {msg}", file=sys.stderr)
     try:
-        el = page.locator(sel)
-        if not el.count():
-            f["_diag"] = {"method": "combobox", "reason": "element_missing"}
-            return False
-        try:
-            el.first.scroll_into_view_if_needed(timeout=2000)
-        except Exception:
-            pass
-        # Real Playwright click opens the menu (fires onMouseDown — synthetic
-        # JS clicks don't, so react-select menus never open from .click())
-        el.first.click(timeout=2000)
-        time.sleep(0.3)
-        # Type the prefix — react-select opens/filters the menu on keystroke.
-        # page may be a Frame (no keyboard) — get the parent Page for keyboard.
-        kb = page if hasattr(page, "keyboard") else getattr(page, "page", page)
-        if hasattr(kb, "keyboard"):
-            kb.keyboard.type(type_text, delay=50)
-            # Dispatch input event for typeaheads that listen for onChange
-            page.evaluate(f"""() => {{
-                const el = document.querySelector({json.dumps(sel)});
-                if (el) el.dispatchEvent(new Event('input', {{bubbles: true}}));
-            }}""")
-        # Poll for visible options and click the best match
-        if _select_option(page, sel, ans):
-            return True
-        # Diagnose the failure stage for the audit log
-        try:
-            n_opts = page.evaluate("""() => {
-                let n = 0;
-                for (const o of document.querySelectorAll('[role="option"], li, [role="menuitem"]')) {
-                    if (o.offsetParent !== null) n++;
-                }
-                return n;
-            }""") or 0
-            f["_diag"] = {"method": "combobox",
-                          "reason": "no_option_match" if n_opts else "menu_closed",
-                          "after": type_text[:60]}
-        except Exception:
-            f["_diag"] = {"method": "combobox", "reason": "select_failed"}
-    except Exception:
-        f["_diag"] = {"method": "combobox", "reason": "exception"}
-
-    # Clear leftover typed text on failure (not in finally — would wipe
-    # a successful selection's input on some widgets)
-    try:
-        page.evaluate(f"document.querySelector({json.dumps(sel)})?.value = ''")
+        from apply.common.obs import obs
+        obs("combobox", stage, detail=msg)
     except Exception:
         pass
 
+
+def _read_input(page, sel):
+    """Read the combobox input's CURRENT value (for traces)."""
+    try:
+        return page.evaluate(
+            f"document.querySelector({json.dumps(sel)})?.value || ''") or ""
+    except Exception:
+        return "?"
+
+
+def _clear_input(page, sel):
+    """Browser-native clear: focus + select-all + delete. Works for
+    React-controlled inputs where setting .value directly does nothing
+    (and silently corrupts subsequent typing)."""
+    try:
+        el = page.locator(sel).first
+        try:
+            el.click(timeout=1500)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    kb = page if hasattr(page, "keyboard") else getattr(page, "page", page)
+    if hasattr(kb, "keyboard"):
+        try:
+            kb.keyboard.press("Control+A")
+            kb.keyboard.press("Backspace")
+        except Exception:
+            pass
+    time.sleep(0.25)
+    _trace("clear", sel, "value_now=" + repr(_read_input(page, sel)))
+
+
+def _norm(s):
+    """Normalized text for scoring — shared matcher (apply.common.match)."""
+    from apply.common.match import norm as _mnorm
+    return _mnorm(s)
+
+
+def _score_option(text, candidates_norm):
+    """Shared scoring (exact/prefix/contains/signature/overlap)."""
+    from apply.common.match import score_option as _mscore
+    return _mscore(text, candidates_norm)
+
+
+def _typing_candidates(ans):
+    """Texts to type: full, yes/no-stripped, and alias type-forms that
+    match the option labels' raw text."""
+    from apply.common.match import typing_candidates as _mtc
+    return _mtc(ans)
+
+
+def _pick_best(options, candidates):
+    """(best_option, runner_up_score) or (None, 0)."""
+    from apply.common.match import scoring_candidates as _msc
+    cnorms = _msc(candidates)
+    best = None
+    second = 0
+    for o in options:
+        sc = _score_option(o.get("text", ""), cnorms)
+        if sc > (best["score"] if best else 0):
+            second = best["score"] if best else 0
+            best = dict(o, score=sc)
+        elif best and sc > second:
+            second = sc
+    return best, second
+
+
+def _collect_visible_options(page):
+    """Visible option dicts {text, id, x, y} from the whole document.
+
+    Greenhouse renders options as bare <li> or <div class="Option"> WITHOUT
+    role=option — so matching is broad (li + class*="option", case-
+    insensitive) and noise is filtered by the scorer + click verification."""
+    try:
+        opts = page.evaluate("""() => {
+            //COLLECT
+            const out = [];
+            const nodes = document.querySelectorAll(
+                '[role="option"], li, [role="menuitem"], [class*="option"], '
+                + '[class*="menu-item"], .select2-results__option');
+            for (const o of nodes) {
+                if (o.offsetParent === null) continue;
+                const cls = (o.className || '').toString().toLowerCase();
+                const isOpt = o.getAttribute('role') === 'option'
+                    || o.tagName === 'LI'
+                    || cls.includes('option') || cls.includes('menu-item');
+                if (!isOpt) continue;
+                const t = (o.textContent || '').trim();
+                if (!t || t.length > 120) continue;
+                // react-select empty-state notices ("No options") are not
+                // real options — their class is select__menu-notice.
+                if (cls.includes('menu-notice') || cls.includes('no-options')) continue;
+                if (o.getAttribute('aria-disabled') === 'true' || o.disabled) continue;
+                const r = o.getBoundingClientRect();
+                out.push({
+                    text: t,
+                    id: o.id || '',
+                    x: Math.round(r.x + r.width / 2),
+                    y: Math.round(r.y + r.height / 2),
+                });
+            }
+            return out;
+        }""")
+    except Exception:
+        return []
+    return opts or []
+
+
+def _collect_with_scroll(page, sel, max_passes=5):
+    """Collect options from a (possibly virtualized) listbox, scrolling
+    it between passes until the option set stabilizes."""
+    root_id = ""
+    try:
+        root_id = page.evaluate("""(sel) => {
+            //SCROLLROOT
+            const input = document.querySelector(sel);
+            const owns = input ? (input.getAttribute('aria-controls')
+                                  || input.getAttribute('aria-owns')) : null;
+            const root = owns ? document.getElementById(owns) : null;
+            return root && root !== document ? (root.id || '') : '';
+        }""", sel) or ""
+    except Exception:
+        pass
+    seen = set()
+    all_opts = []
+    for _ in range(max_passes):
+        opts = [o for o in _collect_visible_options(page) if o["text"] not in seen]
+        if not opts:
+            break
+        all_opts.extend(opts)
+        seen.update(o["text"] for o in opts)
+        moved = False
+        try:
+            moved = page.evaluate("""(rootId) => {
+                //SCROLLMOVE
+                let root = rootId ? document.getElementById(rootId) : null;
+                if (!root) root = document.querySelector('[role="option"]');
+                let scroller = root;
+                while (scroller && scroller !== document.body) {
+                    if (scroller.scrollHeight > scroller.clientHeight + 5) break;
+                    scroller = scroller.parentElement;
+                }
+                if (scroller && scroller !== document.body && scroller.scrollHeight > scroller.scrollTop + scroller.clientHeight) {
+                    scroller.scrollTop = scroller.scrollHeight;
+                    return true;
+                }
+                return false;
+            }""", root_id)
+        except Exception:
+            pass
+        if not moved:
+            break
+        time.sleep(0.25)
+    return all_opts
+
+
+def _open_menu(page, sel):
+    """Click (with Enter escalation) until options are visible. Returns True
+    if the menu is open and at least one option can be seen."""
+    for attempt in range(2):
+        try:
+            el = page.locator(sel).first
+            try:
+                el.click(timeout=2000)
+            except Exception:
+                el.click(force=True, timeout=2000)
+        except Exception:
+            pass
+        time.sleep(0.6)
+        n = len(_collect_visible_options(page))
+        _trace("open", sel, "click", "options=" + str(n))
+        if n:
+            return True
+        try:
+            kb = page if hasattr(page, "keyboard") else getattr(page, "page", page)
+            if hasattr(kb, "keyboard"):
+                kb.keyboard.press("Enter")
+        except Exception:
+            pass
+        time.sleep(0.6)
+        n = len(_collect_visible_options(page))
+        _trace("open", sel, "enter", "options=" + str(n))
+        if n:
+            return True
+    return False
+
+
+def _close_menu(page):
+    try:
+        kb = page if hasattr(page, "keyboard") else getattr(page, "page", page)
+        if hasattr(kb, "keyboard"):
+            kb.keyboard.press("Escape")
+    except Exception:
+        pass
+    time.sleep(0.2)
+
+
+def _type_and_poll(page, sel, text):
+    """Clear the input, type `text`, poll for options (async typeaheads
+    debounce + fetch). Returns the visible options."""
+    before = _read_input(page, sel)
+    _clear_input(page, sel)
+    after_clear = _read_input(page, sel)
+    kb = page if hasattr(page, "keyboard") else getattr(page, "page", page)
+    if hasattr(kb, "keyboard"):
+        try:
+            kb.keyboard.type(text, delay=15)
+        except Exception:
+            pass
+    time.sleep(0.4)
+    typed_value = _read_input(page, sel)
+    try:
+        page.evaluate(f"""() => {{
+            const el = document.querySelector({json.dumps(sel)});
+            if (el) el.dispatchEvent(new Event('input', {{bubbles: true}}));
+        }}""")
+    except Exception:
+        pass
+    _trace("type", repr(text), "before=" + repr(before),
+           "after_clear=" + repr(after_clear), "after_type=" + repr(typed_value))
+    for wait in (0.6, 1.4, 2.5):
+        time.sleep(wait)
+        opts = _collect_visible_options(page)
+        if opts:
+            _trace("poll", repr(text), f"+{wait}s", "options=" + str(len(opts)),
+                   "first=" + repr(opts[0]["text"][:40]))
+            return opts
+    opts = _collect_visible_options(page)
+    _trace("poll", repr(text), "final", "options=" + str(len(opts)))
+    return opts
+
+
+def _click_option(page, best):
+    """Click escalation: id-locator → text-locator → RE-VERIFIED coordinate
+    (rect re-read immediately before the click — stale coordinates from a
+    scrolled menu are the 'clicked mid-text' bug)."""
+    if best.get("id"):
+        try:
+            page.locator(f'[id="{best["id"]}"]').click(force=True, timeout=3000)
+            time.sleep(0.3)
+            _trace("click", "by-id", best.get("text", "")[:40])
+            return True
+        except Exception:
+            pass
+    text = best.get("text", "")
+    if text:
+        try:
+            page.locator(f'[role="option"]:has-text("{text}")').first.click(
+                force=True, timeout=2000)
+            time.sleep(0.3)
+            _trace("click", "by-text", text[:40])
+            return True
+        except Exception:
+            pass
+    if best.get("x") and best.get("y"):
+        # Re-read the element rect right now; only click when it is still
+        # in the viewport and roughly where we collected it.
+        try:
+            fresh = page.evaluate("""(text) => {
+                const opts = document.querySelectorAll('[role="option"]');
+                for (const o of opts) {
+                    if (o.offsetParent === null) continue;
+                    if ((o.textContent || '').trim().startsWith(text)) {
+                        const r = o.getBoundingClientRect();
+                        return {x: Math.round(r.x + r.width / 2),
+                                y: Math.round(r.y + r.height / 2),
+                                visible: r.width > 0 && r.height > 0};
+                    }
+                }
+                return null;
+            }""", text[:40])
+            if fresh and fresh.get("visible"):
+                page.mouse.click(fresh["x"], fresh["y"])
+                time.sleep(0.3)
+                _trace("click", "by-coord", text[:40])
+                return True
+        except Exception:
+            pass
+        _trace("click", "coord-skipped (stale)", text[:40])
+    return False
+
+
+def _verify(page, sel, ans, candidates):
+    """True=selection verified, False=provably wrong, None=unverifiable.
+
+    Verdicts use the SAME shared scoring that selected the option. Reads
+    MULTIPLE sources: the DOM readers, the input's own value (react-select
+    stores the label there), and the value-container's text — a reader can
+    grab the wrong fragment ("Canada +1" → "+1")."""
+    from apply.common.match import scoring_candidates as _msc
+    cnorms = _msc(candidates)
+    values = []
+    try:
+        from apply.common.value_reader import (AriaComboboxReader,
+                                               ReactSelectReader,
+                                               FuzzyComboboxReader)
+        ans_l = str(ans).lower().strip()
+        for reader in (AriaComboboxReader(), ReactSelectReader(), FuzzyComboboxReader()):
+            v = reader.read(page, sel, ans=ans_l)
+            _trace("verify", reader.name, "read=" + repr(str(v)[:40]))
+            if v:
+                values.append(str(v))
+    except Exception as e:
+        _trace("verify", "readers-error", str(e)[:80])
+    try:
+        iv = page.evaluate(f"document.querySelector({json.dumps(sel)})?.value || ''")
+        if iv:
+            values.append(str(iv))
+            _trace("verify", "input_value", repr(iv[:40]))
+    except Exception:
+        pass
+    try:
+        vc = page.evaluate("""(sel) => {
+            const el = document.querySelector(sel);
+            const scope = el ? (el.closest('.select__value-container')
+                                || el.closest('.select__control')) : null;
+            if (!scope) return '';
+            const parts = Array.from(scope.querySelectorAll('.select__single-value'))
+                .map(s => (s.textContent || '').trim()).filter(Boolean);
+            const joined = parts.join(' ');
+            // The full label ("Canada +1") can live in raw textContent while
+            // only a fragment ("+1") renders as a single-value span — take
+            // whichever is more informative.
+            const all = (scope.textContent || '').trim().slice(0, 120);
+            return joined.length >= all.length ? joined : all;
+        }""", sel)
+        if vc:
+            values.append(str(vc))
+            _trace("verify", "value_container", repr(vc[:40]))
+    except Exception:
+        pass
+    if not values:
+        _trace("verify", "verdict=None (nothing readable)")
+        return None
+    for v in values:
+        if _score_option(v, cnorms) >= 2:
+            _trace("verify", "verdict=True", repr(v[:40]))
+            return True
+    # A read with NO alphabetic characters ("+1", "★") is a FRAGMENT of
+    # the selection (intl-tel flag+code badges never render the country
+    # name), not a verdict — treat as unverifiable so a well-scored click
+    # is accepted with a flag for check to arbitrate. Real words ("No")
+    # stay provably-wrong.
+    if all(not re.search(r"[a-z]", str(v).lower()) for v in values):
+        _trace("verify", "fragment-only reads — unverifiable", repr(values[0][:40]))
+        return None
+    _trace("verify", "verdict=False (readable but no match)",
+           repr(values[0][:40]))
+    return False
+
+
+def _try_click_best(page, sel, ans, opts, candidates):
+    """Try options in score order (top-4), clicking and verifying each.
+    Returns (True, option, verdict) on verified/accepted selection;
+    (False, None, None) when nothing is confident or every click is
+    provably wrong. verdict: True verified / None accepted-unverified."""
+    from apply.common.match import scoring_candidates as _msc
+    cnorms = _msc(candidates)
+    scored = sorted(
+        (dict(o, score=_score_option(o.get("text", ""), cnorms)) for o in opts),
+        key=lambda o: o["score"], reverse=True)
+    if not scored or scored[0]["score"] < 2:
+        return False, None, None
+    margin_ok = len(scored) < 2 or (scored[0]["score"] - scored[1]["score"]) >= 1
+    if not margin_ok:
+        return False, None, None
+    for cand in scored[:4]:
+        if cand["score"] < 2:
+            break
+        if _click_option(page, cand):
+            time.sleep(0.5)
+            v = _verify(page, sel, ans, candidates)
+            if v is False:
+                continue  # provably wrong — try the next best
+            return True, cand, v
+    return False, None, None
+
+
+def fill(page, f, ans, time_budget=25.0):
+    """Fill a combobox/dropdown widget. Returns True when a selection was
+    made (verified or accepted-unverifiable). Records the failure stage
+    in f['_diag'] for the audit log. time_budget bounds the per-field
+    protocol so a stuck widget can't stall the job."""
+    sel = f.get("_sel", "")
+    diag = {"method": "combobox"}
+    t0 = time.time()
+
+    def _over_budget():
+        return time.time() - t0 > time_budget
+
+    if not sel:
+        diag["reason"] = "no_selector"
+        f["_diag"] = diag
+        return False
+    url_before = page.url
+    try:
+        el = page.locator(sel)
+        if not el.count():
+            diag["reason"] = "element_missing"
+            f["_diag"] = diag
+            return False
+
+        _close_menu(page)
+        opened = _open_menu(page, sel)
+        typeahead = False
+        if not opened:
+            # Typeahead class (Location/City autocompletes): the menu only
+            # appears AFTER typing — proceed without an open menu.
+            try:
+                typeahead = bool(page.evaluate("""(sel) => {
+                    const input = document.querySelector(sel);
+                    if (!input) return false;
+                    const ac = input.getAttribute('aria-autocomplete');
+                    const owns = input.getAttribute('aria-controls') || input.getAttribute('aria-owns');
+                    return !!(ac && !owns);
+                }""", sel))
+            except Exception:
+                pass
+            if not typeahead:
+                diag["reason"] = "menu_closed"
+                f["_diag"] = diag
+                return False
+            diag["typeahead"] = True
+
+        candidates = _typing_candidates(ans)
+        typed_seen = 0
+        for cand in candidates[:3]:
+            if _over_budget():
+                diag["reason"] = "slow"
+                diag["detail"] = "per-field time budget exceeded"
+                f["_diag"] = diag
+                return False
+            opts = _type_and_poll(page, sel, cand)
+            typed_seen += len(opts)
+            if opts:
+                ok, picked, verdict = _try_click_best(page, sel, ans, opts, candidates)
+                if ok:
+                    diag["reason"] = "typed_match"
+                    diag["after"] = picked["text"][:60]
+                    if verdict is None:
+                        diag["unverified"] = True
+                    f["_diag"] = diag
+                    return True
+
+        # Unfiltered fallback: clear, reopen, score the FULL list.
+        if _over_budget():
+            diag["reason"] = "slow"
+            diag["detail"] = "per-field time budget exceeded before unfiltered pass"
+            f["_diag"] = diag
+            return False
+        _close_menu(page)
+        if _open_menu(page, sel):
+            opts = _collect_with_scroll(page, sel)
+            ok, picked, verdict = _try_click_best(page, sel, ans, opts, candidates)
+            if ok:
+                diag["reason"] = "unfiltered_match"
+                diag["after"] = picked["text"][:60]
+                if verdict is None:
+                    diag["unverified"] = True
+                f["_diag"] = diag
+                return True
+
+        diag["reason"] = "no_option_match"
+        diag["typed_options"] = typed_seen
+        diag["options_seen"] = len(_collect_visible_options(page))
+        diag["candidates"] = candidates[:3]
+        # Evidence for the orchestrator: the top-scoring options.
+        try:
+            opts = _collect_visible_options(page)
+            cnorms = [_norm(c) for c in candidates]
+            top = sorted(
+                ({"text": o["text"][:60], "score": _score_option(o["text"], cnorms)}
+                 for o in opts), key=lambda x: x["score"], reverse=True)[:3]
+            diag["top_options"] = top
+        except Exception:
+            pass
+        f["_diag"] = diag
+    except Exception as e:
+        f["_diag"] = {"method": "combobox", "reason": "exception",
+                      "detail": str(e)[:120]}
+
+    # Clear leftover typed text on failure (never wipes a success).
+    _clear_input(page, sel)
     if page.url != url_before:
         try:
             page.goto(url_before, wait_until="domcontentloaded", timeout=15000)
