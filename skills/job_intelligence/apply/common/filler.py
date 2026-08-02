@@ -61,7 +61,9 @@ def _read_element_value(page, sel, ans=None, field=None):
 
 
 def _check_delta(before, after, ans, label, field=None):
-    """True if the value changed meaningfully."""
+    """(True, '') if the value changed meaningfully, else (False, reason)
+    where reason is the diagnostic tag (truncated / unchanged / still_empty
+    / cleared / wrong_option / verify_failed) for the audit log."""
     if isinstance(ans, list):
         ans = ", ".join(str(v) for v in ans)
     elif ans is not None:
@@ -81,7 +83,7 @@ def _check_delta(before, after, ans, label, field=None):
         ans_l = ans.lower().strip()
         after_l = (after or "").lower().strip()
         if after_l and (after_l == ans_l or ans_l in after_l or after_l in ans_l):
-            return True
+            return True, ""
         if after_l in ("yes", "no") and ans_l.startswith(("yes", "no")):
             return True
         # Yes/No answer with full-sentence option text: check by negation.
@@ -91,14 +93,14 @@ def _check_delta(before, after, ans, label, field=None):
             import re as _re
             _neg = bool(_re.search(r'\b(not|dont|don\'t|never|unable|cannot|can\'t)\b', after_l))
             if (ans_l == "yes" and not _neg) or (ans_l == "no" and _neg):
-                return True
+                return True, ""
         if after_l and after_l != before:
             emit_diag(label, ans, after, "wrong_option", "clicked option does not match answer")
-            return False
+            return False, "wrong_option"
     if after and after != before and after != ans:
-        return True
+        return True, ""
     if after and ans and (after == ans or ans in after or after in ans):
-        return True
+        return True, ""
     # Postal/zip: strip spaces from both sides before comparing
     # (text.py strips spaces from postal values; verification sees
     # the original value with space still in ans).
@@ -107,17 +109,18 @@ def _check_delta(before, after, ans, label, field=None):
         clean_a = after.replace(" ", "")
         clean_ans = ans.replace(" ", "")
         if clean_a == clean_ans or clean_ans in clean_a or clean_a in clean_ans:
-            return True
+            return True, ""
     if after == before and label:
         if before:
             emit_diag(label, ans, before, "unchanged", "ATS may have rejected the value")
+            return False, "unchanged"
         else:
             emit_diag(label, ans, "(empty)", "still_empty", "ATS silently rejected value")
-        return False
+            return False, "still_empty"
     if not after and before:
         emit_diag(label, ans, "(empty)", "cleared", "ATS silently reset the value")
-        return False
-    return True
+        return False, "cleared"
+    return True, ""
 
 
 # ─── Filler ABC ───────────────────────────────────────────────────────
@@ -140,21 +143,26 @@ class CheckboxFiller(FieldFiller):
     name = "checkbox"
 
     def can_handle(self, f):
+        # Any real checkbox with an explicit resolved answer (yes/no/true/
+        # false) is handled. The label-consent restriction lives at the
+        # ANSWER level (JI_AUTO_CONSENT only auto-fills consent-labeled
+        # checkboxes) — an explicit answer is always safe to apply.
         return f["tag"] == "INPUT" and f.get("type") == "checkbox"
 
     def fill(self, page, f, ans):
-        lbl = (f.get("label") or "").lower()
-        if not any(kw in lbl for kw in ["agree", "consent", "accept", "terms", "confirm",
-                                        "understand", "authorize", "certify", "marketing",
-                                        "privacy", "notice", "future job", "updates"]):
-            return False
         sel = f.get("_sel", "")
         try:
             cb = page.locator(sel)
-            if cb.count() and not cb.is_checked():
+            if not cb.count():
+                return False
+            want_checked = str(ans).strip().lower() in ("true", "1", "yes", "y", "checked")
+            if want_checked and not cb.is_checked():
                 cb.check(force=True)
                 return True
-            return True
+            if not want_checked and cb.is_checked():
+                cb.uncheck(force=True)
+                return True
+            return True  # already in the desired state
         except Exception:
             return False
 
@@ -489,7 +497,7 @@ class FileFiller(FieldFiller):
             pass
         # Fallback: intercept file chooser (SPA upload button pattern)
         from apply.act.helpers import _try_filechooser_upload
-        return _try_filechooser_upload(page, f.get("label", ""), path)
+        return _try_filechooser_upload(page, f.get("label", ""), path, sel=sel)
 
 
 class AutocompleteFiller(FieldFiller):
@@ -691,9 +699,9 @@ class NativeSetterFallback(FieldFiller):
 # ─── Filler registry (order matters) ──────────────────────────────────
 
 _FILLERS = [
-    CheckboxFiller(),
     RadioFiller(),
     AshbyYesNoFiller(),
+    CheckboxFiller(),
     FileFiller(),
     SelectFiller(),
     ComboboxFiller(),
@@ -759,8 +767,11 @@ def fill_field(page, field: dict, ans: str) -> tuple[bool, str]:
         if filler.can_handle(field):
             if filler.fill(fr, field, ans):
                 aft = _read_element_value(page, sel, ans=ans, field=field)
-                if _check_delta(before, aft, ans, label, field):
+                ok, delta_reason = _check_delta(before, aft, ans, label, field)
+                if ok:
                     return True, filler.name
+                field["_diag"] = {"method": filler.name, "reason": delta_reason,
+                                  "before": before, "after": aft}
 
     # Primary chain failed — try text fallback
     if _try_text_fallback(fr, field, ans, sel):
@@ -773,5 +784,8 @@ def fill_field(page, field: dict, ans: str) -> tuple[bool, str]:
             return True, "text_fallback"
         if ans_s and aft2 and (aft2 == ans_s or ans_s in aft2 or aft2 in ans_s):
             return True, "text_fallback"
+        if aft2:
+            field.setdefault("_diag", {})["after"] = aft2
 
+    field.setdefault("_diag", {})["reason"] = field["_diag"].get("reason") or "no_filler"
     return False, "none"

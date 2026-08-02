@@ -24,6 +24,32 @@ os.environ.setdefault("JI_CAPTCHA_TIMEOUT", "60")
 LOG_PATH = os.path.join(JI_HOME, "state", "shadow_run.jsonl")
 
 
+class _Tee:
+    """Duplicate stderr to a transcript file so DIAG lines (fill failures,
+    truncations, rejected values) are retrievable after the run."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            try:
+                s.write(data)
+            except Exception:
+                pass
+
+    def flush(self):
+        for s in self.streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+
+_TRANSCRIPT = os.path.join(JI_HOME, "state",
+                           f"shadow_transcript_{time.strftime('%Y%m%d_%H%M%S')}.log")
+
+
 def _load_done():
     done = {}
     if os.path.exists(LOG_PATH):
@@ -46,6 +72,11 @@ def _append(rec):
 def run(jids=None, limit=None, quick=False):
     from lib.db import get_jobs_by_stage
     from apply.auto import _process_one
+
+    os.makedirs(os.path.dirname(_TRANSCRIPT), exist_ok=True)
+    _tf = open(_TRANSCRIPT, "w", encoding="utf-8")
+    sys.stderr = _Tee(sys.stderr, _tf)
+    print(f"TRANSCRIPT: {_TRANSCRIPT}", file=sys.stderr)
 
     if jids:
         from lib.db import get_job

@@ -31,7 +31,7 @@ from .db import (
     company_search, event_list, contact_list,
     desc_get, app_list, app_get,
 )
-from .config import STATE_PATH, REGISTRY_PATH, atomic_write_json
+from .config import STATE_PATH, REGISTRY_PATH, RESULTS_DIR, atomic_write_json
 
 
 def cmd_shell():
@@ -435,6 +435,108 @@ def cmd_archive():
         print("No stale entries.", file=sys.stderr)
 
 
+def cmd_shadow():
+    """Aggregate the shadow-run log (apply.py shadow) into an actionable
+    review: outcome counts, per-job lines with check errors, and links to
+    the saved inspect artifacts."""
+    import os
+    from .config import JI_HOME
+    log = os.path.join(JI_HOME, "state", "shadow_run.jsonl")
+    if not os.path.exists(log):
+        print("No shadow log yet — run 'apply.py shadow' first.", file=sys.stderr)
+        return
+    recs = []
+    for line in open(log, encoding="utf-8"):
+        try:
+            recs.append(json.loads(line))
+        except Exception:
+            continue
+    if not recs:
+        print("Shadow log is empty.", file=sys.stderr)
+        return
+
+    from collections import Counter
+    outcomes = Counter(r.get("outcome", "?") for r in recs)
+    print(f"SHADOW RUNS: {len(recs)} job record(s)")
+    print(f"  {', '.join(f'{k}={v}' for k, v in outcomes.most_common())}")
+    print()
+
+    order = ["held_shadow", "already_applied", "skipped", "stopped", "exception", "submitted"]
+    shots = os.path.join(JI_HOME, "screenshots")
+    for kind in order:
+        group = [r for r in recs if r.get("outcome") == kind]
+        if not group:
+            continue
+        label = {"held_shadow": "READY TO SUBMIT (fill+check OK)",
+                 "already_applied": "ALREADY APPLIED",
+                 "skipped": "SKIPPED (login/captcha/expired)",
+                 "stopped": "NEEDS REVIEW",
+                 "exception": "EXCEPTION",
+                 "submitted": "SUBMITTED (unexpected in shadow)"}[kind]
+        print(f"== {label} ({len(group)}) " + "=" * 40)
+        for r in sorted(group, key=lambda x: x.get("ts", "")):
+            jid = r.get("jid", "?")
+            detail = r.get("detail", "")[:90]
+            line = f"  {jid[:12]} {r.get('title', '?')[:38]:38s} {r.get('secs', '?')}s {detail}"
+            print(line)
+            for e in (r.get("check_errors") or [])[:4]:
+                print(f"      ! {e.get('label', '?')[:50]} — {e.get('reason', '')[:60]}")
+            art = os.path.join(shots, f"inspect_inspect_{jid}.jpg")
+            if os.path.exists(art):
+                print(f"      inspect: {art}")
+        print()
+
+    # Actionable next steps
+    print("NEXT:")
+    stopped = [r for r in recs if r.get("outcome") == "stopped"]
+    held = outcomes.get("held_shadow", 0)
+    if held:
+        print(f"  - {held} job(s) passed fill+check — run live submits when ready")
+    if stopped:
+        print(f"  - {len(stopped)} job(s) need review (check errors above; fix with "
+              f"apply act --fill <jid> --answers '{{...}}' then re-run shadow)")
+    print("  - Re-run: python apply.py shadow  (skips already-recorded jobs)")
+
+
+def cmd_audit(jid):
+    """Show the per-field fill attempt log for a job — including WHAT was
+    attempted, the selector, the filler method, and the before/after DOM
+    values when the ATS wiped or rejected the value."""
+    import os
+    path = os.path.join(RESULTS_DIR, str(jid), "apply_audit.jsonl")
+    if not os.path.exists(path):
+        print(f"No audit log for {jid} (no fill attempts recorded).", file=sys.stderr)
+        return
+    n = 0
+    for line in open(path, encoding="utf-8"):
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if rec.get("kind") != "field":
+            continue
+        n += 1
+        state = "OK " if rec.get("filled") else "FAIL"
+        reason = rec.get("reason") or ""
+        method = rec.get("method") or ""
+        if reason and method:
+            why = f" [{reason} via {method}]"
+        elif reason:
+            why = f" [{reason}]"
+        else:
+            why = ""
+        print(f"{state} {rec.get('ts', '')[:19]} {rec.get('label', '?')[:44]:44s} "
+              f"{rec.get('value', '')[:36]:36s}{why}")
+        sel = rec.get("selector") or ""
+        if sel:
+            print(f"     sel={sel[:90]}")
+        before, after = rec.get("before", ""), rec.get("after", "")
+        if before or after:
+            print(f"     before={before[:60]!r} after={after[:60]!r}")
+    if not n:
+        print(f"No field records in {path}", file=sys.stderr)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -494,6 +596,13 @@ def main():
             if i + 1 < len(args):
                 lim = int(args[i + 1])
         cmd_outreach(limit=lim)
+    elif cmd == "audit":
+        if not args:
+            print("Usage: python3 report.py audit <jid>", file=sys.stderr)
+            sys.exit(1)
+        cmd_audit(args[0])
+    elif cmd == "shadow":
+        cmd_shadow()
     elif cmd == "archive":
         cmd_archive()
     else:

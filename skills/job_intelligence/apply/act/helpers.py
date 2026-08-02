@@ -221,6 +221,13 @@ def _probe_form(page, reg, jid, allow_vision=True):
                 except Exception:
                     pass
         if _click_apply_button(page):
+            # The click may trigger a navigation (SSO redirect, lazy
+            # apply link) — settle before probing so the JS context
+            # isn't destroyed mid-evaluate.
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
             time.sleep(2)
             pr2 = _insp.probe(page, registry_config=reg, jid=jid)
             pr2.fields = [f for f in (pr2.fields or []) if not _is_junk_field(f)]
@@ -248,12 +255,14 @@ def _set_files_any_frame(page, sel, path):
     return False
 
 
-def _try_filechooser_upload(page, label, path):
+def _try_filechooser_upload(page, label, path, sel=""):
     """Fallback: intercept file chooser dialog when SPA apps (Ashby,
     Greenhouse) use an upload button instead of a visible <input type=file>.
 
     Clicks the upload button, intercepts the native file chooser, and
-    sets the file programmatically. Returns True on success."""
+    sets the file programmatically. Returns True on success.
+    `sel` is the field's own selector (dropzone div/button) — clicked
+    first when given, since dropzones open the chooser on click."""
     lc = (label or "").lower()
     upload_kws = []
     if "resume" in lc or re.search(r'\bcv\b', lc):
@@ -262,6 +271,9 @@ def _try_filechooser_upload(page, label, path):
         upload_kws = ["cover", "cover letter", "attach cover", "upload cover"]
     else:
         upload_kws = ["upload", "attach", "browse"]
+    targets = []
+    if sel:
+        targets.append(sel)
     for kw in upload_kws:
         for selector in [
             f'button:has-text("{kw}")',
@@ -269,20 +281,22 @@ def _try_filechooser_upload(page, label, path):
             f'[role="button"]:has-text("{kw}")',
             f'label:has-text("{kw}")',
         ]:
-            try:
-                btn = page.locator(selector).first
-                if btn.count() == 0:
-                    continue
-                with page.expect_file_chooser(timeout=5000) as fc_info:
-                    try:
-                        btn.click(timeout=3000)
-                    except Exception:
-                        btn.click(force=True, timeout=3000)
-                fc = fc_info.value
-                fc.set_files(path)
-                return True
-            except Exception:
+            targets.append(selector)
+    for target in targets:
+        try:
+            btn = page.locator(target).first
+            if btn.count() == 0:
                 continue
+            with page.expect_file_chooser(timeout=5000) as fc_info:
+                try:
+                    btn.click(timeout=3000)
+                except Exception:
+                    btn.click(force=True, timeout=3000)
+            fc = fc_info.value
+            fc.set_files(path)
+            return True
+        except Exception:
+            continue
     return False
 
 
@@ -496,6 +510,42 @@ def _is_consent_field(f):
     return any(kw in lbl for kw in _CONSENT_KW)
 
 
+def _is_upload_field(f):
+    """True if a field takes the file-upload path: a real <input
+    type=file> (or accept attr), a dropzone widget (div/button with a
+    resume/cv/cover label), or a text input whose label says upload/
+    attach/drop + resume/cv/cover (hybrid custom uploaders).
+
+    Deliberately EXCLUDES textareas and plain text inputs that merely
+    mention 'cover letter' — they must go through the normal resolve,
+    otherwise the bare input[type=file] fallback can overwrite the
+    resume with the cover letter."""
+    tag = (f.get("tag") or "").lower()
+    ftype = (f.get("type") or "").lower()
+    lc = (f.get("label") or "").lower()
+    if tag == "input" and (f.get("accept") or ftype == "file"):
+        return True
+    if tag == "textarea":
+        return False
+    _uploader_label = "resume" in lc or re.search(r"\bcv\b", lc) or "cover" in lc
+    if tag in ("div", "button"):
+        return _uploader_label
+    if tag == "input" and ("upload" in lc or "attach" in lc or "drop" in lc):
+        return _uploader_label
+    return False
+
+
+def _file_path_for(label, f, resume_path, cover_path):
+    """Decide which file (resume vs cover) belongs to a file field.
+
+    'cover' wins only when the label/id/name says cover AND NOT resume/cv;
+    everything else (including combined labels) is the resume."""
+    lc = (label or "").lower()
+    ident = f"{lc} {(f.get('id') or '').lower()} {(f.get('name') or '').lower()}"
+    is_cover = "cover" in ident and "resume" not in ident and not re.search(r"\bcv\b", ident)
+    return cover_path if is_cover else resume_path
+
+
 def _fill_with_playwright(page, fields, profile, answers_override,
                           filled_keys=None) -> tuple[list[dict], list[dict]]:
     from apply.strategies.dispatch import field_deterministic
@@ -557,12 +607,8 @@ def _fill_with_playwright(page, fields, profile, answers_override,
 
         tag = (f.get("tag") or "").lower()
         ftype = (f.get("type") or "").lower()
-        lc = label.lower()
-        _is_file_field = (tag == "input" and (f.get("accept") or ftype == "file"))
-        _has_resume_kw = "resume" in lc or re.search(r'\bcv\b', lc) or "cover letter" in lc or "cover_letter" in lc
-        if _is_file_field or _has_resume_kw:
-            ident = f"{lc} {(f.get('id') or '').lower()} {(f.get('name') or '').lower()}"
-            path = cover_path if "cover" in ident else resume_path
+        if _is_upload_field(f):
+            path = _file_path_for(label, f, resume_path, cover_path)
             if path and os.path.exists(path):
                 try:
                     sel = f.get("_sel") or f.get("selector") or ""
@@ -572,17 +618,26 @@ def _fill_with_playwright(page, fields, profile, answers_override,
                     if sel and _set_files_any_frame(page, sel, path):
                         filled.append({"label": label, "key": _field_key(f)})
                         continue
+                    is_cover = bool(cover_path) and path == cover_path
+                    kw = "cover" if is_cover else "resume"
                     fallbacks = [
-                        'input[type=file][id*="resume"]',
+                        f'input[type=file][id*="{kw}"]',
+                        f'input[type=file][name*="{kw}"]',
                         'input[type=file][accept*="pdf"]',
-                        'input[type=file]',
+                        'input[type=file][accept*="doc"]',
                     ]
+                    # The bare input[type=file] fallback is dangerous — it
+                    # matches ANY file input, so it can overwrite the
+                    # resume with a cover. Only the PRIMARY (resume) field
+                    # may use it.
+                    if not is_cover:
+                        fallbacks.append('input[type=file]')
                     for fb in fallbacks:
                         if _set_files_any_frame(page, fb, path):
                             filled.append({"label": label, "key": _field_key(f)})
                             break
                     else:
-                        if _try_filechooser_upload(page, label, path):
+                        if _try_filechooser_upload(page, label, path, sel=sel):
                             filled.append({"label": label, "key": _field_key(f)})
                         else:
                             print(f"  UPLOAD_FAIL: {label}", file=sys.stderr)
@@ -626,14 +681,33 @@ def _fill_with_playwright(page, fields, profile, answers_override,
                     learn_mapping(label, ans)
                 if jid:
                     from apply.common.audit import log_field
-                    log_field(jid, label, str(ans), res.provenance, filled=True)
+                    log_field(jid, label, str(ans), res.provenance, filled=True,
+                              selector=sel)
             else:
                 failed.append({**f, "_why": "fill_failed", "attempted": str(ans)[:50]})
                 if jid:
                     from apply.common.audit import log_field
-                    log_field(jid, label, str(ans), res.provenance, filled=False, reason="fill_failed")
+                    _diag = f.get("_diag") or {}
+                    log_field(jid, label, str(ans), res.provenance, filled=False,
+                              reason=_diag.get("reason") or "fill_failed",
+                              selector=sel,
+                              method=_diag.get("method", ""),
+                              before=_diag.get("before", ""),
+                              after=_diag.get("after", ""))
         except Exception:
             failed.append({**f, "_why": "fill_failed", "attempted": str(ans)[:50]})
+            if jid:
+                try:
+                    from apply.common.audit import log_field
+                    _diag = f.get("_diag") or {}
+                    log_field(jid, label, str(ans), res.provenance, filled=False,
+                              reason=_diag.get("reason") or "exception",
+                              selector=f.get("_sel") or f.get("selector") or "",
+                              method=_diag.get("method", ""),
+                              before=_diag.get("before", ""),
+                              after=_diag.get("after", ""))
+                except Exception:
+                    pass
 
     return filled, failed
 

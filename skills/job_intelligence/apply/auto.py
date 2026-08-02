@@ -245,7 +245,8 @@ def _process_one(jid, job, quick, max_pages, results):
                     advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
                 results["skipped"].append((jid, "no apply path (expired)"))
                 return
-            if st.get("status") in ("login_required", "login_failed"):
+            if st.get("status") in ("login_required", "login_failed",
+                                    "captcha_required", "timed_out"):
                 results["skipped"].append((jid, f"fill failed: {st.get('status')}"))
                 return
             print("  FILL_FAILED — inspecting...", file=sys.stderr)

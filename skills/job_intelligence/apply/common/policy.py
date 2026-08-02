@@ -28,6 +28,11 @@ _DEFAULTS = {
     "use_mappings": False,
     "enforce_validation": False,
     "gate_submit": False,
+    # Batch-bounding controls: skip-and-flag CAPTCHAs instead of blocking
+    # the run on a human solve, and abort per-job after N seconds
+    # (recorded as captcha_required / timed_out — both resumable).
+    "captcha_skip": False,
+    "job_timeout_sec": 0,
 }
 
 

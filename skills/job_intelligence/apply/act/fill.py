@@ -156,6 +156,28 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
     from apply.common.registry import resolve as resolve_registry
 
+    # Per-job time budget (policy job_timeout_sec; 0 = unlimited).
+    # Checked at loop boundaries so a stuck page can't stall a batch.
+    deadline = 0.0
+    try:
+        from apply.common.policy import load_policy as _load_pol
+        _tmo = int(_load_pol().get("job_timeout_sec") or 0)
+        if _tmo > 0:
+            deadline = time.time() + _tmo
+    except Exception:
+        pass
+
+    def _expired():
+        return deadline and time.time() > deadline
+
+    def _abort_timed_out():
+        if _expired():
+            emit_status("timed_out", "job_timeout_sec exceeded — aborting (resumable)")
+            state["status"] = "timed_out"
+            save_state(state)
+            return True
+        return False
+
     filled_all, failed_all = [], []
     filled_keys = set()
     field_total = 0
@@ -166,8 +188,10 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             time.sleep(2)
 
-            if handle_captcha(page, state):
+            if handle_captcha(page, state, wait_s=None if not deadline else max(0, int(deadline - time.time()))):
                 emit_status("captcha", "CAPTCHA still present after timeout")
+                state["status"] = "captcha_required"
+                save_state(state)
                 return 1
 
             if _host(page.url) and _host(url) and _host(page.url) != _host(url):
@@ -342,6 +366,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
             seen = set()
             for page_num in range(1, max_pages + 1):
+                if _abort_timed_out():
+                    return 1
                 # Edge 1: dismiss any confirmed popups before probing —
                 # mid-fill "Please confirm your email" / "Are you sure?"
                 # modals click-intercept form fields otherwise.
@@ -364,6 +390,21 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                     state["external_url"] = page.url
                     url = page.url
                 fields = pr.fields or []
+
+                # ── History/education entry rows from resume.json ──
+                # Greenhouse-style forms render generic labels (Company
+                # name, Title, Start date month...) that no profile key
+                # matches. The tailored resume.json has the answers —
+                # merge them as gap-fill (existing --answers win).
+                if jid:
+                    try:
+                        from apply.act.history import _merge_history_answers
+                        hist = _merge_history_answers(fields, jid)
+                        if hist:
+                            for _hk, _hv in hist.items():
+                                answers.setdefault(_hk, _hv)
+                    except Exception:
+                        pass
 
                 # ── Value validation cascade ──────────────────────────
                 # Level 1: cheap code checks (validate.py) on ALL fields.
@@ -472,8 +513,10 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         time.sleep(1)
                 else:
                     _wait_for_fields(page, timeout=5)
-                if handle_captcha(page, state):
+                if handle_captcha(page, state, wait_s=None if not deadline else max(0, int(deadline - time.time()))):
                     emit_status("captcha", "CAPTCHA during multi-page navigation")
+                    state["status"] = "captcha_required"
+                    save_state(state)
                     return 1
                 handle_session_timeout(page)
 
@@ -483,6 +526,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             # newly-revealed fields that weren't in the original set.
             # Limited to 2 sweeps to avoid infinite loops on dynamic forms.
             for sweep in range(2):
+                if _abort_timed_out():
+                    return 1
                 time.sleep(1)
                 # Dismiss popups that may have appeared from previous
                 # control clicks (radio/select can trigger helper modals).
@@ -574,9 +619,9 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     ]
     state["skipped_fields"] = [r["label"] for r in skipped]
     # Persist the effective answers used this run so `act --check` can
-    # verify the DOM against them (LLM key-mapped --answers are ephemeral
-    # and would otherwise be invisible to the pre-submit check).
-    state["fill_answers"] = dict(ans_dict)
+    # verify the DOM against them (LLM key-mapped --answers and history
+    # entries are ephemeral and would otherwise be invisible to it).
+    state["fill_answers"] = {**dict(ans_dict), **dict(answers)}
     if not (skyvern_result and skyvern_result.get("run_id")):
         state.pop("fill_run_id", None)
         state.pop("fill_run_started", None)
@@ -852,16 +897,39 @@ def _handle_login_wall(page, jid, quick):
                     pass
                 print(f"  ACCOUNT_CREATED: {defaults['email']} @ {domain} — creds saved (also added to shared pool)", file=sys.stderr)
                 return ""
-            else:
-                print(f"  CREATE_FAIL: account creation rejected ({create_result})", file=sys.stderr)
-                try:
-                    for _e in _get_validation_errors(page)[:6]:
-                        print(f"    ! {_e[:110]}", file=sys.stderr)
-                except Exception:
-                    pass
-                emit_status("login_required", f"account creation rejected at {domain}")
-                emit_next("login", f"domain={domain} jid={jid} — create account manually, then 'apply.py creds set {domain} {defaults.get('email','<email>')}'")
-                return "login_required"
+            if create_result == "exists":
+                # Email already registered — try signing in with the
+                # generated password and any shared candidates before
+                # handing off to the manual step.
+                print(f"  ACCOUNT_EXISTS: {defaults['email']} @ {domain} — trying sign-in with known passwords", file=sys.stderr)
+                _re_open_signin_form(page)
+                signin_tried = [new_pw] + list(get_shared_passwords())
+                for pw in signin_tried:
+                    _fill_signin_form(page, defaults["email"], pw)
+                    time.sleep(4)
+                    r = _login_check(page)
+                    if r == "yes":
+                        save_creds(domain, defaults["email"], pw)
+                        print(f"  LOGIN: OK on existing account (password matched known pool)", file=sys.stderr)
+                        return ""
+                    if r == "2fa":
+                        save_creds(domain, defaults["email"], pw)
+                        emit_status("2fa_required",
+                                    f"domain={domain} credentials accepted — "
+                                    "complete 2FA manually then rerun")
+                        emit_next("login", f"domain={domain} jid={jid}")
+                        return "2fa_required"
+                    _re_open_signin_form(page)
+                print(f"  ACCOUNT_EXISTS: no known password works — create/reset manually", file=sys.stderr)
+            print(f"  CREATE_FAIL: account creation rejected ({create_result})", file=sys.stderr)
+            try:
+                for _e in _get_validation_errors(page)[:6]:
+                    print(f"    ! {_e[:110]}", file=sys.stderr)
+            except Exception:
+                pass
+            emit_status("login_required", f"account creation rejected at {domain}")
+            emit_next("login", f"domain={domain} jid={jid} — create account manually, then 'apply.py creds set {domain} {defaults.get('email','<email>')}'")
+            return "login_required"
     except Exception as e:
         print(f"  CREATE_FAIL: {e}", file=sys.stderr)
     emit_status("login_required", f"account creation failed at {domain}")
@@ -872,7 +940,9 @@ def _handle_login_wall(page, jid, quick):
 def _check_account_created(page):
     """Heuristic: did account creation succeed?
 
-    Returns 'yes', 'no', or 'uncertain' — same protocol as _login_check.
+    Returns 'yes', 'no', 'exists', or 'uncertain' — same protocol as
+    _login_check. 'exists' means the email is already registered, so the
+    caller should attempt sign-in instead of create.
     """
     try:
         result = page.evaluate("""() => {
@@ -887,8 +957,12 @@ def _check_account_created(page):
             if (greetings.test(txt) && !createVisible) return 'yes';
             if (!createVisible && pws.length === 0) return 'yes';
 
+            // Account already registered — checked BEFORE generic errors
+            // (the generic list contains "email.*already" too).
+            if (/already (have|has|registered)|already exists|account.*already exists|email.*already|already in use|already used/i.test(txt)) return 'exists';
+
             // Failure indicators: validation errors
-            const errors = /password.*do not match|passwords.*match|password.*weak|password.*requirement|email.*already|account.*exists|please enter|missing|incomplete|invalid email|check the box|must contain|at least/im;
+            const errors = /password.*do not match|passwords.*match|password.*weak|password.*requirement|account.*exists|please enter|missing|incomplete|invalid email|check the box|must contain|at least/im;
             if (errors.test(txt)) return 'no';
 
             // Form still visible — could be loading

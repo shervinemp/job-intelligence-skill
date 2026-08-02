@@ -107,9 +107,11 @@ def _select_option(page, sel, ans, max_polls=10):
 def fill(page, f, ans):
     """Fill a combobox/dropdown widget. Returns True when a selection is made.
     Verification is handled by dispatch._element_value (combobox-aware reader
-    cascade), NOT here — checking here would kill non-react-select dropdowns."""
+    cascade), NOT here — checking here would kill non-react-select dropdowns.
+    On failure, f['_diag'] records the failure stage for the audit log."""
     sel = f.get("_sel", "")
     if not sel:
+        f["_diag"] = {"method": "combobox", "reason": "no_selector"}
         return False
     url_before = page.url
 
@@ -122,6 +124,7 @@ def fill(page, f, ans):
     try:
         el = page.locator(sel)
         if not el.count():
+            f["_diag"] = {"method": "combobox", "reason": "element_missing"}
             return False
         try:
             el.first.scroll_into_view_if_needed(timeout=2000)
@@ -144,8 +147,22 @@ def fill(page, f, ans):
         # Poll for visible options and click the best match
         if _select_option(page, sel, ans):
             return True
+        # Diagnose the failure stage for the audit log
+        try:
+            n_opts = page.evaluate("""() => {
+                let n = 0;
+                for (const o of document.querySelectorAll('[role="option"], li, [role="menuitem"]')) {
+                    if (o.offsetParent !== null) n++;
+                }
+                return n;
+            }""") or 0
+            f["_diag"] = {"method": "combobox",
+                          "reason": "no_option_match" if n_opts else "menu_closed",
+                          "after": type_text[:60]}
+        except Exception:
+            f["_diag"] = {"method": "combobox", "reason": "select_failed"}
     except Exception:
-        pass
+        f["_diag"] = {"method": "combobox", "reason": "exception"}
 
     # Clear leftover typed text on failure (not in finally — would wipe
     # a successful selection's input on some widgets)

@@ -54,7 +54,8 @@ def _write(jid, rec):
 
 
 def log_field(jid, label, value, provenance, category="generic", filled=True,
-              validated=None, page=None):
+              validated=None, page=None, reason=None, selector="", method="",
+              before="", after=""):
     _write(jid, {
         "kind": "field",
         "label": (label or "")[:80],
@@ -64,6 +65,15 @@ def log_field(jid, label, value, provenance, category="generic", filled=True,
         "filled": bool(filled),
         "validated": validated,  # True / False / None (not checked)
         "page": page,
+        # Fill-attempt telemetry: why it failed (truncated / unchanged /
+        # still_empty / wrong_option / verify_failed / fill_failed), which
+        # filler ran, and the DOM before/after — so a wiped value is
+        # reconstructable after the fact.
+        "reason": (reason or "")[:80],
+        "selector": (selector or "")[:120],
+        "method": (method or "")[:40],
+        "before": (before or "")[:120],
+        "after": (after or "")[:120],
     })
 
 

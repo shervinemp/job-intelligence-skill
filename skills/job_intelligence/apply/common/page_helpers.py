@@ -159,6 +159,16 @@ def wait_cloudflare(page, timeout=30):
 def handle_captcha(page, state, wait_s=None, poll_s=3):
     if not check_captcha(page):
         return False
+    # Policy skip: don't block a batch on a human solve — abort so the
+    # caller records captcha_required (resumable when a human is present).
+    try:
+        from apply.common.policy import load_policy
+        if load_policy().get("captcha_skip"):
+            print("  CAPTCHA_SKIP: policy captcha_skip=true — aborting this step",
+                  file=sys.stderr)
+            return True
+    except Exception:
+        pass
     # Cloudflare managed challenge auto-resolves — wait silently, don't alert
     if is_cloudflare_challenge(page):
         print("  Cloudflare challenge detected — waiting for auto-resolution...", file=sys.stderr)

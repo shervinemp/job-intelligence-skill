@@ -239,6 +239,8 @@ def cmd_submit(jid, confirm=False, force=False):
 
             if handle_captcha(page, state):
                 emit_status("captcha", "CAPTCHA still present after timeout")
+                state["status"] = "captcha_required"
+                save_state(state)
                 return 1
 
             # Pre-flight: check for already-applied signals on any ATS

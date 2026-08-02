@@ -33,6 +33,7 @@ def field_deterministic(page, f, ans):
         if not ok and reason != "empty":
             from apply.common.output import emit_diag
             emit_diag(f.get("label", ""), str(ans), "", "validation_skip", reason)
+            f["_diag"] = {"method": "validation", "reason": reason, "before": "", "after": ""}
             return False
 
     from apply.common.filler import fill_field

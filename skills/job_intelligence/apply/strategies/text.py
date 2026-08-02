@@ -102,6 +102,8 @@ def fill_text_field(page, f, ans, sel, el, method="fill"):
                 from apply.common.output import emit_diag
                 emit_diag(f.get("label", f.get("name", "?")), _orig_ans,
                           ans[:int(maxlen)], "truncated", f"maxlength={maxlen}")
+                f["_diag"] = {"method": method, "reason": "truncated",
+                              "before": "", "after": ans[:int(maxlen)]}
                 ans = ans[: int(maxlen)]
     except Exception:
         pass
@@ -127,6 +129,8 @@ def fill_text_field(page, f, ans, sel, el, method="fill"):
             emit_diag(f.get("label", f.get("name", "?")), ans,
                       current or "(empty)", "verify_failed",
                       f"method={method} maxlen={maxlen}")
+            f["_diag"] = {"method": method, "reason": "verify_failed",
+                          "before": "", "after": current or ""}
             native_setter(page, sel, ans)
             return _verify(el, ans)
     return ok

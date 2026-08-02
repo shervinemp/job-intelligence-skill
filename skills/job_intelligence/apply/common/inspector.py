@@ -624,10 +624,32 @@ def _try_strategy(name, page, registry_config=None, prev_result=None, capability
     Used by the probe router for the prioritised first attempt AND by
     the cascade loop. Same logic both places ensures the observation's
     winning strategy is replayed identically.
+
+    Retries once on navigation races: SPA redirects (SSO, lazy apply
+    links) destroy the JS context mid-evaluate ("Execution context was
+    destroyed"). A short settle + retry turns those into clean probes.
     """
     strategy_fn = dict(_PROBE_STRATEGIES).get(name)
     if not strategy_fn:
         return None
+    for attempt in range(2):
+        try:
+            return _try_strategy_once(strategy_fn, name, page, registry_config,
+                                      prev_result, capability_profile)
+        except Exception as e:
+            err = str(e)
+            if attempt == 0 and any(m in err for m in (
+                    "Execution context was destroyed", "Target closed",
+                    "Cannot navigate to invalid URL", "Frame was detached")):
+                import time as _t
+                print(f"  PROBE_RETRY: {name} hit navigation race ({err[:60]}) — settling", file=sys.stderr)
+                _t.sleep(3)
+                continue
+            raise
+    return None
+
+
+def _try_strategy_once(strategy_fn, name, page, registry_config, prev_result, capability_profile):
     # For custom_widgets, prefer capability-discovered widgets if the
     # registry didn't supply any — they're what made the strategy win
     # in prior runs (captured in the observation's winning_widgets).
