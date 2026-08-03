@@ -202,10 +202,27 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
     decisions.append({"action": "review",
                       "command": f"python3 report.py handoff {jid}"})
 
+    # Aggregate ask_api escape-hatch status for this run — the
+    # orchestrator must see policy_off vs api_down vs declined vs used
+    # instead of an opaque "llm_reply: no_match".
+    llm_status = "unused"
+    llm_detail = ""
+    for f in fields:
+        fdiag = f.get("diag") or {}
+        if fdiag.get("llm_skipped") == "policy":
+            llm_status, llm_detail = "policy_off", "option_pick gated"
+            break
+        st = fdiag.get("llm_status") or {}
+        if st.get("state") and st["state"] != "unused":
+            llm_status, llm_detail = st["state"], st.get("detail", "")
+            break
+
     handoff = {
         "jid": jid, "url": url, "mode": mode,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "error": error,
+        "llm_status": llm_status,
+        "llm_status_detail": llm_detail,
         # Mutually exclusive counts: filled + failed + skipped_optional =
         # the unique field total (failed EXCLUDES optional no-data fields).
         "summary": {"filled": len(filled_recs),

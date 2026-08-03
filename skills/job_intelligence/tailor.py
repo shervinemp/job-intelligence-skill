@@ -243,10 +243,21 @@ def cmd_review(jid=None, count=1):
         print(f"NEXT: tailor.py admit {jid}", file=sys.stderr)
 
 
-def cmd_admit(*job_ids, pdf_path=None):
+def cmd_admit(*job_ids, pdf_path=None, force=False):
     if not job_ids:
         print("Usage: python3 tailor.py admit <jid1> [jid2 ...]", file=sys.stderr)
         return
+    # Factual-grounding gate: a tailored resume with NOVEL claims (facts
+    # not traceable to profile.json) must not ship to an employer. The
+    # manifest names the claims; --force is the explicit review override.
+    from lib.grounding import ground
+    from lib.config import PROFILE_PATH
+    import json as _json
+    try:
+        with open(PROFILE_PATH, encoding="utf-8") as f:
+            _profile = _json.load(f)
+    except Exception:
+        _profile = {}
     state = load()
     count = 0
     for job_id in job_ids:
@@ -256,6 +267,23 @@ def cmd_admit(*job_ids, pdf_path=None):
         if pdf_path and not os.path.exists(pdf_path):
             print(f"PDF_NOT_FOUND: {job_id} — {pdf_path}", file=sys.stderr)
             continue
+        if not force:
+            _rp = os.path.join(RESULTS_DIR, job_id, "resume.json")
+            if os.path.exists(_rp):
+                try:
+                    with open(_rp, encoding="utf-8") as f:
+                        _r = _json.load(f)
+                    _m = ground(_r, profile=_profile)
+                    if not _m["ok"]:
+                        print(f"GROUNDING_BLOCKED: {job_id} — "
+                              f"{len(_m['novel_claims'])} novel claim(s), "
+                              f"{len(_m['mismatches'])} mismatch(es). "
+                              f"Run 'tailor.py ground {job_id}' and review. "
+                              f"(--force to override)", file=sys.stderr)
+                        continue
+                except Exception as _ge:
+                    print(f"GROUNDING_ERR: {job_id} — {_ge}", file=sys.stderr)
+                    continue
         entry = state["jobs"][job_id]
         if entry.get("state") != "active":
             print(f"  {job_id}: admitted with state '{entry.get('state')}' -> active", file=sys.stderr)
@@ -499,12 +527,16 @@ def main():
     parser.add_argument("--jid", help="Tailor a specific job by JID")
 
     sub = parser.add_subparsers(dest="command")
-    admit_p = sub.add_parser("admit", help="Mark job as tailored")
+    admit_p = sub.add_parser("admit", help="Mark job as tailored (grounding-gated)")
     admit_p.add_argument("jids", nargs="+")
     admit_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
+    admit_p.add_argument("--force", action="store_true",
+                         help="Skip the factual-grounding gate (after human review)")
     done_p = sub.add_parser("done", help="Alias for admit (backward compat)")
     done_p.add_argument("jids", nargs="+")
     done_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
+    ground_p = sub.add_parser("ground", help="Factual-grounding manifest for a tailored resume")
+    ground_p.add_argument("jids", nargs="+")
     sub.add_parser("reject", help="Reject job").add_argument("jids", nargs="+")
     review_p = sub.add_parser("review", help="Review tailored jobs (strategy + cover letter)")
     review_p.add_argument("--jid", help="Specific job ID to review")
@@ -523,8 +555,14 @@ def main():
 
     if args.command == "review":
         cmd_review(jid=args.jid, count=args.jobs)
+    elif args.command == "ground":
+        from lib.grounding import cmd_ground
+        rc = 0
+        for jid in args.jids:
+            rc |= cmd_ground(jid, RESULTS_DIR)
+        return rc
     elif args.command in ("admit", "done"):
-        cmd_admit(*args.jids, pdf_path=args.pdf)
+        cmd_admit(*args.jids, pdf_path=args.pdf, force=getattr(args, "force", False))
     elif args.command == "reject":
         cmd_reject(*args.jids)
     elif args.command == "undo":

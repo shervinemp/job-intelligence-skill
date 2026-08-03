@@ -28,6 +28,7 @@ File layout: ~/.ji/registry-corpus/<profile_hash>.html
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -48,9 +49,56 @@ def _corpus_json_path(hash_key: str) -> Path:
     return _corpus_dir() / f"{hash_key}.json"
 
 
+def capture_from_html(html: str, hash_key: str, profile: Optional[dict],
+                      winning_strategy: str, platform_name: str = "",
+                      jid: str = "", url: str = "") -> Optional[str]:
+    """Capture from an existing HTML artifact (e.g. an inspect dump saved
+    during a bug hunt) instead of a live page — the capture-on-fix
+    workflow: fix a browser bug → snapshot the page → golden test
+    protects the fix. Same first-wins + PII-scrub semantics as capture()."""
+    if has_snapshot(hash_key):
+        return None
+    try:
+        _corpus_dir().mkdir(parents=True, exist_ok=True)
+        if not html or len(html) < 50:
+            return None
+        _corpus_html_path(hash_key).write_text(scrub_pii(html), encoding="utf-8")
+        sidecar = {
+            "profile_hash": hash_key,
+            "url": url,
+            "platform": platform_name,
+            "strategy": winning_strategy,
+            "jid": jid,
+            "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "via": "capture_from_html",
+        }
+        p = _corpus_json_path(hash_key)
+        p.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+        return str(p)
+    except Exception:
+        return None
+
+
 def has_snapshot(hash_key: str) -> bool:
     """True if a snapshot already exists for this profile hash."""
     return _corpus_html_path(hash_key).exists()
+
+
+_SCRUB_PATTERNS = [
+    # emails
+    (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "[email]"),
+    # phones (incl. +1 (343) 555-1234 variants)
+    (re.compile(r"\+?\d[\d\s().-]{8,}\d"), "[phone]"),
+]
+
+
+def scrub_pii(html: str) -> str:
+    """Redact PII from a DOM snapshot before storage — the corpus holds
+    real form pages with real names/emails/phones; the red line applies
+    to disk too."""
+    for pat, repl in _SCRUB_PATTERNS:
+        html = pat.sub(repl, html)
+    return html
 
 
 def capture(page, profile: Optional[dict], hash_key: str,
@@ -66,14 +114,15 @@ def capture(page, profile: Optional[dict], hash_key: str,
         return None
     try:
         _corpus_dir().mkdir(parents=True, exist_ok=True)
-        # Save HTML
+        # Save HTML (PII-scrubbed — the corpus is evidence, not a leak)
         try:
             html = page.evaluate("() => document.documentElement.outerHTML")
         except Exception:
             return None
         if not html or len(html) < 50:
             return None
-        _corpus_html_path(hash_key).write_text(html, encoding="utf-8")
+        _corpus_html_path(hash_key).write_text(
+            scrub_pii(html), encoding="utf-8")
         # Save sidecar
         sidecar = {
             "profile_hash": hash_key,

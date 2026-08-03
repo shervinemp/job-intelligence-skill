@@ -226,8 +226,53 @@ def _regression_canary(jid, rec):
         pass
 
 
-def run(jids=None, limit=None, quick=False):
+def _probe_llm_availability():
+    """One cheap, bounded availability ping recorded in the batch header
+    so every outcome in the run is interpretable (escape hatches open or
+    closed) without per-field archaeology."""
+    try:
+        from lib.automation.llm import mode as _llm_mode, _KIND_AUTO
+        from lib.ask_api import available as _avail
+        import socket
+        ok = False
+        try:
+            ok = bool(_avail())
+        except Exception:
+            ok = False
+        return {"mode": _llm_mode(), "api_available": ok,
+                "auto_defaults": {k: v for k, v in _KIND_AUTO.items()}}
+    except Exception:
+        return {"mode": "?", "api_available": False}
+
+
+def run(jids=None, limit=None, quick=False, recheck=False):
     from lib.db import get_jobs_by_stage
+
+    # Recheck mode: re-run only the unconfirmed-skip queue (see the
+    # cause-tagging below) — the jobs most likely to be session variance
+    # rather than genuinely closed postings. Their log entries are
+    # removed first so the resumable logic actually re-runs them.
+    if recheck:
+        _done = _load_done()
+        _unconf = [jid for jid, rec in _done.items()
+                   if rec.get("unconfirmed") or rec.get("recheck")]
+        if not _unconf:
+            print("RECHECK: no unconfirmed skips in the log — nothing to re-examine",
+                  file=sys.stderr)
+            return 0
+        print(f"RECHECK: {len(_unconf)} unconfirmed skip(s) queued", file=sys.stderr)
+        lines = []
+        if os.path.exists(LOG_PATH):
+            for line in open(LOG_PATH, encoding="utf-8"):
+                try:
+                    if json.loads(line).get("jid") in _unconf:
+                        continue
+                except Exception:
+                    continue
+                lines.append(line)
+        with open(LOG_PATH, "w", encoding="utf-8") as f:
+            f.write("".join(lines))
+        jids = list(dict.fromkeys(_unconf + list(jids or [])))
 
     # The batch holds the pipeline lock for its whole run (children run
     # with JI_NO_LOCK=1) — a concurrent manual run can't interleave the
@@ -262,6 +307,35 @@ def run(jids=None, limit=None, quick=False):
     todo = [(jid, job) for jid, job in jobs if jid not in done]
     print(f"TOTAL: {len(jobs)}, already recorded: {len(done)}, to do: {len(todo)}",
           file=sys.stderr)
+    _llmhdr = _probe_llm_availability()
+    _api = "up" if _llmhdr.get("api_available") else "DOWN"
+    print(f"LLM: mode={_llmhdr.get('mode')} api={_api} — "
+          f"escape hatches: vision={_llmhdr['auto_defaults'].get('vision')} "
+          f"option_pick={_llmhdr['auto_defaults'].get('option_pick')} "
+          f"gap_fill={_llmhdr['auto_defaults'].get('gap_fill')} "
+          f"(batch_verify/verify_reads/auto_retry off by default)",
+          file=sys.stderr)
+    if not _llmhdr.get("api_available"):
+        print("  NOTE: ask_api unavailable — escape-hatch fields will be "
+              "recorded as unassisted; orchestrator review required.",
+              file=sys.stderr)
+    # Profile readiness gate: the fleet fails identically on missing
+    # work_history/contact — surface it BEFORE burning browser time.
+    try:
+        from apply.preflight import preflight, fmt_manifest
+        _pf = preflight()
+        if _pf["hard_missing"]:
+            print("PREFLIGHT WARNING — profile incomplete:", file=sys.stderr)
+            print(fmt_manifest(_pf), file=sys.stderr)
+            print("  The fleet will fail identically on these gaps. "
+                  "Fix profile.json or accept the predicted failures.",
+                  file=sys.stderr)
+        elif _pf["answer_gaps"] or _pf["soft_missing"]:
+            print(f"PREFLIGHT: coverage={_pf['coverage_pct']}% "
+                  f"answer_gaps={len(_pf['answer_gaps'])} "
+                  f"soft_missing={len(_pf['soft_missing'])}", file=sys.stderr)
+    except Exception:
+        pass
     if not todo:
         print("ALL_DONE — nothing left to shadow-run", file=sys.stderr)
         return 0
@@ -351,6 +425,13 @@ def run(jids=None, limit=None, quick=False):
             rec["detail"] = "no OUTCOME emitted"
             rec["exit_code"] = rc
             rec["transcript"] = tlog
+
+        # Cause-tagging: an unconfirmed no-apply-path skip is a LIVE
+        # question (cookie/session variance), not a dead posting — it
+        # must be re-examined, never silently forgotten.
+        if rec.get("outcome") == "skipped" and "unconfirmed" in (rec.get("detail") or ""):
+            rec["unconfirmed"] = True
+            rec["recheck"] = True
 
         _regression_canary(jid, rec)
         rec["secs"] = int(rec.get("secs") or round(time.time() - t0))

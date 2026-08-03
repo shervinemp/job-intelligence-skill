@@ -497,14 +497,33 @@ def _gap_fill_into_answers(fields, profile, answers_override, jid, ephemeral):
         # Deterministic gate on the LLM's output: an LLM-mapped value is
         # only accepted when the same validator that guards deterministic
         # fills passes it (option membership, URL placement, format).
-        # The escape hatch never bypasses the code's truth.
+        # FAIL-CLOSED: a mapping whose label matches no known field is
+        # DROPPED — never silently trusted. Labels are matched on both
+        # the raw and the reader-truncated (60-char) forms, so truncation
+        # can't turn a legitimate mapping into an unvalidated one.
         try:
             from apply.common.validate import validate_value as _vv
             _by_label = {}
             for _f in gap_fields:
-                _by_label.setdefault((_f.get("label") or "").strip(), _f)
-            gap = {k: v for k, v in gap.items()
-                   if (lambda f, vv: f is None or _vv(f, vv)[0])(_by_label.get(k.strip()), v)}
+                _lbl = (_f.get("label") or "").strip()
+                _by_label.setdefault(_lbl, _f)
+                _by_label.setdefault(_lbl[:60], _f)
+            _kept, _dropped = {}, []
+            for _k, _v in gap.items():
+                _f = _by_label.get(_k.strip()) or _by_label.get(_k.strip()[:60])
+                if _f is None:
+                    _dropped.append(_k)
+                    continue
+                _ok, _reason = _vv(_f, _v)
+                if _ok:
+                    _kept[_k] = _v
+                else:
+                    _dropped.append(f"{_k} (validator: {_reason})")
+            gap = _kept
+            if _dropped:
+                print(f"  GAP_FILL_GATE: dropped {len(_dropped)} LLM-mapped "
+                      f"value(s) — {', '.join(str(x)[:60] for x in _dropped[:5])}",
+                      file=sys.stderr)
         except Exception:
             pass
         if answers_override is None:
@@ -709,7 +728,12 @@ def _fill_with_playwright(page, fields, profile, answers_override,
                                "unverified": bool(_diag.get("unverified")),
                                "method": _diag.get("method", "deterministic")})
                 if res.provenance == "answers_override":
-                    learn_mapping(label, ans)
+                    try:
+                        from urllib.parse import urlparse as _up
+                        _dom = _up(page.url or "").netloc
+                    except Exception:
+                        _dom = ""
+                    learn_mapping(label, ans, domain=_dom)
                 if jid:
                     from apply.common.audit import log_field
                     log_field(jid, label, str(ans), res.provenance, filled=True,

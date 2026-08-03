@@ -67,18 +67,40 @@ def allow(kind):
     return _KIND_AUTO.get(kind, False)
 
 
+# ─── Status instrumentation ───────────────────────────────────────────
+# Every escape-hatch call records WHY it did or didn't use ask_api, so
+# the orchestrator can distinguish policy from infrastructure from
+# model behavior instead of a single opaque "no_match".
+
+_LAST_STATUS = {"state": "unused", "detail": ""}
+
+
+def set_last_status(state, detail=""):
+    """Record the outcome of the last escape-hatch call."""
+    _LAST_STATUS["state"] = state
+    _LAST_STATUS["detail"] = detail
+
+
+def last_status():
+    """state ∈ unused | policy_off | api_down | declined | used."""
+    return dict(_LAST_STATUS)
+
+
 def pick_option(opts, question, answer, max_options=30):
     """Choose the option matching the answer. Returns an option dict from
     `opts` (unchanged) or None."""
     if not opts:
         return None
     if not allow("option_pick"):
+        set_last_status("policy_off", "option_pick gated by JI_LLM_MODE")
         return None
     try:
         from lib.ask_api import available, ask_text
         if not available():
+            set_last_status("api_down", "ask_api unavailable")
             return None
-    except Exception:
+    except Exception as e:
+        set_last_status("api_down", f"ask_api probe failed: {str(e)[:60]}")
         return None
     try:
         lines = [
@@ -93,13 +115,18 @@ def pick_option(opts, question, answer, max_options=30):
             "Reply with ONLY the index number. If none match, reply NONE.")
         reply, err = ask_text("\n".join(lines), temperature=0.1, max_tokens=16)
         if err or not reply:
+            set_last_status("declined", str(err)[:60] if err else "empty reply")
             return None
         m = re.search(r"\d+", reply)
         if not m:
+            set_last_status("declined", "unparseable reply")
             return None
         idx = int(m.group(0))
         if 0 <= idx < len(opts):
+            set_last_status("used", f"picked idx {idx}")
             return opts[idx]
-    except Exception:
+        set_last_status("declined", "index out of range")
+    except Exception as e:
+        set_last_status("declined", f"exception: {str(e)[:60]}")
         pass
     return None

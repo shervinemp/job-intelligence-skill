@@ -111,6 +111,8 @@ def main():
     shadow_p.add_argument("--jid", action="append", help="Job ID (repeatable; default: all tailored)")
     shadow_p.add_argument("--limit", type=int, default=None, help="Cap jobs in this run (resumable)")
     shadow_p.add_argument("--quick", action="store_true", help="Deterministic-only fill (no vision)")
+    shadow_p.add_argument("--recheck", action="store_true",
+                          help="Re-run only the unconfirmed-skip queue (session-variance candidates)")
 
     reg_p = sub.add_parser("registry", help="Probe observation + corpus management")
     reg_p.add_argument("action", choices=["candidates", "confirm", "clear", "corpus", "failures", "drift"],
@@ -121,6 +123,8 @@ def main():
     reg_p.add_argument("hash", nargs="?", help="Profile hash (for confirm/clear)")
     reg_p.add_argument("--dry-run", action="store_true",
                        help="drift: report only, no auto-demote (default: auto-demote stale)")
+
+    preflight_p = sub.add_parser("preflight", help="Profile readiness gate before fleet runs")
 
     args = parser.parse_args()
 
@@ -242,7 +246,11 @@ def main():
         return cmd_registry(args.action, args.hash, dry_run=getattr(args, "dry_run", False))
     elif args.command == "shadow":
         from apply.shadow import run as shadow_run
-        return shadow_run(jids=args.jid, limit=args.limit, quick=args.quick)
+        return shadow_run(jids=args.jid, limit=args.limit, quick=args.quick,
+                          recheck=args.recheck)
+    elif args.command == "preflight":
+        from apply.preflight import cmd_preflight
+        return cmd_preflight()
 
 
 if __name__ == "__main__":

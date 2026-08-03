@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Optional
 
 from lib.config import STATE_DIR
@@ -198,6 +199,11 @@ def resolve(
     for k, v in answers_override.items():
         nk = normalize(k)
         if nk == norm:
+            # An explicit answer that CONTRADICTS a learned mapping proves
+            # the learning wrong — invalidate it, don't outrank it forever.
+            _le = _load_learned().get(norm)
+            if _le is not None and str(_learned_value(_le)) != str(v):
+                _invalidate_learned(norm)
             return Resolution(v, "answers_override", label, "answers_override")
         # Prefix match for field_reader's 60-char label truncation.
         # Bidirectional: field label may be truncated (nk longer than norm)
@@ -433,6 +439,11 @@ _DEFAULT_ANSWERS = [
 
 _LEARNED_PATH = os.path.join(STATE_DIR, "field_mappings.json")
 _learned_cache = None
+# Hygiene: a mapping must be confirmed consistently before it becomes
+# active, and it expires unless re-confirmed. One wrong-but-verified-once
+# fill must never poison a label forever.
+_MIN_CONFIRMS = 2
+_LEARNED_TTL_DAYS = 90
 
 
 def _load_learned():
@@ -446,23 +457,79 @@ def _load_learned():
     return _learned_cache
 
 
+def _save_learned():
+    global _learned_cache
+    try:
+        from lib.config import atomic_write_json
+        atomic_write_json(_LEARNED_PATH, _learned_cache, indent=2)
+    except Exception:
+        pass
+
+
+def _learned_value(entry):
+    """Value of an entry (dict with hygiene meta or legacy flat string)."""
+    if isinstance(entry, dict):
+        return entry.get("value")
+    return entry
+
+
 def _lookup_learned(norm_label: str):
-    return _load_learned().get(norm_label)
+    m = _load_learned()
+    e = m.get(norm_label)
+    if e is None:
+        return None
+    if not isinstance(e, dict):
+        return e  # legacy flat value (pre-hygiene)
+    if e.get("state") != "active":
+        return None
+    if e.get("ts"):
+        try:
+            from datetime import datetime
+            age = (datetime.now() - datetime.fromisoformat(e["ts"])).days
+            if age > _LEARNED_TTL_DAYS:
+                return None
+        except Exception:
+            pass
+    return e.get("value")
 
 
-def learn_mapping(label: str, value):
-    """Persist a confirmed label→value mapping for future runs."""
+def _invalidate_learned(norm_label):
+    """Delete a learned mapping — an explicit answer that contradicts it
+    proves the learning was wrong; it must not survive."""
+    m = _load_learned()
+    if norm_label in m:
+        del m[norm_label]
+        _save_learned()
+        global _learned_cache
+        _learned_cache = m
+
+
+def learn_mapping(label: str, value, domain: str = ""):
+    """Persist a confirmed label→value mapping — after N consistent
+    confirmations (pending → active), with provenance for rollback and a
+    TTL so stale learnings expire. Conflicting values reset the count."""
     if not label or value in (None, ""):
         return
     norm = normalize(label)
     if not norm:
         return
     m = _load_learned()
-    if m.get(norm) == value:
-        return
-    m[norm] = value
-    try:
-        from lib.config import atomic_write_json
-        atomic_write_json(_LEARNED_PATH, m, indent=2)
-    except Exception:
-        pass
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    e = m.get(norm)
+    if not isinstance(e, dict):
+        m[norm] = {"value": value, "state": "pending", "count": 1,
+                   "ts": now, "domain": domain, "last_jid": ""}
+    elif _learned_value(e) == value:
+        e["count"] = int(e.get("count", 0)) + 1
+        e["ts"] = now
+        if e.get("domain") != domain:
+            # Same label confirmed on a DIFFERENT platform — the value is
+            # platform-general or the scope is wider than first thought.
+            e["domain"] = ""
+        if e.get("count", 0) >= _MIN_CONFIRMS:
+            e["state"] = "active"
+    else:
+        # Conflicting confirmation — the learning is unstable, reset.
+        m[norm] = {"value": value, "state": "pending", "count": 1,
+                   "ts": now, "domain": domain, "last_jid": ""}
+    _save_learned()

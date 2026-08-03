@@ -126,12 +126,19 @@ def cmd_check(jid):
                 emit_error("no fields detected — run 'apply act --fill' first")
                 return 1
 
+            _coherence_fields = []
+
             ans_dict = _build_ans_dict(profile)
             ephemeral = _build_ephemeral(profile)
             # The effective answers used at fill time (includes LLM key-mapped
             # --answers that aren't in the profile). Verify against them, not
             # just the profile, so ephemeral answers aren't invisible.
             ans_override = state.get("fill_answers") or None
+            for _ak, _av in (ans_override or {}).items():
+                if _av:
+                    ephemeral.setdefault(
+                        _ak, (str(_av) if not isinstance(_av, list) else [str(x) for x in _av],
+                              "state"))
 
             for f in fields:
                 label = (f.get("label") or "").strip()
@@ -167,6 +174,11 @@ def cmd_check(jid):
                 expected = res.value
 
                 checked += 1
+                # Collect filled answers for the cross-field coherence pass
+                # (the pipeline's checksum — see apply/common/coherence.py).
+                if expected is not None and actual:
+                    _coherence_fields.append(
+                        {"label": label, "answer": str(expected), "kind": "verified"})
 
                 # Required field with NO answer: surface it instead of
                 # silently passing — an empty required field is a submit
@@ -357,6 +369,22 @@ def cmd_check(jid):
                         "severity": "WARN",
                         "reason": "Country and location fields may be inconsistent",
                     })
+
+            # Coherence pass: sponsorship↔authorization, city↔province,
+            # pronouns↔gender. Contradictions are ERROR — they'd ship a
+            # logically broken application.
+            try:
+                from apply.common.coherence import check_coherence
+                for finding in check_coherence(_coherence_fields):
+                    issues.append({
+                        "label": f"cross-field: {finding['rule']}",
+                        "expected": f"{finding['left']} ↔ {finding['right']}",
+                        "actual": finding["detail"],
+                        "severity": "ERROR",
+                        "reason": f"contradiction ({finding['rule']})",
+                    })
+            except Exception:
+                pass
 
             errors = [i for i in issues if i["severity"] == "ERROR"]
             warnings = [i for i in issues if i["severity"] == "WARN"]

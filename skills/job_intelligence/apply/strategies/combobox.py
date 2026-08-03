@@ -364,7 +364,15 @@ def _read_selection_values(page, sel):
     except Exception:
         pass
     try:
-        iv = page.evaluate(f"document.querySelector({json.dumps(sel)})?.value || ''")
+        iv = page.evaluate("""(sel) => {
+            const el = document.querySelector(sel);
+            if (!el) return '';
+            // Custom dropdown widgets are BUTTONs whose value attribute is a
+            // framework-internal id (Workday React hash) — the selection's
+            // identity is the button TEXT, not el.value.
+            if (el.tagName === 'BUTTON') return (el.textContent || '').trim();
+            return el.value || '';
+        }""", sel)
         if iv:
             values.append(str(iv))
     except Exception:
@@ -454,12 +462,16 @@ def _try_click_best(page, sel, ans, opts, candidates):
     for cand in scored[:4]:
         if cand["score"] < 2:
             break
-        if _click_option(page, cand):
-            time.sleep(0.5)
-            v = _verify(page, sel, ans, candidates)
-            if v is False:
-                continue  # provably wrong — try the next best
-            return True, cand, v
+        try:
+            if _click_option(page, cand):
+                time.sleep(0.5)
+                v = _verify(page, sel, ans, candidates)
+                if v is False:
+                    continue  # provably wrong — try the next best
+                return True, cand, v
+        except Exception as _ce:
+            _trace("click", "exception", str(_ce)[:80])
+            continue
     return False, None, None
 
 
@@ -475,10 +487,25 @@ def _try_llm(page, sel, opts, label, ans, candidates, diag, stage):
     """Click the LLM-chosen option, then verify by MECHANICAL IDENTITY:
     the selection must equal what we clicked (no semantic expectations on
     the LLM's choice — deterministic scoring can't judge it). Unreadable
-    selections are accepted with a flag for check to arbitrate."""
+    selections are accepted with a flag for check to arbitrate.
+    Policy-gated (option_pick): only after the deterministic matcher
+    found nothing — evidence records why it was skipped."""
     if not opts:
         return False
+    try:
+        from apply.common.llm_policy import allow as _llm_allow
+        if not _llm_allow("option_pick"):
+            diag["llm_tried"] = False
+            diag["llm_skipped"] = "policy"
+            return False
+    except Exception:
+        pass
     pick = _llm_pick(page, sel, opts, label, ans)
+    try:
+        from lib.automation.llm import last_status as _llm_status
+        diag["llm_status"] = _llm_status()
+    except Exception:
+        pass
     diag["llm_tried"] = True
     if not pick:
         diag["llm_reply"] = "no_match"
@@ -607,14 +634,17 @@ def fill(page, f, ans, time_budget=25.0):
         diag["typed_options"] = typed_seen
         diag["options_seen"] = len(_collect_visible_options(page, root_id))
         diag["candidates"] = candidates[:3]
-        # Evidence for the orchestrator: the top-scoring options.
         try:
-            opts = _collect_visible_options(page, root_id)
-            cnorms = [_norm(c) for c in candidates]
-            top = sorted(
-                ({"text": o["text"][:60], "score": _score_option(o["text"], cnorms)}
-                 for o in opts), key=lambda x: x["score"], reverse=True)[:3]
-            diag["top_options"] = top
+            from apply.common.match import scoring_candidates as _msc
+            diag["top_options"] = [
+                {"text": o.get("text", "")[:60],
+                 "score": _score_option(o.get("text", ""), _msc(candidates))}
+                for o in sorted(
+                    (dict(o, score=_score_option(o.get("text", ""), _msc(candidates)))
+                     for o in _collect_visible_options(page, root_id)),
+                    key=lambda o: o["score"], reverse=True)[:3]]
+            _sr = _read_selection_values(page, sel)
+            diag["selection_readback"] = [str(s)[:40] for s in (_sr or [])]
         except Exception:
             pass
         f["_diag"] = diag

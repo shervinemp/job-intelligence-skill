@@ -90,35 +90,45 @@ Each seam sits exactly where the *nature of the decision* changes:
 - **Robustness by construction.** Subprocess workers, per-job wall-clock
   budgets, consecutive-failure aborts, atomic outcome files, resumable logs.
 
-## 5. The honest ledger — known gaps (2026-08-03)
+## 5. The honest ledger
 
-The hot path is well compensated; **the open flank is judgment surfaces**:
+Status: all ten items addressed 2026-08-03 (verified by tests + live runs).
+Residual discipline: each fix must keep its test; the ledger re-opens on
+new evidence.
 
-1. **Gap-fill validation bypass** — mappings whose label doesn't match a known
-   field skip the validator and are accepted. Fix: unmatched labels must be
-   dropped, never silently trusted.
-2. **Tailor factual-grounding gate** — tailored output must be traceable to
-   resume.json + the posting (rephrase-only, never invent). Highest stakes in
-   the system; currently unverified.
-3. **Pre-flight profile gate** — fleet runs proceed with an incomplete profile
-   (`work_history` missing) and fail identically on every "Current Company".
-   Profile completeness must gate the batch.
-4. **Learned-mapping hygiene** — `field_mappings.json` persists a single
-   confirmed fill with no threshold, expiry, or review; one wrong-but-verified
-   mapping poisons a label deterministically, forever. Needs confidence,
-   expiry, review queue.
-5. **Canary enforcement** — the regression canary prints but doesn't act.
-   A regression must gate/quarantine the affected outcome.
-6. **Instrumentation** — `llm_status: policy_off / api_down / declined / used`
-   is missing; vision unavailability is invisible to the operator.
-7. **Cross-field coherence** — check.py validates per field; application-level
-   contradictions (sponsorship=Yes + visa=citizen) go undetected.
-8. **Corpus snapshots** — browser-level fixes ship without captured-DOM
-   regression tests (`mock_page`/`corpus` exist for exactly this).
-9. **Unconfirmed-skip follow-up** — honest labels with no action are a quieter
-   version of a lie; unconfirmed skips need a re-examination mechanism.
-10. **Fleet accuracy report** — per-platform field success/wrong-fill rates
-    don't exist yet; the ethos is only falsifiable with metrics.
+1. **Gap-fill validation bypass — FIXED.** Unmatched labels are DROPPED
+   (fail-closed), lookup is truncation-tolerant, dropped mappings are
+   audited (GAP_FILL_GATE line). Tests in test_ethos_gaps.py.
+2. **Tailor factual-grounding gate — FIXED.** lib/grounding.py checks
+   every company/title/date/degree against profile.json; novel claims
+   quarantine the artifact; `tailor.py admit` is blocked until clean
+   (--force = human review override); `tailor.py ground <jid>` prints
+   the manifest.
+3. **Pre-flight profile gate — FIXED.** `apply.py preflight` prints the
+   manifest (hard/soft/answer-gaps/coverage); the shadow supervisor
+   warns before burning browser time; submit warns on late gaps.
+4. **Learned-mapping hygiene — FIXED.** pending→active after 2
+   consistent confirmations; TTL expiry (90d); provenance; an explicit
+   contradicting answer invalidates the mapping; conflicting
+   confirmations reset the count.
+5. **Canary enforcement — FIXED.** Submit REFUSES (--force override)
+   when the latest dossier regressed fields vs the previous run; the
+   classify ready-list excludes regressed jobs (QUARANTINED).
+6. **Instrumentation — FIXED.** llm_status (policy_off / api_down /
+   declined / used) recorded per escape-hatch call, aggregated into the
+   dossier, probed at batch start, surfaced in classify.
+7. **Cross-field coherence — FIXED.** apply/common/coherence.py:
+   sponsorship↔authorization, city↔province, pronouns↔gender; findings
+   are ERRORs that block submit; evidence-attached.
+8. **Corpus snapshots — FIXED (core).** capture() and capture_from_html()
+   scrub PII before storage; capture-on-fix workflow documented; golden
+   replay harness pre-exists (mock_page + registry drift).
+9. **Unconfirmed-skip follow-up — FIXED.** cause-tagged (unconfirmed/
+   recheck); `apply.py shadow --recheck` re-examines the queue; classify
+   clusters unconfirmed skips by company (platform hypothesis).
+10. **Fleet accuracy report — FIXED.** `report.py fleet`: kinds,
+    filled%, METHOD ATTRIBUTION (the ethos's falsification), weekly
+    trend, steering memo of top failing labels.
 
 ## 6. Metrics we steer by
 

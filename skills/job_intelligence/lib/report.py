@@ -461,6 +461,24 @@ def cmd_shadow():
     outcomes = Counter(r.get("outcome", "?") for r in recs)
     print(f"SHADOW RUNS: {len(recs)} job record(s)")
     print(f"  {', '.join(f'{k}={v}' for k, v in outcomes.most_common())}")
+    # Escape-hatch instrumentation: what the run leaned on (or couldn't).
+    try:
+        _llm = Counter()
+        import glob as _glob
+        for hf in _glob.glob(os.path.join(JI_HOME, "results", "*", "handoff.json")):
+            try:
+                st = json.load(open(hf, encoding="utf-8")).get("llm_status")
+                if st:
+                    _llm[st] += 1
+            except Exception:
+                continue
+        if _llm:
+            print(f"  LLM_STATUS: {', '.join(f'{k}={v}' for k, v in _llm.most_common())}")
+            if _llm.get("api_down"):
+                print("  NOTE: ask_api was DOWN for some runs — escape-hatch "
+                      "fields are unassisted; orchestrator review required.")
+    except Exception:
+        pass
     print()
 
     order = ["held_shadow", "already_applied", "skipped", "stopped", "exception", "submitted"]
@@ -556,20 +574,44 @@ def cmd_shadow_classify():
             continue
         print(f"== {labels.get(kind, kind)} ({len(group)}) " + "=" * 30)
         for r in sorted(group, key=lambda x: x.get("ts", ""))[:15]:
+            flagged = ""
+            if kind == "held_shadow" and r.get("regressed"):
+                flagged = "  *** QUARANTINED (regression vs previous run) ***"
+                continue  # ready-gate: regressed jobs are NOT ready
             print(f"  {r.get('jid', '?')[:12]} {r.get('company', '?')[:20]:20s} "
-                  f"{r.get('detail', '?')[:70]}")
+                  f"{r.get('detail', '?')[:70]}{flagged}")
             if r.get("after_crash"):
                 print("      (recovered after a first-attempt crash)")
             if r.get("transcript"):
                 print(f"      transcript: {r.get('transcript')}")
             if r.get("tail"):
                 print(f"      tail: {' | '.join(r['tail'].splitlines()[-2:])[:150]}")
+        _quar = [r for r in group if r.get("regressed")]
+        if _quar:
+            print(f"  QUARANTINED (not ready): "
+                  + ", ".join(r.get("jid", "?")[:12] for r in _quar))
         print()
 
     stopped = [r for r in recs if r.get("outcome") == "stopped"]
+
+    # Unconfirmed-skip clustering: a platform that is mostly UNCONFIRMED
+    # is a platform-level hypothesis (cookie/session issue), not a pile
+    # of expired postings — the follow-up is a platform probe, not per-job
+    # labor.
+    _unconf = [r for r in recs if r.get("unconfirmed")]
+    if _unconf:
+        from collections import Counter as _Cnt
+        by_company = _Cnt((r.get("company") or "?")[:25] for r in _unconf)
+        print(f"== UNCONFIRMED SKIPS ({len(_unconf)}) — live queue, not "
+              f"closed postings ==")
+        for comp, n in by_company.most_common(8):
+            print(f"  {comp:26s} {n}")
+        print("  re-run: python apply.py shadow --recheck   "
+              "(re-examines this queue)")
+        print()
+
     if not stopped:
         return
-
     # Owner-split ground truth: does the PROFILE answer the question?
     # A personal keyword is only a handover when no answer exists — a
     # relocation question the profile already answers is DATA/code, not
@@ -840,6 +882,74 @@ def cmd_profile():
     print(GUIDE)
 
 
+def cmd_fleet():
+    """The orchestrator's steering instrument: aggregate every dossier
+    into per-platform outcomes, per-field-class success, METHOD
+    ATTRIBUTION (deterministic vs escape hatch — the ethos's own proof),
+    weekly trends, and a steering memo of the top failing labels."""
+    import glob as _glob
+    import os
+    from collections import Counter
+    dossiers = []
+    for hf in _glob.glob(os.path.join(RESULTS_DIR, "*", "handoff.json")):
+        try:
+            d = json.load(open(hf, encoding="utf-8"))
+            if d.get("fields"):
+                dossiers.append(d)
+        except Exception:
+            continue
+    if not dossiers:
+        print("FLEET: no dossiers yet — run 'apply.py shadow' first.",
+              file=sys.stderr)
+        return
+
+    n_jobs = len(dossiers)
+    n_fields = sum(len(d.get("fields", [])) for d in dossiers)
+    kinds = Counter()
+    methods = Counter()
+    by_week = Counter()
+    fail_labels = Counter()
+    from datetime import datetime
+    for d in dossiers:
+        try:
+            wk = datetime.fromisoformat(d.get("ts", "")).strftime("%Y-%m-%d")
+            by_week[wk[:7]] += 1
+        except Exception:
+            pass
+        for f in d.get("fields", []):
+            kinds[f.get("kind", "?")] += 1
+            if f.get("kind") in ("verified", "unverified"):
+                m = (f.get("method") or "deterministic").lower()
+                bucket = ("llm" if "llm" in m or "vision" in m
+                          else "combobox" if "combobox" in m
+                          else "deterministic")
+                methods[bucket] += 1
+            if f.get("kind") in ("rejected_by_form", "interaction_failed",
+                                 "needs_data"):
+                fail_labels[(f.get("label") or "?")[:60]] += 1
+
+    print(f"FLEET ACCURACY: {n_jobs} dossier(s), {n_fields} field record(s)")
+    print(f"  kinds: {', '.join(f'{k}={v}' for k, v in kinds.most_common())}")
+    filled = kinds.get("verified", 0) + kinds.get("unverified", 0)
+    bad = n_fields - filled
+    if n_fields:
+        print(f"  filled={filled} ({100 * filled // n_fields}%)  "
+              f"failed/unfilled={bad}")
+    print(f"  method attribution (filled): "
+          + ", ".join(f"{k}={v}" for k, v in methods.most_common()))
+    print(f"  trend (dossiers/week): "
+          + ", ".join(f"{k}:{v}" for k, v in sorted(by_week.items())[-6:]))
+    print()
+
+    print("== STEERING MEMO (top failing labels) ==")
+    for lbl, n in fail_labels.most_common(12):
+        print(f"  {n:3d}x  {lbl}")
+    print("  -> repeated labels are resolver/rule candidates, not noise")
+    print()
+    print("  actions: report.py handoff <jid> | report.py shadow --classify "
+          "| apply.py preflight")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -928,6 +1038,8 @@ def main():
             cmd_shadow_classify()
         else:
             cmd_shadow()
+    elif cmd == "fleet":
+        cmd_fleet()
     elif cmd == "archive":
         cmd_archive()
     else:

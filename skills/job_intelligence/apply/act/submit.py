@@ -210,6 +210,38 @@ def cmd_submit(jid, confirm=False, force=False):
             emit_next("check", "fix errors then resubmit (or --force to override)")
             return 1
 
+    # GATE: regression canary — if the latest dossier REGRESSED fields
+    # that a previous run filled, the current state is suspect and the
+    # submit is refused (--force is the explicit override). Enforcement,
+    # not a warning: a regression means something broke between runs.
+    if not force:
+        try:
+            from apply.preflight import preflight
+            _pf = preflight()
+            if _pf["hard_missing"]:
+                print(f"  PREFLIGHT: profile still missing "
+                      f"{', '.join(_pf['hard_missing'])} — submit proceeds, "
+                      f"but related fields will be empty", file=sys.stderr)
+        except Exception:
+            pass
+        try:
+            from lib.automation.diff import load_handoffs, compare_handoffs
+            from lib.config import RESULTS_DIR as _RD
+            hs = load_handoffs(jid, _RD)
+            if len(hs) >= 2:
+                d = compare_handoffs(hs[0], hs[1])
+                if d["regressed"]:
+                    labels = ", ".join(lbl[:40] for lbl, _now in d["regressed"][:5])
+                    print(f"  REGRESSION GATE: {len(d['regressed'])} field(s) "
+                          f"regressed vs previous run: {labels}",
+                          file=sys.stderr)
+                    emit_status("regression_gate",
+                                "filled-before fields now fail — investigate before submit")
+                    emit_next("diff", f"python3 report.py diff {jid} (or --force to override)")
+                    return 1
+        except Exception:
+            pass
+
     state = load_state()
     if state.get("jid") != jid:
         state = {"jid": jid}
