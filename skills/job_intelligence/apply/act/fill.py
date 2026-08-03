@@ -7,12 +7,12 @@ from lib.config import RESULTS_DIR
 from apply.common import terms as _T
 from apply.common.output import emit_next, emit_status, emit_error, emit_fill_report
 from apply.common.page_helpers import load_state, save_state, handle_captcha, handle_session_timeout, tag_page
-from apply.common.fill_runner import fill_page
+from apply.common.fill_runner import fill_page, _field_key
 from apply.act.helpers import (
     _load_profile, chrome_session, _host, _is_error_page, _url_fallbacks,
     _wait_for_fields, _probe_form, _find_next_button,
     _empty_required, _click_action, _verify_with_ask_api, _detect_submit_button,
-    _field_key, _build_ans_dict, _resolve_linkedin_apply, _wire_dialogs,
+    _build_ans_dict, _resolve_linkedin_apply, _wire_dialogs,
     _is_junk_field, _dismiss_confirm_modal, _get_validation_errors,
 )
 

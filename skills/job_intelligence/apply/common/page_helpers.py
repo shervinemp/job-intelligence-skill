@@ -216,12 +216,17 @@ def save_state(state):
 
 
 def clear_runtime_state(jid):
-    """Reset the runtime cache when it belongs to this job (reject/undo).
-    The dossier remains the truth; this drops job-scoped scratch —
-    including the submit_clicked one-shot flag."""
+    """Reset the runtime cache for this job (reject/undo): drop the
+    action flags (submit_clicked / submit_text / status) but keep
+    identity + answers (external_url, url, title, company, platform,
+    fill_answers) so a re-run re-fills and re-checks without re-
+    navigating. The dossier remains the truth throughout."""
     st = load_state()
-    if st.get("jid") == jid:
-        save_state({})
+    if st.get("jid") != jid:
+        return
+    for k in ("submit_clicked", "submit_text", "status"):
+        st.pop(k, None)
+    save_state(st)
 
 
 def read_page(p, custom_widgets=None):

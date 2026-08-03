@@ -78,9 +78,7 @@ class MatrixRowKeys(unittest.TestCase):
         page.evaluate.return_value = ""  # pre-check read: empty value
         profile = {"answers": {"start_date": "2020-01"}}
         with patch("apply.common.fill_runner.field_deterministic",
-                   return_value=True), \
-             patch("apply.act.helpers._build_ans_dict",
-                   return_value={"Start date": "2020-01"}):
+                   return_value=True):
             filled, failed = _fill_with_playwright(page, fields, profile,
                                                    {}, "j")
         keys = [r["key"] for r in filled]

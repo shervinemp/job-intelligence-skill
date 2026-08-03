@@ -534,7 +534,7 @@ class FileFiller(FieldFiller):
         except Exception:
             pass
         # Fallback: intercept file chooser (SPA upload button pattern)
-        from apply.act.helpers import _try_filechooser_upload
+        from apply.common.fill_runner import _try_filechooser_upload
         return _try_filechooser_upload(page, f.get("label", ""), path, sel=sel)
 
 

@@ -337,42 +337,42 @@ class UploadFieldSelection(unittest.TestCase):
                 "accept": None if ftype != "file" else ".pdf"}
 
     def test_cover_textarea_not_upload_field(self):
-        from apply.act.helpers import _is_upload_field
+        from apply.common.fill_runner import _is_upload_field
         f = self._field("TEXTAREA", "", "Cover letter or additional information")
         self.assertFalse(_is_upload_field(f))
 
     def test_resume_file_input_is_upload_field(self):
-        from apply.act.helpers import _is_upload_field
+        from apply.common.fill_runner import _is_upload_field
         f = self._field("INPUT", "file", "Upload résumé/CV", "resumeFileUpload")
         self.assertTrue(_is_upload_field(f))
 
     def test_dropzone_div_is_upload_field(self):
-        from apply.act.helpers import _is_upload_field
+        from apply.common.fill_runner import _is_upload_field
         f = self._field("DIV", "", "Drop your resume here!")
         self.assertTrue(_is_upload_field(f))
 
     def test_plain_text_input_with_resume_label_not_upload(self):
-        from apply.act.helpers import _is_upload_field
+        from apply.common.fill_runner import _is_upload_field
         f = self._field("INPUT", "text", "Resume search")
         self.assertFalse(_is_upload_field(f))
 
     def test_hybrid_text_input_with_upload_keyword(self):
-        from apply.act.helpers import _is_upload_field
+        from apply.common.fill_runner import _is_upload_field
         f = self._field("INPUT", "text", "Upload your CV file")
         self.assertTrue(_is_upload_field(f))
 
     def test_resume_path_for_combined_label(self):
-        from apply.act.helpers import _file_path_for
+        from apply.common.fill_runner import _file_path_for
         f = self._field("INPUT", "file", "Resume and cover letter upload")
         self.assertEqual(_file_path_for("Resume and cover letter upload", f, "/r.pdf", "/c.pdf"), "/r.pdf")
 
     def test_cover_path_for_cover_only_label(self):
-        from apply.act.helpers import _file_path_for
+        from apply.common.fill_runner import _file_path_for
         f = self._field("INPUT", "file", "Cover letter", "coverFileUpload")
         self.assertEqual(_file_path_for("Cover letter", f, "/r.pdf", "/c.pdf"), "/c.pdf")
 
     def test_resume_id_wins_over_cover_label(self):
-        from apply.act.helpers import _file_path_for
+        from apply.common.fill_runner import _file_path_for
         f = self._field("INPUT", "file", "Cover letter or additional information",
                         "resumeFileUpload")
         self.assertEqual(_file_path_for("Cover letter or additional information",

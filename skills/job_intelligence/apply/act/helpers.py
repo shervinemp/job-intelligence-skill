@@ -1,8 +1,9 @@
 """act/helpers.py — Shared helpers for all act commands.
 
 Chrome lifecycle, DOM interaction (JS evaluation), field probing,
-fill dispatch, file upload, validation scanning, submit detection,
-profile loading, answer dict construction, vision verification.
+validation scanning, submit detection, profile loading, answer dict
+construction, vision verification. The fill loop (including file
+upload + consent mechanics) lives in apply/common/fill_runner.py.
 """
 import json, os, re, sys, time
 from contextlib import contextmanager
@@ -254,68 +255,6 @@ def _probe_form(page, reg, jid, allow_vision=True):
         _insp._PROBE_STRATEGIES = orig
 
 
-def _set_files_any_frame(page, sel, path):
-    try:
-        page.set_input_files(sel, path)
-        return True
-    except Exception:
-        pass
-    for fr in page.frames:
-        if fr == page.main_frame:
-            continue
-        try:
-            fr.set_input_files(sel, path)
-            return True
-        except Exception:
-            continue
-    return False
-
-
-def _try_filechooser_upload(page, label, path, sel=""):
-    """Fallback: intercept file chooser dialog when SPA apps (Ashby,
-    Greenhouse) use an upload button instead of a visible <input type=file>.
-
-    Clicks the upload button, intercepts the native file chooser, and
-    sets the file programmatically. Returns True on success.
-    `sel` is the field's own selector (dropzone div/button) — clicked
-    first when given, since dropzones open the chooser on click."""
-    lc = (label or "").lower()
-    upload_kws = []
-    if "resume" in lc or re.search(r'\bcv\b', lc):
-        upload_kws = ["resume", "cv", "upload resume", "attach resume", "attach cv"]
-    elif "cover" in lc:
-        upload_kws = ["cover", "cover letter", "attach cover", "upload cover"]
-    else:
-        upload_kws = ["upload", "attach", "browse"]
-    targets = []
-    if sel:
-        targets.append(sel)
-    for kw in upload_kws:
-        for selector in [
-            f'button:has-text("{kw}")',
-            f'a:has-text("{kw}")',
-            f'[role="button"]:has-text("{kw}")',
-            f'label:has-text("{kw}")',
-        ]:
-            targets.append(selector)
-    for target in targets:
-        try:
-            btn = page.locator(target).first
-            if btn.count() == 0:
-                continue
-            with page.expect_file_chooser(timeout=5000) as fc_info:
-                try:
-                    btn.click(timeout=3000)
-                except Exception:
-                    btn.click(force=True, timeout=3000)
-            fc = fc_info.value
-            fc.set_files(path)
-            return True
-        except Exception:
-            continue
-    return False
-
-
 def _dismiss_confirm_modal(page):
     try:
         page.evaluate("""() => {
@@ -440,13 +379,6 @@ def _check_submit_success(ctx, page, pages_before_ids):
     return False, None
 
 
-def _field_key(f):
-    sel = f.get("_sel") or f.get("selector") or ""
-    if sel:
-        return sel
-    return (f.get("label", ""), f.get("id", ""), f.get("name", ""))
-
-
 def _resolve_linkedin_apply(page):
     """On a LinkedIn job page, find the 'Apply' link and extract the real ATS URL."""
     import urllib.parse as _up
@@ -468,55 +400,6 @@ def _resolve_linkedin_apply(page):
         return href
     except Exception:
         return None
-
-
-_CONSENT_KW = ("agree", "consent", "accept", "terms", "certify", "understand",
-               "authorize", "privacy", "notice", "marketing", "updates",
-               "confirm", "acknowledge")
-
-
-def _is_consent_field(f):
-    """True if a checkbox label reads like a consent/acknowledgement.
-    JI_AUTO_CONSENT=1 must only auto-check these — a blunt check-all
-    would silently answer work-history or sponsorship checkboxes wrong."""
-    lbl = (f.get("label") or "").lower()
-    return any(kw in lbl for kw in _CONSENT_KW)
-
-
-def _is_upload_field(f):
-    """True if a field takes the file-upload path: a real <input
-    type=file> (or accept attr), a dropzone widget (div/button with a
-    resume/cv/cover label), or a text input whose label says upload/
-    attach/drop + resume/cv/cover (hybrid custom uploaders).
-
-    Deliberately EXCLUDES textareas and plain text inputs that merely
-    mention 'cover letter' — they must go through the normal resolve,
-    otherwise the bare input[type=file] fallback can overwrite the
-    resume with the cover letter."""
-    tag = (f.get("tag") or "").lower()
-    ftype = (f.get("type") or "").lower()
-    lc = (f.get("label") or "").lower()
-    if tag == "input" and (f.get("accept") or ftype == "file"):
-        return True
-    if tag == "textarea":
-        return False
-    _uploader_label = "resume" in lc or re.search(r"\bcv\b", lc) or "cover" in lc
-    if tag in ("div", "button"):
-        return _uploader_label
-    if tag == "input" and ("upload" in lc or "attach" in lc or "drop" in lc):
-        return _uploader_label
-    return False
-
-
-def _file_path_for(label, f, resume_path, cover_path):
-    """Decide which file (resume vs cover) belongs to a file field.
-
-    'cover' wins only when the label/id/name says cover AND NOT resume/cv;
-    everything else (including combined labels) is the resume."""
-    lc = (label or "").lower()
-    ident = f"{lc} {(f.get('id') or '').lower()} {(f.get('name') or '').lower()}"
-    is_cover = "cover" in ident and "resume" not in ident and not re.search(r"\bcv\b", ident)
-    return cover_path if is_cover else resume_path
 
 
 def _verify_with_ask_api(page, answers: dict) -> dict:
