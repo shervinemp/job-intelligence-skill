@@ -649,7 +649,7 @@ def fill(page, f, ans, time_budget=25.0):
             pass
         f["_diag"] = diag
     except Exception as e:
-        f["_diag"] = {"method": "combobox", "reason": "exception",
+        f["_diag"] = {"method": "combobox", "reason": "fill_exception",
                       "detail": str(e)[:120]}
 
     # Clear leftover typed text on failure (never wipes a success).

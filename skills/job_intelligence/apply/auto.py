@@ -54,7 +54,7 @@ def run(jid=None, quick=False, max_pages=4):
     print(f"\nAUTO: {N} job(s) to process (stage=tailored)", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
 
-    results = {"submitted": [], "stopped": [], "skipped": [], "already_applied": []}
+    results = {_T.K_RES_SUBMITTED: [], _T.K_RES_STOPPED: [], _T.K_RES_SKIPPED: [], _T.K_RES_ALREADY_APPLIED: []}
 
     for i, (jid, job) in enumerate(jobs):
         title = job.get("title", "?")
@@ -66,7 +66,7 @@ def run(jid=None, quick=False, max_pages=4):
             _process_one(jid, job, quick, max_pages, results)
         except Exception as e:
             print(f"  ERROR: {e}", file=sys.stderr)
-            results["skipped"].append((jid, f"exception: {e}"))
+            results[_T.K_RES_SKIPPED].append((jid, f"exception: {e}"))
 
         if i < N - 1:
             time.sleep(2)
@@ -206,7 +206,7 @@ def _process_one(jid, job, quick, max_pages, results):
     if title and company:
         dup = find_duplicate(jid, title, company)
         if dup and dup["stage"] == "applied":
-            results["already_applied"].append(
+            results[_T.K_RES_ALREADY_APPLIED].append(
                 (jid, f"duplicate of applied {dup['id'][:12]}"))
             print(f"  SKIP -- duplicate of already-applied {dup['id'][:12]}",
                   file=sys.stderr)
@@ -216,19 +216,19 @@ def _process_one(jid, job, quick, max_pages, results):
     print("  detect...", file=sys.stderr, end=" ")
     rc = detect_run(jid)
     if rc != 0:
-        results["skipped"].append((jid, "detect failed"))
+        results[_T.K_RES_SKIPPED].append((jid, "detect failed"))
         return
 
     state = load_state()
     jtype = state.get("type", "")
     print(f"type={jtype}", file=sys.stderr)
 
-    if jtype == "already_applied":
-        results["already_applied"].append((jid, "already applied"))
+    if jtype == _T.TYPE_ALREADY_APPLIED:
+        results[_T.K_RES_ALREADY_APPLIED].append((jid, "already applied"))
         return
 
     if jtype in ("unknown", ""):
-        results["skipped"].append((jid, "unknown type -- can't classify URL"))
+        results[_T.K_RES_SKIPPED].append((jid, "unknown type -- can't classify URL"))
         print("  SKIP -- unknown type", file=sys.stderr)
         return
 
@@ -237,7 +237,7 @@ def _process_one(jid, job, quick, max_pages, results):
         print("  navigate...", file=sys.stderr)
         rc = navigate_run(jid)
         if rc != 0:
-            results["skipped"].append((jid, "navigate failed"))
+            results[_T.K_RES_SKIPPED].append((jid, "navigate failed"))
             return
 
     # ── Step 3: fill ────────────────────────────────────────────────
@@ -246,7 +246,7 @@ def _process_one(jid, job, quick, max_pages, results):
                   max_pages=max_pages, quick=quick)
     if rc != 0:
         if _stage() == "applied":
-            results["already_applied"].append((jid, "already applied"))
+            results[_T.K_RES_ALREADY_APPLIED].append((jid, "already applied"))
             return
         st = load_state()
         # Transient exception (no status set — e.g. execution-context
@@ -269,11 +269,11 @@ def _process_one(jid, job, quick, max_pages, results):
                     from lib.db import advance_job
                     advance_job(jid, "tailored", state="rejected",
                                 error=_detail)
-                results["skipped"].append((jid, _detail))
+                results[_T.K_RES_SKIPPED].append((jid, _detail))
                 return
             if st.get("status") in (_T.STATUS_LOGIN_REQUIRED, _T.STATUS_LOGIN_FAILED,
                                     _T.STATUS_CAPTCHA_REQUIRED, _T.STATUS_TIMED_OUT):
-                results["skipped"].append((jid, f"fill failed: {st.get('status')}"))
+                results[_T.K_RES_SKIPPED].append((jid, f"fill failed: {st.get('status')}"))
                 return
             print("  FILL_FAILED — inspecting...", file=sys.stderr)
             try:
@@ -285,19 +285,19 @@ def _process_one(jid, job, quick, max_pages, results):
             if succeeded:
                 print("  Fill succeeded on LLM retry", file=sys.stderr)
             else:
-                results["stopped"].append((jid, "fill failed with diagnostic — review inspect output"))
+                results[_T.K_RES_STOPPED].append((jid, "fill failed with diagnostic — review inspect output"))
                 print("  STOPPED — fill failed after LLM retry, inspect for context", file=sys.stderr)
                 return
 
     if _stage() == "applied":
-        results["already_applied"].append((jid, "already applied"))
+        results[_T.K_RES_ALREADY_APPLIED].append((jid, "already applied"))
         return
 
     # ── Step 4: check ───────────────────────────────────────────────
     print("  check...", file=sys.stderr)
     rc = cmd_check(jid)
     if rc != 0:
-        results["stopped"].append((jid, "check failed -- supply answers and retry"))
+        results[_T.K_RES_STOPPED].append((jid, "check failed -- supply answers and retry"))
         print("  STOPPED -- check failed, orchestrator review needed", file=sys.stderr)
         return
 
@@ -308,7 +308,7 @@ def _process_one(jid, job, quick, max_pages, results):
     rc = cmd_submit(jid, confirm=True)
     if rc != 0:
         if _stage() == "applied":
-            results["submitted"].append((jid, "submitted"))
+            results[_T.K_RES_SUBMITTED].append((jid, "submitted"))
             return
         st = load_state()
         if st.get("submit_errors") and st.get("submit_clicked") is False:
@@ -316,17 +316,17 @@ def _process_one(jid, job, quick, max_pages, results):
                   file=sys.stderr)
             succeeded = _retry_submit_with_llm(jid, job, results)
             if succeeded:
-                results["submitted"].append((jid, "submitted (LLM retry)"))
+                results[_T.K_RES_SUBMITTED].append((jid, "submitted (LLM retry)"))
                 return
-            results["skipped"].append((jid, "submit failed after LLM retry"))
+            results[_T.K_RES_SKIPPED].append((jid, "submit failed after LLM retry"))
         else:
-            results["skipped"].append((jid, "submit failed"))
+            results[_T.K_RES_SKIPPED].append((jid, "submit failed"))
         return
 
     if _stage() == "applied":
-        results["submitted"].append((jid, "submitted"))
+        results[_T.K_RES_SUBMITTED].append((jid, "submitted"))
     else:
-        results["stopped"].append((jid, "submit returned 0 but stage not applied"))
+        results[_T.K_RES_STOPPED].append((jid, "submit returned 0 but stage not applied"))
 
 
 def _print_summary(results):
@@ -338,12 +338,12 @@ def _print_summary(results):
     print(f"SUMMARY: {n_sub} submitted, {n_stop} stopped (review), "
           f"{n_skip} skipped, {n_already} already applied", file=sys.stderr)
 
-    if results["submitted"]:
+    if results[_T.K_RES_SUBMITTED]:
         print("\n  SUBMITTED:", file=sys.stderr)
         for jid, detail in results["submitted"]:
             print(f"    {jid[:12]} -- {detail}", file=sys.stderr)
 
-    if results["stopped"]:
+    if results[_T.K_RES_STOPPED]:
         print("\n  STOPPED (orchestrator review needed):", file=sys.stderr)
         for jid, detail in results["stopped"]:
             print(f"    {jid[:12]} -- {detail}", file=sys.stderr)
@@ -353,7 +353,7 @@ def _print_summary(results):
         for jid, detail in results["skipped"]:
             print(f"    {jid[:12]} -- {detail}", file=sys.stderr)
 
-    if results["already_applied"]:
+    if results[_T.K_RES_ALREADY_APPLIED]:
         print("\n  ALREADY APPLIED:", file=sys.stderr)
         for jid, detail in results["already_applied"]:
             print(f"    {jid[:12]} -- {detail}", file=sys.stderr)

@@ -136,7 +136,7 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
             # without confirmation (check arbitrates).
             "kind": _T.UNVERIFIED if r.get("unverified") else _T.VERIFIED,
             "method": r.get("method", "deterministic"),
-            "reason": "accepted_unverified" if r.get("unverified") else "verified",
+            "reason": "accepted_unverified" if r.get("unverified") else _T.VERIFIED,
         })
     for r in failed_all:
         diag = r.get("_diag") or {}
@@ -144,7 +144,7 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
         if is_no_answer:
             kind = _T.NEEDS_DATA
         else:
-            kind = (_T.INTERACTION_FAILED if diag.get("reason") == "exception"
+            kind = (_T.INTERACTION_FAILED if diag.get("reason") == "fill_exception"
                     else _T.REJECTED_BY_FORM)
         fields.append({
             "label": r.get("label", ""), "answer": r.get("attempted", ""),
@@ -203,15 +203,15 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
     # Aggregate ask_api escape-hatch status for this run — the
     # orchestrator must see policy_off vs api_down vs declined vs used
     # instead of an opaque "llm_reply: no_match".
-    llm_status = "unused"
+    llm_status = _T.LLM_UNUSED
     llm_detail = ""
     for f in fields:
         fdiag = f.get("diag") or {}
         if fdiag.get("llm_skipped") == "policy":
-            llm_status, llm_detail = "policy_off", "option_pick gated"
+            llm_status, llm_detail = _T.LLM_POLICY_OFF, "option_pick gated"
             break
         st = fdiag.get("llm_status") or {}
-        if st.get("state") and st["state"] != "unused":
+        if st.get("state") and st["state"] != _T.LLM_UNUSED:
             llm_status, llm_detail = st["state"], st.get("detail", "")
             break
 
@@ -258,8 +258,8 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
             detail=f"filled={len(filled_recs)} failed={len(failed_labels)} "
                    f"skipped={len(skipped_labels)} blockers={len(blockers)}")
         for f in fields:
-            if f["kind"] in ("rejected_by_form", "interaction_failed",
-                             "needs_data"):
+            if f["kind"] in (_T.REJECTED_BY_FORM, _T.INTERACTION_FAILED,
+                             _T.NEEDS_DATA):
                 obs("fill", "field", jid=jid, target=f["label"],
                     pre=f.get("answer", ""), post=f.get("selected_text", ""),
                     outcome=f["kind"],
@@ -879,30 +879,38 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     skyvern_result = None
     needs_skyvern = (bool(skyvern_fields) or field_total == 0) and not quick
     if needs_skyvern:
-        n = len(skyvern_fields) if skyvern_fields else 8
-        budget = min(30, 6 + 3 * n)
-        print(f"  Handing off {n} field(s) to Skyvern (non-blocking, max_steps={budget})...", file=sys.stderr)
-        from apply.common.skyvern_bridge import fill_remaining as _fill_remaining
+        # Skyvern is an OPTIONAL external agent (module not installed in
+        # this deployment) — the user-visible strings must not reference
+        # it when it cannot possibly run.
         try:
-            skyvern_result = _fill_remaining(
-                url=url,
-                answers=ans_dict,
-                filled_fields=filled_all + [r["label"] for r in skipped],
-                wait=False,
-                timeout=30,
-                max_steps=budget,
-            )
-            status = skyvern_result.get("status", "unknown")
-            print(f"  Skyvern: {status}", file=sys.stderr)
-            if skyvern_result.get("browser_session_id"):
-                state["browser_session_id"] = skyvern_result["browser_session_id"]
-            if skyvern_result.get("run_id"):
-                state["fill_run_id"] = skyvern_result["run_id"]
-                state["fill_run_started"] = time.time()
-                print(f"  Skyvern run_id: {state['fill_run_id']}", file=sys.stderr)
-                print(f"  Check status later via 'apply verify {jid}'", file=sys.stderr)
-        except Exception as se:
-            print(f"  Skyvern fill failed: {se}", file=sys.stderr)
+            from apply.common.skyvern_bridge import fill_remaining as _fill_remaining
+            _skyvern_ok = True
+        except Exception:
+            _skyvern_ok = False
+        if _skyvern_ok:
+            n = len(skyvern_fields) if skyvern_fields else 8
+            budget = min(30, 6 + 3 * n)
+            print(f"  Handing off {n} field(s) to Skyvern (non-blocking, max_steps={budget})...", file=sys.stderr)
+            try:
+                skyvern_result = _fill_remaining(
+                    url=url,
+                    answers=ans_dict,
+                    filled_fields=filled_all + [r["label"] for r in skipped],
+                    wait=False,
+                    timeout=30,
+                    max_steps=budget,
+                )
+                status = skyvern_result.get("status", "unknown")
+                print(f"  Skyvern: {status}", file=sys.stderr)
+                if skyvern_result.get("browser_session_id"):
+                    state["browser_session_id"] = skyvern_result["browser_session_id"]
+                if skyvern_result.get("run_id"):
+                    state["fill_run_id"] = skyvern_result["run_id"]
+                    state["fill_run_started"] = time.time()
+                    print(f"  Skyvern run_id: {state['fill_run_id']}", file=sys.stderr)
+                    print(f"  Check status later via 'apply verify {jid}'", file=sys.stderr)
+            except Exception as se:
+                print(f"  Skyvern fill failed: {se}", file=sys.stderr)
 
     state["filled_count"] = len(filled_all)
     state["remaining_fields"] = [
@@ -941,7 +949,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
         msg += f", {len(req_no_answer)} REQUIRED unanswered"
     if skyvern_result:
         msg += f" + Skyvern: {skyvern_result.get('status', 'unknown')}"
-    emit_status("filled", msg)
+    emit_status(_T.STATUS_FILLED, msg)
 
     if skyvern_result and skyvern_result.get("run_id"):
         emit_next("verify", "poll Skyvern fill progress")

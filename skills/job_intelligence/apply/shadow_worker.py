@@ -56,24 +56,24 @@ def main():
         return 2
 
     from apply.auto import _process_one
-    results = {_T.OUTCOME_SUBMITTED: [], _T.OUTCOME_STOPPED: [], _T.OUTCOME_SKIPPED: [],
-               _T.OUTCOME_ALREADY_APPLIED: []}
+    results = {_T.K_RES_SUBMITTED: [], _T.K_RES_STOPPED: [], _T.K_RES_SKIPPED: [],
+               _T.K_RES_ALREADY_APPLIED: []}
     t0 = time.time()
     try:
         _process_one(jid, job, quick=quick, max_pages=4, results=results)
-        if results[_T.OUTCOME_ALREADY_APPLIED]:
+        if results[_T.K_RES_ALREADY_APPLIED]:
             outcome, detail = _T.OUTCOME_ALREADY_APPLIED, ""
-        elif results[_T.OUTCOME_SUBMITTED]:
-            outcome, detail = _T.OUTCOME_SUBMITTED, str(results[_T.OUTCOME_SUBMITTED][0][1])[:120]
-        elif results[_T.OUTCOME_STOPPED]:
-            detail = str(results[_T.OUTCOME_STOPPED][0][1])[:120]
+        elif results[_T.K_RES_SUBMITTED]:
+            outcome, detail = _T.OUTCOME_SUBMITTED, str(results[_T.K_RES_SUBMITTED][0][1])[:120]
+        elif results[_T.K_RES_STOPPED]:
+            detail = str(results[_T.K_RES_STOPPED][0][1])[:120]
             if detail.startswith("submit returned 0"):
                 outcome, detail = _T.OUTCOME_HELD_SHADOW, "fill+check OK, submit held (shadow)"
             else:
                 outcome, detail = _T.OUTCOME_STOPPED, detail
         else:
             outcome, detail = _T.OUTCOME_SKIPPED, (
-                str(results[_T.OUTCOME_SKIPPED][0][1])[:120] if results[_T.OUTCOME_SKIPPED] else "?")
+                str(results[_T.K_RES_SKIPPED][0][1])[:120] if results[_T.K_RES_SKIPPED] else "?")
     except Exception as e:
         outcome, detail = _T.OUTCOME_EXCEPTION, str(e)[:150]
 

@@ -69,6 +69,17 @@ LLM_USED = "used"           # model produced a value
 LLM_STATUSES = (LLM_UNUSED, LLM_POLICY_OFF, LLM_API_DOWN,
                 LLM_DECLINED, LLM_USED)
 
+# ── _process_one result-collector keys (the worker's vocabulary) ──────
+K_RES_SUBMITTED = "submitted"
+K_RES_STOPPED = "stopped"
+K_RES_SKIPPED = "skipped"
+K_RES_ALREADY_APPLIED = "already_applied"
+RESULT_KEYS = (K_RES_SUBMITTED, K_RES_STOPPED, K_RES_SKIPPED,
+               K_RES_ALREADY_APPLIED)
+
+# ── Detect/apply types (detect.py vocabulary) ─────────────────────────
+TYPE_ALREADY_APPLIED = "already_applied"
+
 # ── Summary vocabulary (mutually exclusive, sums to unique total) ─────
 K_FILLED = "filled"
 K_FAILED = "failed"

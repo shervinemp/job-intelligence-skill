@@ -65,13 +65,17 @@ def cmd_next(jid):
             emit_next("fill")
             return 0
 
-        print("  No Next button found via DOM — using Skyvern", file=sys.stderr)
-        from apply.common.skyvern_bridge import click_next
-        result = click_next(url=page.url, timeout=120)
-        if result.get("status") == "completed":
-            emit_status("navigated", "skyvern clicked Next")
-            emit_next("fill")
-            return 0
+        try:
+            from apply.common.skyvern_bridge import click_next
+        except Exception:
+            click_next = None
+        if click_next:
+            print("  No Next button found via DOM — handing off to external agent", file=sys.stderr)
+            result = click_next(url=page.url, timeout=120)
+            if result.get("status") == "completed":
+                emit_status("navigated", "external agent clicked Next")
+                emit_next("fill")
+                return 0
 
         emit_error("no Next/Continue button found")
         return 1

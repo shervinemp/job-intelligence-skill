@@ -42,6 +42,7 @@ class StandardReader(FieldValueReader):
                 if (el.tagName === 'SELECT') return el.options[el.selectedIndex]?.text || el.value || null;
                 if (el.type === 'checkbox') return el.checked ? '__checked__' : '';
                 if (el.type === 'radio') return null;
+                if (el.tagName === 'BUTTON') return el.textContent?.trim() || null;
                 if (el.tagName === 'DIV' || el.isContentEditable) return el.textContent?.trim() || null;
                 return el.value || null;
             }}""") or "").strip() or None

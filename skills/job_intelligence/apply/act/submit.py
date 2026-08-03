@@ -272,7 +272,7 @@ def cmd_submit(jid, confirm=False, force=False):
 
             if handle_captcha(page, state):
                 emit_status("captcha", "CAPTCHA still present after timeout")
-                state["status"] = "captcha_required"
+                state["status"] = _T.STATUS_CAPTCHA_REQUIRED
                 save_state(state)
                 return 1
 
@@ -324,7 +324,7 @@ def cmd_submit(jid, confirm=False, force=False):
 
                 if outcome == "success":
                     mark_applied(jid)
-                    emit_status("submitted", f"investigation: {reason}")
+                    emit_status(_T.OUTCOME_SUBMITTED, f"investigation: {reason}")
                     emit_next("verify")
                     return 0
                 if outcome == "rejected":
@@ -349,7 +349,7 @@ def cmd_submit(jid, confirm=False, force=False):
                 # but flag for human review
                 print("  UNCERTAIN - marking as applied (conservative), flagging for review", file=sys.stderr)
                 mark_applied(jid)
-                emit_status("submitted", f"uncertain outcome - {reason}. Review recommended.")
+                emit_status(_T.OUTCOME_SUBMITTED, f"uncertain outcome - {reason}. Review recommended.")
                 emit_next("verify", "please verify this submission was received")
                 return 0
 
@@ -517,7 +517,7 @@ def cmd_submit(jid, confirm=False, force=False):
                 if outcome == "success":
                     was_new = mark_applied(jid)
                     if was_new:
-                        emit_status("submitted", reason)
+                        emit_status(_T.OUTCOME_SUBMITTED, reason)
                     else:
                         emit_status("already applied")
                     emit_next("verify")
@@ -551,7 +551,7 @@ def cmd_submit(jid, confirm=False, force=False):
                 # Mark as applied (conservative — prevents duplicate) but flag for review
                 print("  UNCERTAIN — marking as applied (conservative), flagging for review", file=sys.stderr)
                 mark_applied(jid)
-                emit_status("submitted", f"uncertain outcome — {reason}. Review recommended.")
+                emit_status(_T.OUTCOME_SUBMITTED, f"uncertain outcome — {reason}. Review recommended.")
                 emit_next("verify", "please verify this submission was received")
                 return 0
 
@@ -570,10 +570,10 @@ def cmd_submit(jid, confirm=False, force=False):
                 _reg = _resolve_reg(page.url)
                 _cwd = _reg.widgets if _reg and hasattr(_reg, 'widgets') else None
                 if not has_any_form(page, custom_widget_selectors=_cwd):
-                    print("  No form, dialog, or iframe form — Skyvern cannot help", file=sys.stderr)
-                    state["status"] = "no_apply_path"
+                    print("  No form, dialog, or iframe form found", file=sys.stderr)
+                    state["status"] = _T.STATUS_NO_APPLY_PATH
                     save_state(state)
-                    emit_status("no_apply_path", "no form or submit button — job may be expired")
+                    emit_status(_T.STATUS_NO_APPLY_PATH, "no form or submit button — job may be expired")
                     emit_next("none", "check if job is still active or apply via external URL")
                     return 1
 
@@ -622,27 +622,30 @@ def cmd_submit(jid, confirm=False, force=False):
                 if keyboard_clicked:
                     was_new = mark_applied(jid)
                     if was_new:
-                        emit_status("submitted", "keyboard submit")
+                        emit_status(_T.OUTCOME_SUBMITTED, "keyboard submit")
                     else:
                         emit_status("already applied")
                     emit_next("verify")
                     return 0
 
-                # 3. Skyvern — absolute last resort
-                print("  Keyboard methods failed — trying Skyvern", file=sys.stderr)
+                # 3. External agent — absolute last resort (module-gated)
                 try:
                     from apply.common.skyvern_bridge import click_submit
+                except Exception:
+                    click_submit = None
+                if click_submit is None:
+                    print("  External submit agent not available (module not installed)",
+                          file=sys.stderr)
+                else:
+                    print("  Keyboard methods failed — handing off to external agent", file=sys.stderr)
                     result = click_submit(url=page.url,
                                           browser_session_id=browser_session_id,
                                           timeout=60)
                     if result.get("status") == "completed":
                         mark_applied(jid)
-                        emit_status("submitted", "Skyvern clicked submit")
+                        emit_status(_T.OUTCOME_SUBMITTED, "external agent clicked submit")
                         emit_next("verify")
                         return 0
-                except ImportError:
-                    print("  Skyvern not available (module not installed)",
-                          file=sys.stderr)
 
             # Only reach here if we could not click submit at all
             emit_status("submit_failed", "could not click submit button")

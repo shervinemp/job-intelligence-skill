@@ -157,7 +157,8 @@ _SCAN_JS = r"""() => {
     const loginSignals = [];
     const _L = ['sign in to apply', 'sign in with email', 'log in to apply',
                 'please sign in', 'sign in or', 'create an account',
-                'create account', 'continue with email', 'login to continue'];
+                'create account', 'continue with email', 'login to continue',
+                'sign in', 'log in'];
     for (const s of _L) {
         if (txt.includes(s)) loginSignals.push(s);
     }

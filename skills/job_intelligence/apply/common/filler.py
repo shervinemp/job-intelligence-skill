@@ -157,8 +157,24 @@ class CheckboxFiller(FieldFiller):
                 return False
             want_checked = str(ans).strip().lower() in ("true", "1", "yes", "y", "checked")
             if want_checked and not cb.is_checked():
-                cb.check(force=True)
-                return True
+                try:
+                    cb.check(force=True)
+                except Exception:
+                    pass
+                if not cb.is_checked():
+                    # Hidden/React checkbox: check() on a display:none input
+                    # may not trigger the framework state. Click the label
+                    # the user would click (label[for=id] or closest label).
+                    try:
+                        _id = cb.get_attribute("id")
+                        if _id:
+                            lbl = page.locator(
+                                f'label[for="{_id.replace(chr(34), "")}"]').first
+                            if lbl.count():
+                                lbl.click(force=True, timeout=3000)
+                    except Exception:
+                        pass
+                return cb.is_checked()
             if not want_checked and cb.is_checked():
                 cb.uncheck(force=True)
                 return True
@@ -183,6 +199,16 @@ class RadioFiller(FieldFiller):
             yn_prefix = "yes"
         elif ans_lower.startswith("no"):
             yn_prefix = "no"
+        # EEOC phrasing derivation: "I do not have a disability" IS a No,
+        # "I have a disability" IS a Yes — the option text is just Yes/No.
+        if not yn_prefix:
+            import re as _re
+            if _re.search(r"\bi do(n't| not)? have( any| no)?\b|\bwe do(n't| not)? have\b|\bi have not\b|\bi have never\b", ans_lower):
+                yn_prefix = "no"
+            elif _re.search(r"\bi (am|do) not\b.*\b(disclos|wish|willing)", ans_lower):
+                pass
+            elif _re.search(r"\bi have\b|\bi identify\b|\byes\b", ans_lower):
+                yn_prefix = "yes"
         country = (f.get("_country") or "").lower()
         try:
             # Step 1: find the matching radio's id via JS (no click — React
@@ -317,6 +343,7 @@ class RadioFiller(FieldFiller):
                     return s.replace(/^(yes|no)[,\\s]+/i, '')
                             .replace(/['\\u2019]/g, '')
                             .replace(/\\bdo not\\b/g, 'dont')
+                            .replace(/prefer not to (answer|say|state|disclose|specify)/, 'prefernottosay')
                             .replace(/[^a-z\\s]/g, '')
                             .trim();
                 }
@@ -759,6 +786,10 @@ def fill_field(page, field: dict, ans: str) -> tuple[bool, str]:
             if filler.can_handle(field):
                 if filler.fill(fr, field, ans):
                     return True, filler.name
+                # Radio/yesno rows return bare False with no evidence —
+                # record a diagnostic so the audit log explains the gap
+                # instead of showing an empty reason.
+                field.setdefault("_diag", {})["reason"] = "no_option_match"
         return False, "none"
 
     before = _read_element_value(page, sel, field=field)

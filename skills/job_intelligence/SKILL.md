@@ -1,5 +1,11 @@
 # Job Intelligence Pipeline
 
+> **Read ETHOS.md first** — the operating contract: deterministic core is the
+> source of truth, ask_api is a gated escape hatch (vision + code-exhausted
+> ambiguity only), and the orchestrator (LLM-in-the-middle) is the operator,
+> verifier and debugger consuming the evidence trail. `report.py glossary`
+> prints the canonical vocabulary (generated from `apply/common/terms.py`).
+
 ## Read First
 
 Before running pipeline, read these:
@@ -21,6 +27,22 @@ Before running pipeline, read these:
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
 
 > `tailor.py` crafts one job at a time. Use `--auto` to process all described jobs with rate-limit handling.
+
+## Change protocol (cooked-in lessons — do NOT skip)
+
+After ANY hot-path change (fill/check/submit/resolve/shadow/terms):
+1. `python scripts/lint.py` — vocabulary literals, dead strings, nested dirs, compile. Must PASS.
+2. `python -m pytest tests -q` — full suite. Must PASS.
+3. One live shadow job (regression canary compares vs its previous run) —
+   e.g. `apply.py shadow --jid <lyft>` after removing it from the log.
+4. `report.py shadow --classify` — verify the outcome landed as expected.
+5. `python scripts/port.py` — the ONLY supported workspace→repo sync:
+   lint gate → workspace suite → manifest copy (hash-verified) → nested-dir
+   guard → repo suite. It refuses on any failure.
+6. Commit + push from the repo.
+
+The port manifest lives in `scripts/port.py` — add new owned files there.
+Never Copy-Item a directory by hand (the apply/apply nesting lesson).
 
 ## Commands
 
@@ -111,13 +133,19 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | `act --fill <jid> [--answers '{}']` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --back <jid>` | Click Back |
-| `act --submit <jid>` | Submit. Runs pre-submit check. Sets `submit_clicked` flag before clicking. Investigates (no re-click) on retry. `--force` clears guard. |
+| `act --submit <jid>` | Submit. Runs pre-submit check (incl. cross-field coherence) + regression canary. Sets `submit_clicked` flag before clicking. Investigates (no re-click) on retry. `--force` clears guard + gates. |
 | `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 | `apply.py reject <jid>` | Skip permanently |
 | `apply.py flag <jid>` | Toggle auth wall flag |
 | `apply.py retry [<jid>]` | Re-attempt failed applies |
 | `apply.py undo <jid>` | Move back one stage |
+| `apply.py preflight` | Profile readiness gate: hard/soft/answer-gaps/coverage. Run BEFORE any batch — an incomplete profile (e.g. missing `work_history`) fails the fleet identically. |
+| `apply.py shadow [--jid ...] [--recheck] [--quick]` | Observability batch (subprocess per job, never submits). `--recheck` re-examines the unconfirmed-skip queue (cookie/session-variance candidates). |
+| `report.py shadow --classify` | Orchestrator verification view: outcomes, crash evidence, owner-split (code/data/handover), unconfirmed clustering. |
+| `report.py fleet` | Fleet accuracy report: kinds, method attribution (deterministic vs combobox vs llm), weekly trend, steering memo of top failing labels. |
+| `report.py glossary` | The vocabulary — generated from apply/common/terms.py (cannot drift). |
+| `tailor.py ground <jid>` | Factual-grounding manifest: every tailored claim must trace to profile.json. `admit` is blocked until clean (`--force` after human review). |
 
 ### Apply workflow — phased approach
 

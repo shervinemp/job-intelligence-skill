@@ -179,7 +179,7 @@ def cmd_check(jid):
                 # (the pipeline's checksum — see apply/common/coherence.py).
                 if expected is not None and actual:
                     _coherence_fields.append(
-                        {"label": label, "answer": str(expected), "kind": "verified"})
+                        {"label": label, "answer": str(expected), "kind": _T.VERIFIED})
 
                 # Required field with NO answer: surface it instead of
                 # silently passing — an empty required field is a submit
@@ -439,7 +439,7 @@ def cmd_check(jid):
         emit_status("check_passed", f"{checked} fields verified, {len(warnings)} warnings, {len(infos)} unreadable")
         emit_next_value("submit", "safe to submit" if not warnings else "review warnings then submit")
     else:
-        emit_status("check_failed", f"{len(errors)} error(s) — fix before submit")
+        emit_status(_T.STATUS_CHECK_FAILED, f"{len(errors)} error(s) — fix before submit")
         emit_next_value("act --fill", "fix errors with --answers then re-check")
 
     return 0 if not errors else 1
