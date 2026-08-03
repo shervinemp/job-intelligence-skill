@@ -1,0 +1,465 @@
+"""resolve.py — Label→value resolution for form auto-fill.
+
+No answer values are hardcoded here. Facts and derivations come from profile.json;
+per-run overrides come from the --answers dict. Resolution is deterministic:
+
+  1. --answers override   exact normalized-label match, or prefix match for
+                          field_reader's 60-char label truncation
+  2. profile ephemeral    profile facts + name/location derivations + the
+                          profile["answers"] static map, exact key match
+
+Anything unresolved returns no_match and is surfaced to the caller as an unfilled
+field; the LLM then supplies it via --answers.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+from typing import Optional
+
+from lib.config import STATE_DIR
+
+
+# ─── Resolution result ───────────────────────────────────────────────
+
+class Resolution:
+    __slots__ = ("value", "key", "label", "provenance", "ephemeral_only")
+    def __init__(self, value, key, label, provenance, ephemeral_only=False):
+        self.value = value
+        self.key = key
+        self.label = label
+        self.provenance = provenance
+        self.ephemeral_only = ephemeral_only
+
+
+# ─── Normalization ───────────────────────────────────────────────────
+
+def normalize(label: str) -> str:
+    return re.sub(r"[^a-z0-9+#]+", " ", (label or "").lower()).strip()
+
+
+# ─── Ephemeral answer builder ───────────────────────────────────────
+
+# String-valued profile facts resolved by exact (normalized) label match.
+# Boolean/parameterized facts (authorized_to_work, requires_sponsorship) need
+# yes/no + country transforms — those use the static answers map below.
+_PROFILE_KEYS = {
+    "first_name", "last_name", "email", "phone",
+    "linkedin_url", "github_url", "portfolio_url", "website",
+    "address", "city", "state", "zip", "country",
+    "visa_status", "expected_salary", "salary_currency",
+    "work_preference", "remote_preference", "start_date", "pronouns",
+    "resume_path", "location",
+}
+
+
+def _build_ephemeral(profile: dict) -> dict:
+    ephemeral = {}
+
+    for k in _PROFILE_KEYS:
+        v = profile.get(k)
+        if v:
+            ephemeral[k] = (str(v), "profile")
+
+    fn, ln = profile.get("first_name", ""), profile.get("last_name", "")
+    if fn and ln:
+        ephemeral["full_name"] = (f"{fn} {ln}", "derived")
+    elif fn or ln:
+        ephemeral["full_name"] = (fn or ln, "derived")
+
+    # Derive location parts from "location" only if not given as explicit keys
+    # (explicit profile.city/country/state win over the derivation).
+    loc = profile.get("location", "")
+    if loc:
+        ephemeral.setdefault("address", (loc, "derived"))
+    if loc and "," in loc:
+        parts = [p.strip() for p in loc.split(",")]
+        if len(parts) >= 1 and parts[0]:
+            ephemeral.setdefault("city", (parts[0], "derived"))
+        if len(parts) >= 2 and parts[1]:
+            ephemeral.setdefault("state_province", (parts[1], "derived"))
+            ephemeral.setdefault("state", (parts[1], "derived"))
+            ephemeral.setdefault("province", (parts[1], "derived"))
+        if len(parts) >= 3 and parts[-1]:
+            ephemeral.setdefault("country", (parts[-1], "derived"))
+
+    answers = profile.get("answers", {})
+    if isinstance(answers, dict):
+        for k, v in answers.items():
+            if v:
+                ephemeral[k] = (str(v) if not isinstance(v, list) else [str(x) for x in v], "static")
+
+    # Aliases: forms ask "Website" when the profile has portfolio_url (and vice versa)
+    if ephemeral.get("portfolio_url") and "website" not in ephemeral:
+        ephemeral["website"] = ephemeral["portfolio_url"]
+    if ephemeral.get("website") and "portfolio_url" not in ephemeral:
+        ephemeral["portfolio_url"] = ephemeral["website"]
+
+    return ephemeral
+
+
+def _find_ephemeral_value(key: str, ephemeral: dict) -> Optional[str]:
+    entry = ephemeral.get(key)
+    return entry[0] if entry else None
+
+
+# ─── Autofill-token map (WHATWG autocomplete attribute) ───────────────
+# The same free semantic layer browser autofill and chrome auto-apply
+# extensions use. Checked before label heuristics.
+
+_AUTOCOMPLETE_MAP = {
+    "given-name": "first_name",
+    "family-name": "last_name",
+    "name": "full_name",
+    "email": "email",
+    "tel": "phone",
+    "tel-national": "phone",
+    "tel-country-code": "phone",
+    "country": "country",
+    "country-name": "country",
+    "address-level1": "state",
+    "address-level2": "city",
+    "address-level3": "city",
+    "postal-code": "zip",
+    "street-address": "address",
+    "url": "website",
+}
+
+_ATTR_MAP = {
+    "first_name": "first_name", "firstname": "first_name",
+    "last_name": "last_name", "lastname": "last_name", "surname": "last_name",
+    "email": "email", "phone": "phone", "tel": "phone",
+    "country": "country", "city": "city", "state": "state",
+    "location": "location", "address": "address", "zip": "zip",
+    "postalcode": "zip", "postal_code": "zip",
+    "linkedin": "linkedin_url", "github": "github_url",
+    "website": "website", "portfolio": "portfolio_url",
+    "resume": "resume_path",
+}
+
+# Strong tokens: safe to trust from the name/id alone (their labels are
+# near-universally predictable). Everything else is WEAK — the label must
+# corroborate, or an EEOC free-text 'other' input whose id happens to
+# contain "location" gets filled with the user's city.
+_STRONG_ATTR = {"email", "phone", "tel", "first_name", "firstname",
+                "last_name", "lastname", "surname", "zip", "postalcode",
+                "postal_code", "country"}
+
+_ATTR_HINTS = {
+    "city": ("city", "location", "where", "based", "reside"),
+    "location": ("location", "city", "where", "based", "reside"),
+    "state": ("state", "province", "region"),
+    "address": ("address", "street", "residence"),
+    "website": ("website", "portfolio", "site", "url", "link"),
+    "portfolio_url": ("portfolio", "website", "site", "url"),
+    "linkedin_url": ("linkedin",),
+    "github_url": ("github",),
+    "resume_path": ("resume", "cv"),
+}
+
+
+def _autocomplete_key(token: str) -> Optional[str]:
+    """'section-blue shipping tel' → 'tel' → 'phone'."""
+    if not token:
+        return None
+    for part in reversed(token.lower().split()):
+        if part in _AUTOCOMPLETE_MAP:
+            return _AUTOCOMPLETE_MAP[part]
+    return None
+
+
+# ─── Resolution chain ────────────────────────────────────────────────
+
+def resolve(
+    label: str,
+    profile: dict,
+    answers_override: Optional[dict] = None,
+    autocomplete: str = "",
+    field_name: str = "",
+    field_id: str = "",
+    field_tag: str = "",
+    field_type: str = "",
+    field_role: str = "",
+    ephemeral: Optional[dict] = None,
+) -> Resolution:
+    if answers_override is None:
+        answers_override = {}
+
+    norm = normalize(label)
+    if not norm:
+        return Resolution(None, None, label, "no_match")
+
+    # Build ephemeral once if not provided (shared across calls in a loop)
+    if ephemeral is None:
+        ephemeral = _build_ephemeral(profile)
+
+    # Step 1: --answers override (explicit user/assistant value for this run)
+    for k, v in answers_override.items():
+        nk = normalize(k)
+        if nk == norm:
+            return Resolution(v, "answers_override", label, "answers_override")
+        # Prefix match for field_reader's 60-char label truncation.
+        # Bidirectional: field label may be truncated (nk longer than norm)
+        # or answer key may be truncated (norm longer than nk).
+        if len(nk) >= 10 and (norm.startswith(nk) or nk.startswith(norm)):
+            return Resolution(v, "answers_override", label, "answers_override")
+
+    # Step 1.5a: phone country code — extract from phone before generic matching
+    if "country code" in norm and "phone" in norm:
+        phone_val = _find_ephemeral_value("phone", ephemeral)
+        if phone_val:
+            m = re.match(r'\+?(\d{1,3})', phone_val)
+            return Resolution(("+" + m.group(1)) if m else "+1", "phone", label, "country_code")
+
+    # Step 1.5: HTML autocomplete attribute (standardized semantics, free)
+    ac_key = _autocomplete_key(autocomplete)
+    if ac_key:
+        val = _find_ephemeral_value(ac_key, ephemeral)
+        if val:
+            if ac_key == "tel-country-code":
+                import re as _re
+                m = _re.match(r'\+?(\d{1,3})', val)
+                val = ("+" + m.group(1)) if m else "+1"
+            return Resolution(val, ac_key, label, "autocomplete")
+
+    # Step 1.7: pronoun option rows ("He/him" checkboxes) derived from
+    # gender. CHECK-positive only: the matching pronoun gets "Yes",
+    # non-matching ones get no answer — the row starts unchecked, so
+    # checking only the match achieves the exact desired state without
+    # risking an uncheck on a user-chosen pronoun.
+    if re.fullmatch(r"he him|she her|they them|xe xem|ze hir|ze zir|ey em",
+                    norm):
+        g = str(_find_ephemeral_value("gender", ephemeral)
+                or _find_ephemeral_value("Gender Identity", ephemeral)
+                or "").lower()
+        gmap = {"male": "he", "man": "he", "female": "she", "woman": "she",
+                "nonbinary": "they", "non-binary": "they", "genderqueer": "they",
+                "genderfluid": "they", "agender": "they"}
+        if g:
+            first = g.split()[0].rstrip(",")
+            fam = gmap.get(first)
+            if fam and norm.startswith(fam + " "):
+                return Resolution("Yes", "pronoun", label, "pronoun")
+        return Resolution(None, None, label, "no_match")
+
+    # Step 1.6: name/id attribute semantics — ATS vendors use consistent
+    # attribute names (first_name, last_name, email, phone, country, etc.)
+    # that are more reliable than visible labels. Mirrors Jobright's pattern.
+    # Skip for radio/select/combobox: their name/id are arbitrary DB IDs (e.g.
+    # "custom_question_location") that can incidentally match _ATTR_MAP keys
+    # and cause false answers on EEOC questions.
+    _ft = (field_tag or "").upper()
+    _fty = (field_type or "").lower()
+    _role = (field_role or "").lower()
+    _skip_attr = (
+        _ft in ("RADIO_GROUP", "SELECT", "DROPDOWN")
+        or _fty in ("radio", "select-one", "select-multiple", "custom")
+        or _role == "combobox"
+    )
+    if not _skip_attr:
+        for attr_val in (field_name, field_id):
+            if not attr_val:
+                continue
+            av = attr_val.lower().replace("-", "_")
+            for pat, ekey in _ATTR_MAP.items():
+                if pat in av:
+                    # Weak tokens (city/location/website/...) require the
+                    # LABEL to corroborate — prevents EEOC 'other' inputs
+                    # (id contains "location") being filled with the city.
+                    # Word-boundary match: "ethnicity" must not count as
+                    # containing "city".
+                    if pat not in _STRONG_ATTR:
+                        hints = _ATTR_HINTS.get(ekey, ())
+                        if not re.search(
+                                r"\b(" + "|".join(re.escape(h) for h in hints) + r")\b",
+                                label.lower()):
+                            continue
+                    val = _find_ephemeral_value(ekey, ephemeral)
+                    if val:
+                        if "country_code" in av or "countrycode" in av:
+                            import re as _re
+                            m = _re.match(r'\+?(\d{1,3})', val)
+                            val = ("+" + m.group(1)) if m else "+1"
+                        return Resolution(val, ekey, label, "attr")
+
+    # Step 2: profile ephemeral exact match (deterministic facts/derivations)
+    for key, (val, _source) in ephemeral.items():
+        if normalize(key.replace("_", " ")) == norm:
+            return Resolution(val, key, label, "ephemeral")
+
+    # Step 2.5: date-part derivation — Greenhouse-style work-history
+    # "Start date month/year" fields. The profile carries "Immediately"
+    # for start; stuffing it into a month picker always fails. Derive the
+    # current month/year instead (start-as-soon-as-possible semantics).
+    # "End date" parts are deliberately NOT derived (ambiguous — the last
+    # role is usually still current).
+    if re.search(r"\b(start date|start)\b", norm):
+        if re.search(r"\bmonth\b", norm):
+            from datetime import datetime as _dt
+            return Resolution(_dt.now().strftime("%B"), "derived", label, "derived")
+        if re.search(r"\byear\b", norm):
+            from datetime import datetime as _dt
+            return Resolution(str(_dt.now().year), "derived", label, "derived")
+
+    # Step 3: keyword-level match — profile answer keys often contain key terms
+    # that appear inside the field label (e.g. profile:willing_to_relocate →
+    # field:"Are you willing to relocate"). Match when profile key's keywords
+    # are a strong subset of the field label's keywords.
+    # Guard: require at least one content word (not a stopword) in the key,
+    # otherwise generic question stems like "have you ever been" match any
+    # question containing those words (felony, disciplinary, etc.).
+    _STOPWORDS = {"have", "you", "ever", "been", "do", "are", "the", "a", "an",
+                  "of", "in", "to", "is", "what", "how", "did", "or", "as", "at",
+                  "by", "for", "if", "with", "from", "that", "this", "your"}
+    _norm_words = set(norm.split())
+    for key, (val, _source) in ephemeral.items():
+        _key_words = set(normalize(key.replace("_", " ")).split())
+        _content = _key_words - _STOPWORDS
+        if len(_key_words) >= 2 and _key_words.issubset(_norm_words):
+            if len(_content) >= 2:
+                return Resolution(val, key, label, "ephemeral")
+
+    # Step 3b: suffix-stripped match — profile keys like linkedin_url / github_url
+    # end in _url, _path, _handle. The entity name (linkedin, github) appears in
+    # the field label ("LinkedIn Profile", "Github"). Strip suffix, check name match.
+    # Guard: only match on short labels (≤6 words) to avoid matching when the entity
+    # name appears as one option among many (e.g. "How did you hear about us? LinkedIn").
+    if len(_norm_words) <= 6:
+        for key, (val, _source) in ephemeral.items():
+            for suffix in ("_url", "_path", "_handle", "_email", "_phone"):
+                if key.endswith(suffix):
+                    name = key[:-len(suffix)]
+                    if name in _norm_words:
+                        return Resolution(val, key, label, "ephemeral")
+
+    # Step 3c: single-word whole-word match for unambiguous contact/location
+    # keys ("Location (City)" → location, "Country" → country). Whitelist keeps
+    # it conservative — only fires when the label is SHORT (≤3 words) so a word
+    # like "country" doesn't match inside a long question like "...require visa
+    # sponsorship to work in the United States or Canada?".
+    _SINGLE_OK = {"email", "phone", "location", "website", "portfolio",
+                  "linkedin", "github", "city", "country", "address", "zip",
+                  "pronouns", "headline", "name", "province", "state"}
+    _norm_word_count = len(_norm_words)
+    for key, (val, _source) in ephemeral.items():
+        kw = key.replace("_", " ")
+        if " " in kw:
+            continue
+        if kw in _SINGLE_OK and kw in _norm_words and _norm_word_count <= 3:
+            # "Phone Device Type" is a kind-of-device question (Landline/
+            # Mobile), not a phone number — a bare "phone" must not match.
+            if kw == "phone" and re.search(r"\btype\b|\bkind\b", norm):
+                continue
+            return Resolution(val, key, label, "ephemeral")
+
+    # Step 4: learned mappings — labels the user/orchestrator answered in
+    # prior runs (persisted to state/field_mappings.json on confirmed fills).
+    lv = _lookup_learned(norm)
+    if lv is not None:
+        return Resolution(lv, "learned", label, "learned")
+
+    # Step 5: curated alias patterns → candidate profile keys.
+    # Same-vocabulary matching can't bridge phrasing ("How did you learn..."
+    # vs how_did_you_hear). Candidates are in priority order — use the first
+    # that has a value. This handles cases like authorized_to_work="Yes" vs
+    # work_authorization="Yes, I am legally authorized..." where both are
+    # valid but the short answer is preferred for Yes/No radio questions.
+    for pattern, candidates in _ALIAS_RULES:
+        if not re.search(pattern, norm):
+            continue
+        for ck in candidates:
+            v = _find_ephemeral_value(ck, ephemeral)
+            if v is not None and str(v) != "":
+                return Resolution(v, ck, label, "alias")
+
+    # Step 6: conservative form defaults for common optional questions where
+    # "No" is the universally safe answer (marketing, alerts, current-employee).
+    # NOT a user assumption — a privacy-conservative form default. The
+    # orchestrator can always override via --answers (which takes priority).
+    for pattern, default in _DEFAULT_ANSWERS:
+        if re.search(pattern, norm):
+            return Resolution(default, "default", label, "default")
+
+    return Resolution(None, None, label, "no_match")
+
+
+# (regex on normalized label, candidate profile/answer keys in priority order)
+_ALIAS_RULES = [
+    (r"^name$", ["full_name"]),
+    (r"\bpreferred name\b", ["first_name"]),
+    (r"\bworked (at|for) .* (before|previously)|have you ever worked|previously worked|been employed (at|by)\b",
+     ["previously_employed", "have_you_ever_been"]),
+    (r"\bsponsorship\b", ["need_canada_sponsorship", "need_us_sponsorship", "visa_status"]),
+    (r"\bauthorized to work|legally eligible to work|eligible to work|work authorization\b",
+     ["authorized_to_work", "work_authorization",
+      "Are you legally eligible to work in the country that you are applying to?"]),
+    (r"\bhow did you (hear|learn|find)\b",
+     ["how_did_you_hear", "How did you hear about this job opportunity?"]),
+    (r"\bgender\b", ["gender", "Gender Identity"]),
+    (r"^(?!.*\b(spouse|dependent|family|preference)\b).*\bveteran\b", ["veteran_status"]),
+    (r"\bdisabilit(?!.*\baccommodation)", ["disability_status",
+      "Do you identify as a person with a visible or non-visible disability?"]),
+    (r"\b(salary|compensation)\b",
+     ["expected_salary", "What is your annual base salary expectations?"]),
+    (r"\bstart date|when can you start|available to start|earliest start\b",
+     ["start_date", "available_start", "notice_period"]),
+    (r"\byears? (of )?experience\b", ["years_of_experience", "years_core_skill"]),
+    (r"\brelocat", ["willing_to_relocate"]),
+    (r"\bcommute\b", ["willing_to_commute"]),
+    (r"\bhybrid role|comfortable with this|in (our |the )?office\b", ["office_preference"]),
+    (r"\bcity or location|enter city\b", ["location", "city"]),
+    (r"\bexperience with ai|experience with llm|ai llm\b", ["ai_llm_experience", "Do you have experience with AI/LLMs?"]),
+    (r"\bsoftware engineering heavy\b", ["software_engineering_confidence"]),
+    (r"\binitialing below|by initialing|type your initials\b", ["initials"]),
+    (r"\bcurrently based in.*ontario\b", ["currently_based_ontario"]),
+]
+
+
+# Conservative form defaults — NOT user assumptions. "No" is the safe answer
+# for marketing consent, job alerts, and current-employee questions. Only
+# fires for optional fields; the orchestrator can override via --answers.
+_DEFAULT_ANSWERS = [
+    (r"\b(stay up to date|marketing|newsletter|promotional|email updates|communications from)\b", "No"),
+    (r"\b(receive alerts|job alerts|similar jobs|email me|notify me)\b", "No"),
+    (r"\bcurrent\b.*\b(employee|staff|team member)\b", "No"),
+]
+
+
+# ─── Learned label→value mappings (lean successor of mappings.py) ─────
+
+_LEARNED_PATH = os.path.join(STATE_DIR, "field_mappings.json")
+_learned_cache = None
+
+
+def _load_learned():
+    global _learned_cache
+    if _learned_cache is None:
+        try:
+            with open(_LEARNED_PATH, encoding="utf-8") as f:
+                _learned_cache = json.load(f)
+        except Exception:
+            _learned_cache = {}
+    return _learned_cache
+
+
+def _lookup_learned(norm_label: str):
+    return _load_learned().get(norm_label)
+
+
+def learn_mapping(label: str, value):
+    """Persist a confirmed label→value mapping for future runs."""
+    if not label or value in (None, ""):
+        return
+    norm = normalize(label)
+    if not norm:
+        return
+    m = _load_learned()
+    if m.get(norm) == value:
+        return
+    m[norm] = value
+    try:
+        from lib.config import atomic_write_json
+        atomic_write_json(_LEARNED_PATH, m, indent=2)
+    except Exception:
+        pass

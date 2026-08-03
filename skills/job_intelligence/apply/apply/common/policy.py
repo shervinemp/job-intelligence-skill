@@ -1,0 +1,80 @@
+"""policy.py — Apply-pipeline submission policy (live / shadow / hold).
+
+Source of truth: apply_policy.json in JI_HOME. `JI_APPLY_MODE` env overrides the
+file; a per-run override (e.g. `act --shadow`) overrides both.
+
+mode:
+  live   — submit for real (DEFAULT; preserves prior behavior).
+  shadow — fill + screenshot + audit, but NEVER click submit (observability).
+  hold   — fill completely, then stop before submit for human review.
+
+Phase 1 (ADR-001) ships shadow/hold as "do not submit"; the confidence/category
+fields below are recorded for later phases and are not yet enforced.
+"""
+import json
+import os
+import sys
+
+_VALID_MODES = ("live", "shadow", "hold")
+
+_warned_invalid_mode = False
+
+_DEFAULTS = {
+    "mode": "live",
+    "auto_submit_min_confidence": 0.9,
+    "never_auto": ["freetext"],
+    "ttl_days": 90,
+    "paused": False,
+    "use_mappings": False,
+    "enforce_validation": False,
+    "gate_submit": False,
+    # Batch-bounding controls: skip-and-flag CAPTCHAs instead of blocking
+    # the run on a human solve, and abort per-job after N seconds
+    # (recorded as captcha_required / timed_out — both resumable).
+    "captcha_skip": False,
+    "job_timeout_sec": 0,
+}
+
+
+def _policy_path():
+    from lib.config import JI_HOME
+    return os.path.join(os.environ.get("JI_HOME") or JI_HOME, "apply_policy.json")
+
+
+def load_policy():
+    """Return the effective policy dict (defaults ← file ← JI_APPLY_MODE env)."""
+    pol = dict(_DEFAULTS)
+    try:
+        with open(_policy_path(), encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            pol.update(loaded)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    env_mode = os.environ.get("JI_APPLY_MODE")
+    if env_mode:
+        pol["mode"] = env_mode
+    if pol.get("mode") not in _VALID_MODES:
+        # Fail closed: a typo in a safety control must never cause real submits.
+        global _warned_invalid_mode
+        if not _warned_invalid_mode:
+            _warned_invalid_mode = True
+            print(
+                f"ERROR: invalid apply mode '{pol.get('mode')}' — failing closed to "
+                f"'hold' (valid: {', '.join(_VALID_MODES)})",
+                file=sys.stderr,
+            )
+        pol["mode"] = "hold"
+    return pol
+
+
+def resolve_mode(cli_override=None):
+    """Effective mode for this run. cli_override (e.g. 'shadow') wins if valid."""
+    if cli_override in _VALID_MODES:
+        return cli_override
+    return load_policy()["mode"]
+
+
+def submits_for_real(mode):
+    """True only in live mode. shadow/hold never click submit."""
+    return mode == "live"

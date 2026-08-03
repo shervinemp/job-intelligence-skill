@@ -507,6 +507,146 @@ def cmd_shadow():
     print("  - Re-run: python apply.py shadow  (skips already-recorded jobs)")
 
 
+# Handover keywords — questions whose answer is a personal decision, not
+# a data gap or a pipeline bug. These belong to the USER; everything else
+# that fails belongs to the orchestrator (data/answers) or the code.
+_HANDOVER_KW = (
+    "sponsor", "ethnic", "race", "veteran", "disabilit", "gender", "pronoun",
+    "referral", "describe", "essay", "preferred name", "hear about",
+    "salary expectation", "compensation expectation", "legally eligible",
+    "authorized to work", "work authorization", "visa", "eligib",
+    "relocat", "commute", "military", "sexual orientation", "citizenship",
+)
+
+
+def cmd_shadow_classify():
+    """Orchestrator verification view: outcome counts, crash/timeout
+    evidence, and the STOPPED owner-split (code / data / handover) so the
+    orchestrator knows exactly what to fix, what to answer, and what to
+    ask the user."""
+    import os
+    from collections import Counter
+    from .config import JI_HOME
+    log = os.path.join(JI_HOME, "state", "shadow_run.jsonl")
+    if not os.path.exists(log):
+        print("No shadow log yet — run 'apply.py shadow' first.", file=sys.stderr)
+        return
+    recs = []
+    for line in open(log, encoding="utf-8"):
+        try:
+            recs.append(json.loads(line))
+        except Exception:
+            continue
+
+    outcomes = Counter(r.get("outcome", "?") for r in recs)
+    print(f"FLEET SHADOW: {len(recs)} job record(s)")
+    print("  " + ", ".join(f"{k}={v}" for k, v in outcomes.most_common()))
+    print()
+
+    order = ["held_shadow", "already_applied", "skipped", "stopped",
+             "crash", "timeout", "error", "exception", "submitted"]
+    labels = {"held_shadow": "READY TO SUBMIT", "already_applied": "ALREADY APPLIED",
+              "skipped": "SKIPPED", "stopped": "NEEDS REVIEW", "crash": "CRASH",
+              "timeout": "TIMEOUT", "error": "ERROR", "exception": "EXCEPTION",
+              "submitted": "SUBMITTED (unexpected)"}
+
+    for kind in order:
+        group = [r for r in recs if r.get("outcome") == kind]
+        if not group:
+            continue
+        print(f"== {labels.get(kind, kind)} ({len(group)}) " + "=" * 30)
+        for r in sorted(group, key=lambda x: x.get("ts", ""))[:15]:
+            print(f"  {r.get('jid', '?')[:12]} {r.get('company', '?')[:20]:20s} "
+                  f"{r.get('detail', '?')[:70]}")
+            if r.get("after_crash"):
+                print("      (recovered after a first-attempt crash)")
+            if r.get("transcript"):
+                print(f"      transcript: {r.get('transcript')}")
+            if r.get("tail"):
+                print(f"      tail: {' | '.join(r['tail'].splitlines()[-2:])[:150]}")
+        print()
+
+    stopped = [r for r in recs if r.get("outcome") == "stopped"]
+    if not stopped:
+        return
+
+    # Owner-split ground truth: does the PROFILE answer the question?
+    # A personal keyword is only a handover when no answer exists — a
+    # relocation question the profile already answers is DATA/code, not
+    # a user decision.
+    profile = {}
+    ephemeral = {}
+    try:
+        from apply.common import resolve as _resolve_mod
+        from apply.act.helpers import _load_profile
+        try:
+            profile = _load_profile()
+        except Exception:
+            profile = {}
+        ephemeral = _resolve_mod._build_ephemeral(profile)
+    except Exception:
+        pass
+
+    def _has_answer(label):
+        try:
+            from apply.common import resolve as _resolve_mod
+            r = _resolve_mod.resolve(label or "", profile, ephemeral=ephemeral)
+            return r.value is not None
+        except Exception:
+            return False
+
+    print("== OWNER SPLIT (stopped jobs) ==")
+    owners = {"code": [], "data": [], "handover": [], "unknown": []}
+    for r in stopped:
+        jid = r.get("jid", "")
+        fields = []
+        try:
+            import json as _json
+            h = os.path.join(RESULTS_DIR, str(jid), "handoff.json")
+            if os.path.exists(h):
+                fields = _json.load(open(h, encoding="utf-8")).get("fields") or []
+        except Exception:
+            pass
+        bad = [f for f in fields
+               if f.get("kind") in ("rejected_by_form", "interaction_failed")
+               or (f.get("kind") == "needs_data" and f.get("required"))]
+        if not bad:
+            owners["unknown"].append((r, []))
+            continue
+        code = [f for f in bad
+                if f.get("kind") in ("rejected_by_form", "interaction_failed")]
+        unresolved = [f for f in bad if not _has_answer(f.get("label") or "")]
+        handover = [f for f in unresolved
+                    if any(kw in (f.get("label") or "").lower() for kw in _HANDOVER_KW)]
+        data = [f for f in unresolved if f not in handover]
+        # Priority: handover first — user decisions GATE the job; code
+        # failures coexist with them, so surface both, but the bucket is
+        # the user's (the orchestrator acts on code/data only after).
+        if handover:
+            rec_extra = ([f for f in code + data if f not in handover]
+                         if (code or data) else [])
+            owners["handover"].append((r, handover + rec_extra))
+        elif code:
+            owners["code"].append((r, code))
+        elif data:
+            owners["data"].append((r, data))
+        else:
+            owners["unknown"].append((r, bad))
+
+    for owner, label in (("handover", "USER DECIDES (personal questions)"),
+                         ("data", "ORCHESTRATOR: supply answers (--answers)"),
+                         ("code", "PIPELINE BUG: fix code + test"),
+                         ("unknown", "UNCLASSIFIED — orchestrator reads dossiers")):
+        if not owners[owner]:
+            continue
+        print(f"--- {label} ({len(owners[owner])})")
+        for r, fl in owners[owner][:8]:
+            print(f"  {r.get('jid', '?')[:12]} {r.get('company', '?')[:22]:22s} "
+                  f"| {', '.join((f.get('label') or '?')[:38] for f in fl[:3])}")
+        print()
+    print("  actions: report.py handoff <jid> | apply act --fill <jid> --answers '{}'")
+
+
 def cmd_audit(jid):
     """Show the per-field fill attempt log for a job — including WHAT was
     attempted, the selector, the filler method, and the before/after DOM
@@ -784,7 +924,10 @@ def main():
             sys.exit(1)
         cmd_audit(args[0])
     elif cmd == "shadow":
-        cmd_shadow()
+        if "--classify" in args:
+            cmd_shadow_classify()
+        else:
+            cmd_shadow()
     elif cmd == "archive":
         cmd_archive()
     else:

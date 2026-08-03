@@ -1,0 +1,24 @@
+name: ashbyhq
+version: 3
+notes: |
+  Radios: <input> is hidden, <label for> triggers React onChange.
+  RadioFiller clicks label via Playwright native .click() (not page.evaluate).
+  Yes/No widget = <button> inside [class*="yesno"].
+  Labels are full sentences (up to 200 chars).
+  Custom dropdowns: button[aria-haspopup='listbox'] (e.g. security clearance).
+  Resume upload: button-triggered file chooser (use filechooser fallback).
+
+detect:
+  domains:
+    - ashbyhq.com
+    - trmlabs.com
+probe:
+  best_strategy: standard
+  widgets:
+    dropdown: "button[aria-haspopup='listbox']"
+patterns:
+  already_applied:
+    - "already applied"
+properties:
+  multi_page: false
+  has_eeo: false

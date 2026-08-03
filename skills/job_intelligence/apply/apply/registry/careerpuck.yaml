@@ -1,0 +1,15 @@
+name: careerpuck
+version: 1
+
+detect:
+  domains:
+    - careerpuck.com
+
+properties:
+  multi_page: false
+  has_eeo: false
+
+notes: |
+  Single-page React app hosted on careerpuck.com. Form elements are
+  standard HTML rendered by React. Playwright's wait_for_selector waits
+  for the root element to mount. Cascade handles field discovery.

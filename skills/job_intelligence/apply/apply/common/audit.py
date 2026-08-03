@@ -1,0 +1,117 @@
+"""audit.py — Append-only per-application audit log.
+
+One JSONL file per job at results/<jid>/apply_audit.jsonl. Records every field
+resolution (value + provenance + tier category + whether it ended up filled) and
+every page-level apply event. Two consumers:
+  - the human / shadow-mode review (what would we submit, and why)
+  - the in-loop LLM as cross-step memory of what is already answered/held
+
+Paths read JI_HOME from the environment at call time (testable; mirrors resolve.py).
+"""
+import json
+import os
+import sys
+import time
+
+from lib.config import RESULTS_DIR
+
+_DECLINE = ("prefer not", "decline", "not say", "rather not")
+_SALARY = ("salary", "compensation", "ctc", "expected pay", "pay rate", "desired pay")
+_LEGAL = ("authorize", "sponsor", "eligible to work", "right to work", "legally", "certify", "visa")
+
+
+def _path(jid):
+    d = os.path.join(RESULTS_DIR, str(jid))
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "apply_audit.jsonl")
+
+
+def categorize(label, options=None, tag=None):
+    """Classify a field into a tier category: eeo | salary | legal | freetext | generic.
+
+    EEO is detected by decline-option content (language-agnostic), matching the
+    existing apply behavior. Used for observability now; gating later (ADR-001)."""
+    lbl = (label or "").lower()
+    opts = [(o or "").lower() for o in (options or [])]
+    if any(any(d in o for d in _DECLINE) for o in opts):
+        return "eeo"
+    if any(w in lbl for w in _SALARY):
+        return "salary"
+    if any(w in lbl for w in _LEGAL):
+        return "legal"
+    if (tag or "").upper() == "TEXTAREA":
+        return "freetext"
+    return "generic"
+
+
+def _write(jid, rec):
+    rec.setdefault("ts", time.strftime("%Y-%m-%dT%H:%M:%S"))
+    try:
+        with open(_path(jid), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"AUDIT_FAIL: {e}", file=sys.stderr)
+
+
+def log_field(jid, label, value, provenance, category="generic", filled=True,
+              validated=None, page=None, reason=None, selector="", method="",
+              before="", after=""):
+    _write(jid, {
+        "kind": "field",
+        "label": (label or "")[:80],
+        "value": (value or "")[:200],
+        "provenance": provenance,
+        "category": category,
+        "filled": bool(filled),
+        "validated": validated,  # True / False / None (not checked)
+        "page": page,
+        # Fill-attempt telemetry: why it failed (truncated / unchanged /
+        # still_empty / wrong_option / verify_failed / fill_failed), which
+        # filler ran, and the DOM before/after — so a wiped value is
+        # reconstructable after the fact.
+        "reason": (reason or "")[:80],
+        "selector": (selector or "")[:120],
+        "method": (method or "")[:40],
+        "before": (before or "")[:120],
+        "after": (after or "")[:120],
+    })
+
+
+def log_event(jid, event, mode=None, detail=None, page=None):
+    _write(jid, {"kind": "event", "event": event, "mode": mode, "detail": detail, "page": page})
+
+
+def summarize(jid):
+    """Aggregate the audit log into counts (by provenance, category, filled/invalid).
+
+    The log is append-only and a field is re-logged on every `act --fill`, so we keep
+    only the LATEST record per (page, label) before counting — otherwise a field that
+    was invalid once and fixed later would still count as invalid (which would wedge
+    the submit gate). Events are kept in full. Empty summary if no log."""
+    summary = {"fields": 0, "filled": 0, "invalid": 0, "by_provenance": {}, "by_category": {}, "events": []}
+    try:
+        with open(_path(jid), encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return summary
+    latest = {}  # (page, label) -> most recent field record
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("kind") == "field":
+            latest[(rec.get("page"), rec.get("label"))] = rec
+        elif rec.get("kind") == "event":
+            summary["events"].append(rec.get("event"))
+    for rec in latest.values():
+        summary["fields"] += 1
+        if rec.get("filled"):
+            summary["filled"] += 1
+        if rec.get("validated") is False:
+            summary["invalid"] += 1
+        p = rec.get("provenance", "?")
+        c = rec.get("category", "?")
+        summary["by_provenance"][p] = summary["by_provenance"].get(p, 0) + 1
+        summary["by_category"][c] = summary["by_category"].get(c, 0) + 1
+    return summary

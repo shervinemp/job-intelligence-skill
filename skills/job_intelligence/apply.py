@@ -33,6 +33,15 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
 import json
 
+# Hard crashes (native faults in Playwright/CDP) must never die silently:
+# faulthandler writes the traceback to stderr so the evidence trail
+# captures WHY a process died, instead of a bare exit.
+try:
+    import faulthandler
+    faulthandler.enable()
+except Exception:
+    pass
+
 
 def _auto_jid():
     from lib.db import get_jobs_by_stage

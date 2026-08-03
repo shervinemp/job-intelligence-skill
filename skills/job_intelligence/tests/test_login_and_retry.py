@@ -109,19 +109,20 @@ class LoginWallNoCreds(unittest.TestCase):
 class AutoLLMRetryFill(unittest.TestCase):
     def test_llm_unavailable_returns_false(self):
         from apply.auto import _retry_fill_with_llm
-        with patch("lib.ask_api.available", return_value=False):
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), patch("lib.ask_api.available", return_value=False):
             self.assertFalse(_retry_fill_with_llm("jid", {}, None))
 
     def test_no_remaining_fields_returns_false(self):
         from apply.auto import _retry_fill_with_llm
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
              patch("apply.common.page_helpers.load_state",
                    return_value={"remaining_fields": []}):
             self.assertFalse(_retry_fill_with_llm("jid", {}, None))
 
     def test_llm_mapping_fills_and_checks(self):
         from apply.auto import _retry_fill_with_llm
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
+             patch("lib.ask_api.available", return_value=True), \
              patch("apply.common.page_helpers.load_state",
                    return_value={"remaining_fields": [{"label": "Email"}]}), \
              patch("apply.act.helpers._load_profile", return_value={}), \
@@ -135,7 +136,7 @@ class AutoLLMRetryFill(unittest.TestCase):
 
     def test_llm_mapping_empty_returns_false(self):
         from apply.auto import _retry_fill_with_llm
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
              patch("apply.common.page_helpers.load_state",
                    return_value={"remaining_fields": [{"label": "Email"}]}), \
              patch("apply.act.helpers._load_profile", return_value={}), \
@@ -151,14 +152,15 @@ class AutoLLMRetrySubmit(unittest.TestCase):
 
     def test_no_parseable_labels_returns_false(self):
         from apply.auto import _retry_submit_with_llm
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
              patch("apply.common.page_helpers.load_state",
                    return_value={"submit_errors": ["???"]}):
             self.assertFalse(_retry_submit_with_llm("jid", {}, None))
 
     def test_success_path_resubmits(self):
         from apply.auto import _retry_submit_with_llm
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
+             patch("lib.ask_api.available", return_value=True), \
              patch("apply.common.page_helpers.load_state",
                    return_value={"submit_errors":
                                  ["Missing entry for required field: Email"]}), \
@@ -173,7 +175,7 @@ class AutoLLMRetrySubmit(unittest.TestCase):
 
     def test_stage_not_applied_after_resubmit_returns_false(self):
         from apply.auto import _retry_submit_with_llm
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
              patch("apply.common.page_helpers.load_state",
                    return_value={"submit_errors":
                                  ["Missing entry for required field: Email"]}), \
@@ -189,3 +191,4 @@ class AutoLLMRetrySubmit(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

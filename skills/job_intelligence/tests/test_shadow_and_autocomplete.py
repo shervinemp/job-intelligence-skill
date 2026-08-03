@@ -16,7 +16,8 @@ def _rec(jid, outcome, detail=""):
 
 
 class ShadowRunner(unittest.TestCase):
-    """apply/shadow.py — resumable log + outcome mapping + check-error capture."""
+    """apply/shadow.py — subprocess supervisor: resumable log + outcome
+    mapping + check-error capture + timeout/crash handling."""
 
     def setUp(self):
         self.log_dir = tempfile.mkdtemp()
@@ -24,31 +25,35 @@ class ShadowRunner(unittest.TestCase):
         self.log_patch = patch("apply.shadow.LOG_PATH", self.log)
         self.log_patch.start()
         self.addCleanup(self.log_patch.stop)
+        self.jobs_patch = patch("apply.shadow.JOBS_DIR", self.log_dir)
+        self.jobs_patch.start()
+        self.addCleanup(self.jobs_patch.stop)
+        # Keep the worker never actually spawning: _run_worker is mocked.
+        self.worker_patch = patch("apply.shadow._run_worker")
+        self.worker_mock = self.worker_patch.start()
+        self.addCleanup(self.worker_patch.stop)
+
+    def _out(self, outcome, detail="", check_errors=None, secs=3):
+        lines = [f"OUTCOME={outcome}", f"DETAIL={detail}", f"SECS={secs}"]
+        if check_errors:
+            lines.append(f"CHECK_ERRORS={json.dumps(check_errors)}")
+        return "\n".join(lines)
 
     def test_held_shadow_mapping(self):
         from apply.shadow import run
-
-        def fake_process(jid, job, quick=False, max_pages=4, results=None):
-            results["stopped"].append((jid, "submit returned 0 but stage not applied"))
-
-        with patch("lib.db.get_jobs_by_stage", return_value=[("jid1", {"title": "T", "company": "C"})]), \
-             patch("apply.auto._process_one", side_effect=fake_process):
+        self.worker_mock.return_value = (0, "t.log", self._out("held_shadow", "fill+check OK, submit held (shadow)"), False)
+        with patch("lib.db.get_jobs_by_stage", return_value=[("jid1", {"title": "T", "company": "C"})]):
             run(limit=None, quick=False)
         rec = json.loads(open(self.log, encoding="utf-8").readline())
         self.assertEqual(rec["outcome"], "held_shadow")
         self.assertIn("fill+check OK", rec["detail"])
+        self.assertEqual(rec["exit_code"], 0)
 
     def test_check_errors_captured(self):
         from apply.shadow import run
         errors = [{"label": "Email", "reason": "Required field appears empty"}]
-
-        def fake_process(jid, job, quick=False, max_pages=4, results=None):
-            results["stopped"].append((jid, "check failed -- supply answers and retry"))
-
-        with patch("lib.db.get_jobs_by_stage", return_value=[("jid1", {"title": "T", "company": "C"})]), \
-             patch("apply.auto._process_one", side_effect=fake_process), \
-             patch("apply.common.page_helpers.load_state",
-                   return_value={"check_errors": errors}):
+        self.worker_mock.return_value = (0, "t.log", self._out("stopped", "check failed -- supply answers and retry", errors), False)
+        with patch("lib.db.get_jobs_by_stage", return_value=[("jid1", {"title": "T", "company": "C"})]):
             run(limit=None, quick=False)
         rec = json.loads(open(self.log, encoding="utf-8").readline())
         self.assertEqual(rec["outcome"], "stopped")
@@ -58,23 +63,64 @@ class ShadowRunner(unittest.TestCase):
         from apply.shadow import run
         with open(self.log, "w", encoding="utf-8") as f:
             f.write(json.dumps(_rec("jid1", "held_shadow")) + "\n")
-        with patch("lib.db.get_jobs_by_stage", return_value=[("jid1", {})]), \
-             patch("apply.auto._process_one") as proc:
+        with patch("lib.db.get_jobs_by_stage", return_value=[("jid1", {})]):
             run(limit=None, quick=False)
-        proc.assert_not_called()
+        self.worker_mock.assert_not_called()
 
     def test_specific_jid_only(self):
         from apply.shadow import run
-
-        def fake_process(jid, job, quick=False, max_pages=4, results=None):
-            results["skipped"].append((jid, "no apply path (expired)"))
-
-        with patch("lib.db.get_job", return_value={"id": "abc123", "title": "T", "company": "C"}), \
-             patch("apply.auto._process_one", side_effect=fake_process) as proc:
+        self.worker_mock.return_value = (0, "t.log", self._out("skipped", "no apply path (expired)"), False)
+        with patch("lib.db.get_job", return_value={"id": "abc123", "title": "T", "company": "C"}):
             run(jids=["abc123"], limit=None, quick=False)
-        proc.assert_called_once()
+        self.worker_mock.assert_called_once()
         rec = json.loads(open(self.log, encoding="utf-8").readline())
         self.assertEqual(rec["jid"], "abc123")
+
+    def test_crash_reprobes_once_then_records(self):
+        from apply.shadow import run
+        self.worker_mock.side_effect = [
+            (1, "t1.log", "traceback\nFatal Python error", False),
+            (0, "t2.log", self._out("held_shadow"), False),
+        ]
+        with patch("lib.db.get_jobs_by_stage", return_value=[("jid1", {"title": "T", "company": "C"})]):
+            run(limit=None, quick=False)
+        rec = json.loads(open(self.log, encoding="utf-8").readline())
+        self.assertEqual(rec["outcome"], "held_shadow")
+        self.assertTrue(rec["after_crash"])
+        self.assertEqual(self.worker_mock.call_count, 2)
+
+    def test_double_crash_records_crash(self):
+        from apply.shadow import run
+        self.worker_mock.side_effect = [
+            (1, "t1.log", "Fatal Python error", False),
+            (1, "t2.log", "Fatal Python error again", False),
+        ]
+        with patch("lib.db.get_jobs_by_stage", return_value=[("jid1", {"title": "T", "company": "C"})]):
+            run(limit=None, quick=False)
+        rec = json.loads(open(self.log, encoding="utf-8").readline())
+        self.assertEqual(rec["outcome"], "crash")
+        self.assertIn("Fatal", rec["tail"])
+
+    def test_timeout_recorded_without_reprobe(self):
+        """A slow job killed by the budget is NOT a crash — no re-probe."""
+        from apply.shadow import run
+        self.worker_mock.return_value = (-9, "t.log", "SHADOW: per-job timeout (600s) — killed\n", True)
+        with patch("lib.db.get_jobs_by_stage", return_value=[("jid1", {"title": "T", "company": "C"})]):
+            run(limit=None, quick=False)
+        rec = json.loads(open(self.log, encoding="utf-8").readline())
+        self.assertEqual(rec["outcome"], "timeout")
+        self.assertEqual(self.worker_mock.call_count, 1)
+
+    def test_consecutive_failures_abort_batch(self):
+        from apply.shadow import run
+        self.worker_mock.return_value = (-9, "t.log", "SHADOW: per-job timeout (600s) — killed\n", True)
+        jobs = [(f"jid{i}", {"title": "T", "company": "C"}) for i in range(5)]
+        with patch("lib.db.get_jobs_by_stage", return_value=jobs), \
+             patch("apply.shadow.ABORT_AFTER_CONSECUTIVE_FAILS", 2):
+            run(limit=None, quick=False)
+        self.assertEqual(self.worker_mock.call_count, 2)
+        n = sum(1 for _ in open(self.log, encoding="utf-8"))
+        self.assertEqual(n, 2)
 
 
 class AutocompleteVerification(unittest.TestCase):

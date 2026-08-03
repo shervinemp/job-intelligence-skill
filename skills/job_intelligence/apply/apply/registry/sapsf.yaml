@@ -1,0 +1,29 @@
+name: sapsf
+version: 1
+
+detect:
+  domains:
+    - sapsf.com
+
+probe:
+  best_strategy: standard
+  widgets:
+    dropdown: "input[role='combobox']"
+    autocomplete: "input[role='combobox']"
+
+patterns:
+  login_wall:
+    - "sign in to apply"
+    - "sign in to continue"
+  guest_apply:
+    - "continue without signing in"
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+  pre_fill:
+    - action: click
+      selector: "button:has-text('Expand all sections')"
+      wait: 2

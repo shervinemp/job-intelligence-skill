@@ -180,5 +180,58 @@ class HandoffVocabulary(unittest.TestCase):
         self.assertTrue(doc["run_id"] or current_run_id())
 
 
+class LLMPolicyTest(unittest.TestCase):
+    """The ask_api contract: deterministic core is the source of truth;
+    the local LLM is a SELECTIVE escape hatch (vision + code-weak spots
+    only) — never a default reviewer of the deterministic core."""
+
+    def _set(self, mode):
+        from unittest.mock import patch
+        if mode is None:
+            return patch.dict("os.environ", {}, clear=False)
+        return patch.dict("os.environ", {"JI_LLM_MODE": mode})
+
+    def test_default_auto(self):
+        from lib.automation.llm import allow
+        with self._set(None):
+            self.assertEqual(allow("vision"), True)          # image processing
+            self.assertEqual(allow("option_pick"), True)     # last-resort escape
+            self.assertEqual(allow("gap_fill"), True)        # code-exhausted
+            self.assertEqual(allow("batch_verify"), False)   # LLM re-reviews ALL
+            self.assertEqual(allow("verify_reads"), False)   # LLM verifies ALL
+            self.assertEqual(allow("auto_retry"), False)     # pipeline never LLM-retries
+
+    def test_off_kills_everything(self):
+        from lib.automation.llm import allow
+        with self._set("off"):
+            for kind in ("vision", "option_pick", "gap_fill",
+                         "batch_verify", "verify_reads", "auto_retry"):
+                self.assertFalse(allow(kind), kind)
+
+    def test_on_allows_everything(self):
+        from lib.automation.llm import allow
+        with self._set("on"):
+            for kind in ("vision", "option_pick", "gap_fill",
+                         "batch_verify", "verify_reads", "auto_retry"):
+                self.assertTrue(allow(kind), kind)
+
+    def test_unknown_kind_false_in_auto(self):
+        from lib.automation.llm import allow
+        with self._set(None):
+            self.assertFalse(allow("nonsense"))
+
+    def test_pick_option_gated_off_without_calling_api(self):
+        """Policy off must short-circuit BEFORE touching ask_api — the
+        escape hatch is closed, not 'tried and failed'."""
+        from lib.automation.llm import pick_option
+        from unittest.mock import patch as _patch
+        opts = [{"text": "Canada"}]
+        with self._set("off"), \
+             _patch("lib.automation.llm.allow", return_value=False) as g, \
+             _patch("lib.ask_api.available", side_effect=AssertionError("must not call")):
+            self.assertIsNone(pick_option(opts, "Country", "Canada"))
+        g.assert_called_once_with("option_pick")
+
+
 if __name__ == "__main__":
     unittest.main()
