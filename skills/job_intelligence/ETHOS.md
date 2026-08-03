@@ -2,8 +2,9 @@
 
 > The entire value of this pipeline is **trust**: you must be able to act on an
 > outcome without auditing how it was made. Every design decision below serves
-> that: code where precision matters, a local LLM only where code is blind, and
-> an orchestrator LLM-in-the-middle as the operator, verifier and debugger —
+> that: code where precision matters, an orchestrator LLM-in-the-middle as the
+> operator, verifier and debugger, a served local model only where the
+> orchestrator physically cannot act, and the user as the final authority —
 > grounded in a mechanically produced evidence trail.
 
 ## 1. The three-layer trust model
@@ -14,38 +15,46 @@ between a field and its value. Determinism buys: reproducibility, testability,
 cost, and — critically — verifiability: a fill is verified by *re-reading the
 form with the same scorer that picked the value*, mechanically.
 
-**Layer 2 — ask_api = selective escape hatch, never default.** The served
-local model is the WEAK model; the ORCHESTRATOR is the STRONG model.
-Routing hierarchy — deterministic core first; the ORCHESTRATOR is the
-semantic fallback of choice (no_match / no_option_match fields surface
-with full evidence — candidates, top_options — in dossiers, and the
-orchestrator answers them post-hoc via --answers, then re-fills); the
-served local model is reserved for where the orchestrator PHYSICALLY
-cannot act (vision — it has no page access) or live-page interactions
-that cannot wait; the user is the final authority.
-
-| kind | default | when |
-|---|---|---|
-| `vision` | on | image processing — the orchestrator cannot see the page |
-| `option_pick` | off | the orchestrator decides from `top_options` evidence |
-| `gap_fill` | off | the orchestrator decides from dossier evidence |
-| `batch_verify` | off | LLM re-reviewing ALL fields lowers accuracy |
-| `verify_reads` | off | deterministic re-read + check is the verifier |
-| `auto_retry` | off | failures surface as evidence, never hidden |
-
-`JI_LLM_MODE=off | auto | on`. Every LLM output must pass the *same*
-deterministic validator as every other fill — the escape hatch never
-bypasses the code's truth.
+**Layer 2 — The served local model = reserved, never default.** The weak model
+is used ONLY where the orchestrator physically cannot act (vision — it has no
+page access) or a live-page interaction cannot wait. Every LLM output must
+pass the *same* deterministic validator as every other fill — the escape hatch
+never bypasses the code's truth. `JI_LLM_MODE=off | auto | on`; in `auto`,
+only `vision` is on (`option_pick` / `gap_fill` / `batch_verify` /
+`verify_reads` / `auto_retry` are off — the orchestrator replaces them).
 
 **Layer 3 — Orchestrator (LLM-in-the-middle) = the operator.** The pipeline is
 *designed to be operated by* an overarching orchestrator LLM, not to run
-unattended. The orchestrator runs batches, classifies outcomes, fixes failure
-classes (code bug / data gap), arbitrates with evidence, and routes only
-personal decisions to the user. The evidence trail is the orchestrator's
-working memory; `report.py` commands are its toolset; the shadow run is its
-test harness (run → classify → fix → re-run → diff).
+unattended. The evidence trail is the orchestrator's working memory;
+`report.py` commands are its toolset; the shadow run is its test harness; the
+decisions inbox is its queue.
 
-## 2. Why — the foundation in LLM architecture
+## 2. The routing hierarchy (who decides what)
+
+The served local model is the WEAK model; the orchestrator is the STRONG model
+and the intended operator. Every decision routes down this ladder — never
+up:
+
+1. **Deterministic core** — mechanical decisions, always first (cheap,
+   precise, reproducible).
+2. **Orchestrator** — the semantic fallback of *choice*. `no_match` /
+   `no_option_match` fields surface with full evidence (candidates,
+   top_options, selection_readback) in dossiers; the orchestrator answers
+   them post-hoc via `--answers`, then re-fills. Stronger model, no per-field
+   latency in the hot path.
+3. **Served local model** — ONLY where the orchestrator physically cannot
+   act: vision / image processing, or a live-page interaction that cannot
+   wait for the orchestrator round-trip.
+4. **User** — identity/legal/life decisions and live-send consent. Handovers
+   are a precious resource; the funnel routes to the user only what is not
+   answerable.
+
+The evidence-backed queue is the orchestrator's: every item carries the
+answer menu (`top_options`) and the answer command. The orchestrator is
+involved in *every decision the core cannot make safely* — and deliberately
+NOT in the mechanical ones.
+
+## 3. Why — the foundation in LLM architecture
 
 LLM weaknesses are **architectural**, not bugs that prompting or tuning can fix:
 
@@ -61,9 +70,11 @@ Implication: these can only be **compensated externally**. This design *is*
 that compensation — determinism where exactness matters, mechanical
 verification where self-check fails, sanitized inputs where injection lives,
 external memory (files, dossiers, summaries) where recall fails, and the
-evidence trail as the checksum on every judgment.
+evidence trail as the checksum on every judgment. The ORCHESTRATOR shares
+these weaknesses but is the strongest model available — which is why the
+hierarchy prefers it over the served local model.
 
-## 3. The handoff seams
+## 4. The handoff seams
 
 Each seam sits exactly where the *nature of the decision* changes:
 
@@ -77,11 +88,26 @@ Each seam sits exactly where the *nature of the decision* changes:
    (`_has_answer`), not keywords alone.
 3. **Orchestrator → user.** Identity/legal/life decisions (sponsorship, essays,
    EEOC, preferred name) and live-send consent. Any automation would be a
-   guess, and a wrong guess is the most expensive failure mode. Handovers are a
-   precious resource — the funnel routes to the user only what is not
-   answerable (121 jobs → 47 ready → 4 user-decides).
+   guess, and a wrong guess is the most expensive failure mode.
 
-## 4. Operating principles
+## 5. The decisions inbox (handovers)
+
+ONE surface for every open decision, grouped by OWNER, with the evidence to
+decide without opening the dossier and the exact answer command:
+
+| owner | content | who decides |
+|---|---|---|
+| USER | personal questions the profile can't answer | the user |
+| ORCHESTRATOR | evidence-backed fields (`no_option_match` with `top_options`) | the orchestrator, from evidence |
+| DATA | profile/answer gaps (work_history, missing classes) | the orchestrator supplies/asks for data |
+| REVIEW | stopped/blocked jobs (login/captcha/2fa/regression) | investigate, then decide |
+
+Answered items disappear when the dossier updates — no separate state.
+`report.py handovers [owner]`; `report.py help` is the grouped surface map.
+Surface discipline: **one command per question**; anything not earning its
+place is removed (the legacy surface was pruned for exactly this reason).
+
+## 6. Operating principles
 
 - **Honest outcomes, no silent lies.** Verified vs unverified is an epistemic
   state, not a mechanism. Counts are mutually exclusive and sum to the field
@@ -97,47 +123,54 @@ Each seam sits exactly where the *nature of the decision* changes:
 - **Robustness by construction.** Subprocess workers, per-job wall-clock
   budgets, consecutive-failure aborts, atomic outcome files, resumable logs.
 
-## 5. The honest ledger
+## 7. The operating loop (the orchestrator's procedure)
 
-Status: all ten items addressed 2026-08-03 (verified by tests + live runs).
-Residual discipline: each fix must keep its test; the ledger re-opens on
-new evidence.
+The orchestrator's day is a fixed loop — never improvised:
 
-1. **Gap-fill validation bypass — FIXED.** Unmatched labels are DROPPED
-   (fail-closed), lookup is truncation-tolerant, dropped mappings are
-   audited (GAP_FILL_GATE line). Tests in test_ethos_gaps.py.
-2. **Tailor factual-grounding gate — FIXED.** lib/grounding.py checks
-   every company/title/date/degree against profile.json; novel claims
-   quarantine the artifact; `tailor.py admit` is blocked until clean
-   (--force = human review override); `tailor.py ground <jid>` prints
-   the manifest.
-3. **Pre-flight profile gate — FIXED.** `apply.py preflight` prints the
-   manifest (hard/soft/answer-gaps/coverage); the shadow supervisor
-   warns before burning browser time; submit warns on late gaps.
-4. **Learned-mapping hygiene — FIXED.** pending→active after 2
-   consistent confirmations; TTL expiry (90d); provenance; an explicit
-   contradicting answer invalidates the mapping; conflicting
-   confirmations reset the count.
-5. **Canary enforcement — FIXED.** Submit REFUSES (--force override)
-   when the latest dossier regressed fields vs the previous run; the
-   classify ready-list excludes regressed jobs (QUARANTINED).
-6. **Instrumentation — FIXED.** llm_status (policy_off / api_down /
-   declined / used) recorded per escape-hatch call, aggregated into the
-   dossier, probed at batch start, surfaced in classify.
-7. **Cross-field coherence — FIXED.** apply/common/coherence.py:
-   sponsorship↔authorization, city↔province, pronouns↔gender; findings
-   are ERRORs that block submit; evidence-attached.
-8. **Corpus snapshots — FIXED (core).** capture() and capture_from_html()
-   scrub PII before storage; capture-on-fix workflow documented; golden
-   replay harness pre-exists (mock_page + registry drift).
-9. **Unconfirmed-skip follow-up — FIXED.** cause-tagged (unconfirmed/
-   recheck); `apply.py shadow --recheck` re-examines the queue; classify
-   clusters unconfirmed skips by company (platform hypothesis).
-10. **Fleet accuracy report — FIXED.** `report.py fleet`: kinds,
-    filled%, METHOD ATTRIBUTION (the ethos's falsification), weekly
-    trend, steering memo of top failing labels.
+1. **Preflight** (`apply.py preflight`) — profile readiness + adaptability.
+2. **Batch** (`apply.py shadow`) — evidence production, crash-proof.
+3. **Classify** (`report.py shadow --classify`) — outcomes + owner split.
+4. **Inbox** (`report.py handovers`) — every open decision, grouped by owner.
+5. **Answer from evidence** — the ORCHESTRATOR queue via `--answers` +
+   re-fill; USER queue surfaces for the user; DATA gaps → profile asks.
+6. **Verify** — re-run the touched jobs; the regression canary arbitrates.
+7. **Close classes permanently** — `report.py fleet` rule-candidates and
+   `report.py widgets` become resolver rules and widget handlers.
+8. **Port** (`scripts/port.py`) — lint → suite → copy → repo suite → push.
 
-## 6. Metrics we steer by
+## 8. The self-check commitment
+
+The orchestrator's verdicts and completion claims are only as good as the
+gates they pass. **No claim without a gate:**
+
+- every change runs `scripts/lint.py` (vocabulary literals, dead strings,
+  nested dirs, compile) → full suite → a live shadow job → port.py (hash-
+  verified copy + repo suite);
+- verdicts cite evidence (`_diag` facts, dossier fields) — anti-sycophancy:
+  never confirm a conclusion because it was expected;
+- "fully wired" means the mechanical checks prove it, not the narrative.
+
+The failure mode this guards against is the orchestrator's own
+self-verification blindness: the gates are the instruments, the same way the
+pipeline's re-read is the form's instrument.
+
+## 9. OOD posture
+
+OOD cases degrade honestly along a designed curve — they never guess:
+
+1. capability-hash routing + probe router absorb new platforms dynamically;
+2. `a11y_reader` (AX tree) catches closed shadow DOM;
+3. `report.py widgets` is the unhandled-widget backlog (visible, not silent);
+4. `report.py fleet` rule-candidates convert repeated failures into resolver
+   rules; the i18n layer absorbs foreign-language forms;
+5. the served local model covers vision when up;
+6. anything still unresolved becomes an inbox item — never a silent wrong
+   answer.
+
+Adaptability is the orchestrator's responsibility, not the pipeline's alone:
+closing a widget class means a handler + registry entry + corpus snapshot.
+
+## 10. Metrics we steer by
 
 - **Wrong-fill rate** (per field class, per platform) — the falsification
   instrument for the ethos itself; the orchestrator's calibration feedback.
@@ -146,8 +179,10 @@ new evidence.
   class; evidence must be actionable at a glance, in finite context.
 - **Handover precision** — false handovers minimized via profile truth, not
   keyword heuristics.
+- **Queue velocity** — the inbox's clear rate: USER items answered, 
+  ORCHESTRATOR items closed from evidence, DATA gaps filled.
 
-## 7. Guardrails for the orchestrator (me)
+## 11. Guardrails for the orchestrator (me)
 
 The orchestrator is an LLM with the same weaknesses; the guardrails exist to
 constrain it:
@@ -160,9 +195,11 @@ constrain it:
   treat them as such and re-verify from files.
 - **Red lines** (AGENTS.md): no data exfiltration, no destructive commands,
   ask before anything leaves the machine.
+- **The gates are the instruments** — lint, suite, live-verify, port; a claim
+  without a gate is a guess.
 - **The evidence trail is the checksum on every judgment** — including mine.
 
-## 8. This document
+## 12. This document
 
 A living contract. Amendments are improvements to trust, never license for
 shortcuts. When in doubt between two designs, choose the one that makes the

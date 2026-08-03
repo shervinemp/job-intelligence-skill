@@ -933,11 +933,19 @@ def cmd_handovers(owner=None):
             lbl = f.get("label") or ""
             diag = f.get("diag") or {}
             if kind == _T.REJECTED_BY_FORM and diag.get("reason") == "no_option_match":
-                # Evidence-backed: the answer menu is in the diag.
-                groups["ORCHESTRATOR"].append({
-                    "jid": jid, "label": lbl,
-                    "evidence": (diag.get("top_options") or [])[:3],
-                    "answer": None})
+                if _profile_has_answer(lbl):
+                    # Evidence-backed AND answerable: the answer exists in
+                    # the profile, the widget failed — the ORCHESTRATOR's
+                    # queue (answer from top_options evidence + re-fill).
+                    groups["ORCHESTRATOR"].append({
+                        "jid": jid, "label": lbl,
+                        "evidence": (diag.get("top_options") or [])[:3],
+                        "answer": None})
+                else:
+                    # Widget failed but NO profile answer exists — a data
+                    # gap, not an orchestrator decision.
+                    groups["DATA"].append({"jid": jid, "label": lbl,
+                                           "answer": None})
                 continue
             if _profile_has_answer(lbl):
                 continue  # the profile answers it — not an open decision
