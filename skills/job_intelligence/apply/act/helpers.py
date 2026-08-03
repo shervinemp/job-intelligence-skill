@@ -632,6 +632,20 @@ def _fill_with_playwright(page, fields, profile, answers_override,
     for f in fields:
         f["_country"] = user_loc_words
 
+    # ── Occurrence-aware field keys ──────────────────────────────────
+    # Matrix/table questions emit N fields with the SAME label (and
+    # often the same id/name pattern) on ONE page. Without a per-page
+    # occurrence index the dedupe collapses rows N..1 into one.
+    _base_keys = {}
+
+    def _mk_key(f):
+        k = _field_key(f)
+        if k in _base_keys:
+            _base_keys[k] += 1
+            return f"{k}#{_base_keys[k]}"
+        _base_keys[k] = 0
+        return k
+
     # Build ephemeral once — shared across all resolve calls in this page
     ephemeral = _build_ephemeral(profile)
     # The per-job answers cache (state fill_answers) must feed the alias
@@ -710,7 +724,7 @@ def _fill_with_playwright(page, fields, profile, answers_override,
                 continue
 
         try:
-            key = _field_key(f)
+            key = _mk_key(f)
             if key in filled_keys:
                 continue
             # Skip if the field already has the correct value (prevents
@@ -739,7 +753,7 @@ def _fill_with_playwright(page, fields, profile, answers_override,
                     log_field(jid, label, str(ans), res.provenance, filled=True,
                               selector=sel)
             else:
-                failed.append({**f, "_why": "fill_failed",
+                failed.append({**f, "_why": "fill_failed", "key": key,
                                "attempted": str(ans)[:200]})
                 if jid:
                     from apply.common.audit import log_field

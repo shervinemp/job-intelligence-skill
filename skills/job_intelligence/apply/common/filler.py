@@ -756,7 +756,22 @@ def _try_text_fallback(page, f, ans, sel):
 
 def fill_field(page, field: dict, ans: str) -> tuple[bool, str]:
     """Try all fillers in order. Returns (success, filler_name).
-    Includes pre/post-fill verification — the value must actually change."""
+    Includes pre/post-fill verification — the value must actually change.
+    List answers (multi-select): every value must stick — all-or-nothing."""
+    if isinstance(ans, list):
+        if not ans:
+            return True, "multi"
+        last_name = "multi"
+        for v in ans:
+            ok, name = fill_field(page, dict(field), v)
+            last_name = name
+            if not ok:
+                return False, last_name
+        return True, last_name
+    return _fill_one(page, field, ans)
+
+
+def _fill_one(page, field: dict, ans: str) -> tuple[bool, str]:
     sel = field.get("_sel", "")
     if not sel:
         sel = field.get("selector", "")
@@ -818,5 +833,6 @@ def fill_field(page, field: dict, ans: str) -> tuple[bool, str]:
         if aft2:
             field.setdefault("_diag", {})["after"] = aft2
 
-    field.setdefault("_diag", {})["reason"] = field["_diag"].get("reason") or "no_filler"
+    diag = field.setdefault("_diag", {})
+    diag["reason"] = diag.get("reason") or "no_filler"
     return False, "none"

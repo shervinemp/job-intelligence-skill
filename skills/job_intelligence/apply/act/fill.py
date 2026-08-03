@@ -755,7 +755,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         filled_all.append(rec["label"])
                         filled_recs.append(rec)
                 for rec in failed:
-                    k = _field_key(rec)
+                    k = rec.get("key") or _field_key(rec)
                     if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
                         failed_all.append(rec)
 
@@ -829,7 +829,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         filled_all.append(rec["label"])
                         filled_recs.append(rec)
                 for rec in failed2:
-                    k = _field_key(rec)
+                    k = rec.get("key") or _field_key(rec)
                     if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
                         failed_all.append(rec)
                 field_total += len(new_fields)

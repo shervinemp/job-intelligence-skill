@@ -172,6 +172,56 @@ def _autocomplete_key(token: str) -> Optional[str]:
 
 # ─── Resolution chain ────────────────────────────────────────────────
 
+def _i18n_norm(label: str) -> str:
+    """Normalize + translate known foreign form vocabulary to English
+    BEFORE the English rules run. A French form ("Ville", "Pays",
+    "Courriel") otherwise falls to no_match → handover — a whole OOD
+    class that the keyword layer can absorb for free.
+    Word-boundary replacement only: never mangles English words."""
+    n = normalize(label)
+    for fr, en in _FR_EN:
+        n = re.sub(r"\b" + re.escape(fr) + r"\b", en, n)
+    return n
+
+
+# French → English form vocabulary. KEYS ARE POST-NORMALIZATION forms —
+# the normalizer turns accented letters into spaces ("prénom" → "pr nom",
+# "téléphone" → "t l phone"), so the keys are the literal normalized
+# strings, ordered longest-first so compound phrases win.
+_FR_EN = [
+    ("pr nom et nom", "full name"), ("pr nom", "first name"),
+    ("nom de famille", "last name"),
+    ("adresse courriel", "email"), ("courriel", "email"),
+    ("e mail", "email"), ("courrier lectronique", "email"),
+    ("num ro de t l phone", "phone"), ("t l phone", "phone"),
+    ("code postal", "zip"), ("code postale", "zip"),
+    ("ville", "city"), ("province", "province"), ("pays", "country"),
+    ("adresse", "address"),
+    ("nom de l entreprise", "company"), ("entreprise", "company"),
+    ("titre du poste", "job title"), ("poste", "position"),
+    ("date de d but", "start date"), ("date de fin", "end date"),
+    ("tablissement", "institution"), ("tudes", "education"),
+    ("site web", "website"), ("lien linkedin", "linkedin"),
+    ("lien github", "github"), ("comp tences", "skills"),
+    ("langue", "language"), ("parrain", "referral"),
+    ("comment avez vous entendu", "how did you hear"),
+    ("exigences salariales", "salary expectations"), ("salaire", "salary"),
+    ("recommandation", "reference"),
+    ("ann es d exp rience", "years of experience"),
+    ("exp rience", "experience"),
+    ("autorisation de travail", "work authorization"),
+    ("parrainage", "sponsorship"), ("visa", "visa"),
+    ("disponibilit", "availability"), ("disponible", "available"),
+    ("genre", "gender"), ("pronoms", "pronouns"),
+    ("ethnie", "ethnicity"), ("handicap", "disability"),
+    ("ancien combattant", "veteran"), ("citoyennet", "citizenship"),
+    ("r sidence", "residence"), ("relocalisation", "relocation"),
+    ("d placement", "commute"), ("t l travail", "remote"),
+    ("hybride", "hybrid"), ("question", "question"),
+    ("r ponse", "answer"),
+]
+
+
 def resolve(
     label: str,
     profile: dict,
@@ -187,7 +237,10 @@ def resolve(
     if answers_override is None:
         answers_override = {}
 
-    norm = normalize(label)
+    # i18n pre-pass: foreign-language form vocabulary translates to the
+    # English rules (see _FR_EN). Autocomplete attributes are already
+    # locale-independent — this catches the visible labels.
+    norm = _i18n_norm(label)
     if not norm:
         return Resolution(None, None, label, "no_match")
 
@@ -197,7 +250,7 @@ def resolve(
 
     # Step 1: --answers override (explicit user/assistant value for this run)
     for k, v in answers_override.items():
-        nk = normalize(k)
+        nk = _i18n_norm(k)
         if nk == norm:
             # An explicit answer that CONTRADICTS a learned mapping proves
             # the learning wrong — invalidate it, don't outrank it forever.
@@ -379,10 +432,11 @@ def resolve(
             if v is not None and str(v) != "":
                 return Resolution(v, ck, label, "alias")
 
-    # Step 6: conservative form defaults for common optional questions where
-    # "No" is the universally safe answer (marketing, alerts, current-employee).
-    # NOT a user assumption — a privacy-conservative form default. The
-    # orchestrator can always override via --answers (which takes priority).
+    # Step 6: conservative form defaults for common questions where "No"
+    # is the universally safe answer (marketing, alerts, current-employee,
+    # preferred-name toggle). NOT a user assumption — a privacy-conservative
+    # form default. The orchestrator can always override via --answers
+    # (which takes priority).
     for pattern, default in _DEFAULT_ANSWERS:
         if re.search(pattern, norm):
             return Resolution(default, "default", label, "default")
@@ -426,12 +480,13 @@ _ALIAS_RULES = [
 
 
 # Conservative form defaults — NOT user assumptions. "No" is the safe answer
-# for marketing consent, job alerts, and current-employee questions. Only
-# fires for optional fields; the orchestrator can override via --answers.
+# for marketing consent, job alerts, current-employee, and preferred-name
+# toggle questions. The orchestrator can always override via --answers.
 _DEFAULT_ANSWERS = [
     (r"\b(stay up to date|marketing|newsletter|promotional|email updates|communications from)\b", "No"),
     (r"\b(receive alerts|job alerts|similar jobs|email me|notify me)\b", "No"),
     (r"\bcurrent\b.*\b(employee|staff|team member)\b", "No"),
+    (r"\bpreferred name\b", "No"),
 ]
 
 
@@ -510,7 +565,7 @@ def learn_mapping(label: str, value, domain: str = ""):
     TTL so stale learnings expire. Conflicting values reset the count."""
     if not label or value in (None, ""):
         return
-    norm = normalize(label)
+    norm = _i18n_norm(label)
     if not norm:
         return
     m = _load_learned()
