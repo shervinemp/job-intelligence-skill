@@ -117,6 +117,16 @@ def _run_worker(jid, quick=False):
     cmd = [sys.executable, "-m", "apply.shadow_worker", jid]
     if quick:
         cmd.append("--quick")
+    env = dict(env, JI_NO_LOCK="1")
+    # Clear any STALE outcome file from a previous run of this job —
+    # otherwise the supervisor would read yesterday's verdict for
+    # today's (possibly crashed) run.
+    try:
+        stale = os.path.join(JOBS_DIR, f"{jid}.outcome.json")
+        if os.path.exists(stale):
+            os.remove(stale)
+    except Exception:
+        pass
     t0 = time.time()
     chunks = []
     state = {"rc": None}
@@ -162,6 +172,21 @@ def _run_worker(jid, quick=False):
     return rc, tlog, out, timed_out
 
 
+def _load_worker_outcome(jid):
+    """The AUTHORITATIVE outcome: the worker's atomic outcome file.
+    Returns the record dict, or None when the worker never finished
+    (crash) — the supervisor then falls back to stdout evidence."""
+    try:
+        path = os.path.join(JOBS_DIR, f"{jid}.outcome.json")
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as f:
+            rec = json.load(f)
+        return rec if isinstance(rec, dict) and rec.get("outcome") else None
+    except Exception:
+        return None
+
+
 def _parse_worker(out):
     rec = {}
     for line in out.splitlines():
@@ -204,6 +229,18 @@ def _regression_canary(jid, rec):
 def run(jids=None, limit=None, quick=False):
     from lib.db import get_jobs_by_stage
 
+    # The batch holds the pipeline lock for its whole run (children run
+    # with JI_NO_LOCK=1) — a concurrent manual run can't interleave the
+    # shared apply_state.json mid-batch. Stale locks self-heal.
+    try:
+        from lib.chrome_manager import init as _init
+        _init()
+    except RuntimeError as _lk:
+        print(f"ERROR: {_lk}", file=sys.stderr)
+        return 1
+    except Exception:
+        pass
+
     os.makedirs(os.path.dirname(_TRANSCRIPT), exist_ok=True)
     _tf = open(_TRANSCRIPT, "w", encoding="utf-8")
     sys.stderr = _Tee(sys.stderr, _tf)
@@ -242,8 +279,15 @@ def run(jids=None, limit=None, quick=False):
               file=sys.stderr)
 
         rc, tlog, out, timed_out = _run_worker(jid, quick=quick)
-        parsed = _parse_worker(out)
-        crashed = rc != 0 or not parsed.get("outcome") or parsed.get("outcome") == "error"
+        fout = _load_worker_outcome(jid)
+        if fout:
+            # Authoritative record from the worker's atomic file — the
+            # stdout parse is only a fallback for evidence details.
+            parsed = fout
+            crashed = False
+        else:
+            parsed = _parse_worker(out)
+            crashed = rc != 0 or not parsed.get("outcome") or parsed.get("outcome") == "error"
 
         if crashed and rc == 0:
             # Worker reported an error outcome (job not found etc.) — not

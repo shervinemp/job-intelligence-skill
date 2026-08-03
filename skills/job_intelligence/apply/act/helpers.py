@@ -481,12 +481,32 @@ def _gap_fill_into_answers(fields, profile, answers_override, jid, ephemeral):
                 gap_fields.append(f)
         if not gap_fields:
             return answers_override
+        # Escape hatch only: the deterministic resolver exhausted its
+        # vocabulary (no_match) — LLM key-mapping may recover new
+        # phrasings. Policy-gated (gap_fill); off → the fields surface
+        # as needs_data for the orchestrator to answer from evidence.
+        from apply.common.llm_policy import allow as _llm_allow
+        if not _llm_allow("gap_fill"):
+            return answers_override
         from apply.act.suggest import llm_field_key_mapping
         from lib.db import get_job
         _job = get_job(jid) or {}
         gap = llm_field_key_mapping(gap_fields, profile, _job, ephemeral=ephemeral)
         if not gap:
             return answers_override
+        # Deterministic gate on the LLM's output: an LLM-mapped value is
+        # only accepted when the same validator that guards deterministic
+        # fills passes it (option membership, URL placement, format).
+        # The escape hatch never bypasses the code's truth.
+        try:
+            from apply.common.validate import validate_value as _vv
+            _by_label = {}
+            for _f in gap_fields:
+                _by_label.setdefault((_f.get("label") or "").strip(), _f)
+            gap = {k: v for k, v in gap.items()
+                   if (lambda f, vv: f is None or _vv(f, vv)[0])(_by_label.get(k.strip()), v)}
+        except Exception:
+            pass
         if answers_override is None:
             answers_override = {}
         for k, v in gap.items():
@@ -595,6 +615,14 @@ def _fill_with_playwright(page, fields, profile, answers_override,
 
     # Build ephemeral once — shared across all resolve calls in this page
     ephemeral = _build_ephemeral(profile)
+    # The per-job answers cache (state fill_answers) must feed the alias
+    # and keyword rules too, not just exact-label override matching.
+    # setdefault: profile values win over cached answers.
+    for _ak, _av in (answers_override or {}).items():
+        if _av:
+            ephemeral.setdefault(
+                _ak, (str(_av) if not isinstance(_av, list) else [str(x) for x in _av],
+                      "state"))
 
     # Phase 1: heuristic resolve + LLM batch gap-fill for no_match fields.
     # Merges LLM key-mapping results into answers_override so Phase 2 picks them up.

@@ -74,7 +74,25 @@ def run(jid=None, quick=False, max_pages=4):
     return 0 if not results["skipped"] else 1
 
 
+def _no_apply_path_detail(state):
+    """Outcome detail for a no_apply_path failure, discriminating
+    confirmed-expired from unconfirmed (cookie/session variance)."""
+    _emitted = (state.get("status_detail") or state.get("status_message") or "")
+    if "unconfirmed" in _emitted:
+        return "no apply path (unconfirmed — may be cookie/session)"
+    if "confirmed" in _emitted:
+        return "no apply path (confirmed expired)"
+    return "no apply path (expired)"
+
+
 def _retry_fill_with_llm(jid, job, results):
+    # Policy-gated (auto_retry, OFF by default): the pipeline does not
+    # auto-retry with LLM-mapped answers — that hides evidence and
+    # guesses inside the hot path. Failures surface in the evidence
+    # trail; the ORCHESTRATOR retries from reviewed evidence.
+    from apply.common.llm_policy import allow as _llm_allow
+    if not _llm_allow("auto_retry"):
+        return False
     from apply.common.page_helpers import load_state
     from apply.act.fill import cmd_fill
     from apply.act.check import cmd_check
@@ -114,6 +132,10 @@ def _retry_fill_with_llm(jid, job, results):
 
 
 def _retry_submit_with_llm(jid, job, results):
+    # Policy-gated (auto_retry, OFF by default) — see _retry_fill_with_llm.
+    from apply.common.llm_policy import allow as _llm_allow
+    if not _llm_allow("auto_retry"):
+        return False
     from apply.common.page_helpers import load_state
     from apply.act.fill import cmd_fill
     from apply.act.check import cmd_check
@@ -238,12 +260,15 @@ def _process_one(jid, job, quick, max_pages, results):
             st = load_state()
         if rc != 0:
             if st.get("status") == "no_apply_path":
-                # Only auto-reject in live mode — shadow/hold runs are
-                # observability-only and must not mutate job state.
+                # Discriminate confirmed-expired from unconfirmed
+                # (cookie/session variance deserves a look, not a silent
+                # "expired" label). Only auto-reject in live mode.
+                _detail = _no_apply_path_detail(st)
                 if resolve_mode() == "live":
                     from lib.db import advance_job
-                    advance_job(jid, "tailored", state="rejected", error="no apply path (expired?)")
-                results["skipped"].append((jid, "no apply path (expired)"))
+                    advance_job(jid, "tailored", state="rejected",
+                                error=_detail)
+                results["skipped"].append((jid, _detail))
                 return
             if st.get("status") in ("login_required", "login_failed",
                                     "captcha_required", "timed_out"):

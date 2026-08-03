@@ -2,11 +2,18 @@
 
 Spawned by apply.py shadow as a SUBPROCESS per job, so a hard crash
 (Playwright/CDP native fault) can never take down the batch supervisor.
-Prints machine-readable OUTCOME=/DETAIL=/SECS= lines on stdout; the
-supervisor classifies from those + the exit code + the evidence trail.
+
+The AUTHORITATIVE outcome is the structured file it writes as its very
+last action: ~/.ji/state/shadow_jobs/{jid}.outcome.json. stdout lines
+(OUTCOME=/DETAIL=/SECS=) are a human-readable mirror — the supervisor
+reads the FILE, so partial/corrupt stdout can never misclassify a run.
+A missing outcome file + non-zero exit = crash, deterministically.
 
 Env: JI_APPLY_MODE=shadow is forced here (never mutates job state).
+JI_NO_LOCK=1 is set by the supervisor — the batch holds the pipeline
+lock, so children must not re-acquire it.
 """
+import json
 import os
 import sys
 import time
@@ -15,17 +22,36 @@ os.environ["JI_APPLY_MODE"] = "shadow"
 os.environ.setdefault("JI_CAPTCHA_TIMEOUT", "60")
 
 
+def _write_outcome(jid, rec):
+    """Atomically write the authoritative outcome file (tmp + replace).
+    A crash can never leave a partial file — the supervisor treats a
+    missing file with a non-zero exit as a crash, deterministically."""
+    try:
+        from lib.config import JI_HOME
+        outdir = os.path.join(JI_HOME, "state", "shadow_jobs")
+        os.makedirs(outdir, exist_ok=True)
+        target = os.path.join(outdir, f"{jid}.outcome.json")
+        tmp = target + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+        os.replace(tmp, target)
+    except Exception:
+        # Never let a failed outcome write flip the exit code — the
+        # supervisor still sees rc and falls back to stdout evidence.
+        pass
+
+
 def main():
     jid = sys.argv[1] if len(sys.argv) > 1 else ""
     quick = "--quick" in sys.argv
     if not jid:
-        print("OUTCOME=error detail=no_jid")
+        _write_outcome("_nojid", {"outcome": "error", "detail": "no_jid"})
         return 2
 
     from lib.db import get_job
     job = get_job(jid)
     if not job:
-        print("OUTCOME=error detail=job_not_found")
+        _write_outcome(jid, {"outcome": "error", "detail": "job_not_found"})
         return 2
 
     from apply.auto import _process_one
@@ -65,11 +91,21 @@ def main():
         except Exception:
             pass
 
+    rec = {
+        "outcome": outcome,
+        "detail": detail,
+        "secs": round(time.time() - t0),
+        "jid": jid,
+    }
+    if check_errors:
+        rec["check_errors"] = check_errors
+    _write_outcome(jid, rec)
+
+    # Human-readable mirror on stdout (never the source of truth).
     print(f"OUTCOME={outcome}")
     print(f"DETAIL={detail}")
     print(f"SECS={round(time.time() - t0)}")
     if check_errors:
-        import json
         print(f"CHECK_ERRORS={json.dumps(check_errors)}")
     return 0
 

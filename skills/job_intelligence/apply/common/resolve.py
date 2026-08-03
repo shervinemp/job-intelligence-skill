@@ -223,6 +223,26 @@ def resolve(
                 val = ("+" + m.group(1)) if m else "+1"
             return Resolution(val, ac_key, label, "autocomplete")
 
+    # Step 1.7: pronoun option rows ("He/him" checkboxes) derived from
+    # gender. CHECK-positive only: the matching pronoun gets "Yes",
+    # non-matching ones get no answer — the row starts unchecked, so
+    # checking only the match achieves the exact desired state without
+    # risking an uncheck on a user-chosen pronoun.
+    if re.fullmatch(r"he him|she her|they them|xe xem|ze hir|ze zir|ey em",
+                    norm):
+        g = str(_find_ephemeral_value("gender", ephemeral)
+                or _find_ephemeral_value("Gender Identity", ephemeral)
+                or "").lower()
+        gmap = {"male": "he", "man": "he", "female": "she", "woman": "she",
+                "nonbinary": "they", "non-binary": "they", "genderqueer": "they",
+                "genderfluid": "they", "agender": "they"}
+        if g:
+            first = g.split()[0].rstrip(",")
+            fam = gmap.get(first)
+            if fam and norm.startswith(fam + " "):
+                return Resolution("Yes", "pronoun", label, "pronoun")
+        return Resolution(None, None, label, "no_match")
+
     # Step 1.6: name/id attribute semantics — ATS vendors use consistent
     # attribute names (first_name, last_name, email, phone, country, etc.)
     # that are more reliable than visible labels. Mirrors Jobright's pattern.
@@ -320,13 +340,17 @@ def resolve(
     # sponsorship to work in the United States or Canada?".
     _SINGLE_OK = {"email", "phone", "location", "website", "portfolio",
                   "linkedin", "github", "city", "country", "address", "zip",
-                  "pronouns", "headline", "name"}
+                  "pronouns", "headline", "name", "province", "state"}
     _norm_word_count = len(_norm_words)
     for key, (val, _source) in ephemeral.items():
         kw = key.replace("_", " ")
         if " " in kw:
             continue
         if kw in _SINGLE_OK and kw in _norm_words and _norm_word_count <= 3:
+            # "Phone Device Type" is a kind-of-device question (Landline/
+            # Mobile), not a phone number — a bare "phone" must not match.
+            if kw == "phone" and re.search(r"\btype\b|\bkind\b", norm):
+                continue
             return Resolution(val, key, label, "ephemeral")
 
     # Step 4: learned mappings — labels the user/orchestrator answered in
@@ -384,6 +408,9 @@ _ALIAS_RULES = [
     (r"\brelocat", ["willing_to_relocate"]),
     (r"\bcommute\b", ["willing_to_commute"]),
     (r"\bhybrid role|comfortable with this|in (our |the )?office\b", ["office_preference"]),
+    (r"\bwhich statement best describes\b.*\b(relocat|resid|eligib|office)",
+     ["willing_to_relocate", "location", "city", "currently_based_ontario",
+      "office_preference"]),
     (r"\bcity or location|enter city\b", ["location", "city"]),
     (r"\bexperience with ai|experience with llm|ai llm\b", ["ai_llm_experience", "Do you have experience with AI/LLMs?"]),
     (r"\bsoftware engineering heavy\b", ["software_engineering_confidence"]),

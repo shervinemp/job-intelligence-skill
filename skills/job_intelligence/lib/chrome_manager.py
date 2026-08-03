@@ -60,7 +60,11 @@ _initialized = False
 
 def _acquire_lock():
     """Prevent concurrent pipeline processes from corrupting shared state.
-    Raises RuntimeError if another pipeline process holds the lock."""
+    Raises RuntimeError if another pipeline process holds the lock.
+    JI_NO_LOCK=1 skips acquisition — the batch supervisor holds the lock
+    for its whole run; shadow worker children must not re-acquire it."""
+    if os.environ.get("JI_NO_LOCK"):
+        return
     _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     if _LOCK_PATH.exists():
         try:

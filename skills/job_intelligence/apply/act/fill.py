@@ -457,11 +457,42 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         print("  Easy Apply: modal opened", file=sys.stderr)
                         time.sleep(3)
                     else:
-                        print("  WARN: no Apply link and no Easy Apply button — job may be expired", file=sys.stderr)
-                        state["status"] = "no_apply_path"
-                        save_state(state)
-                        emit_status("no_apply_path", "no Easy Apply button or Apply link on LinkedIn page")
-                        emit_next("none", "job may be expired — skip or apply via external URL")
+                        # Discriminate confirmed-expired from unconfirmed:
+                        # LinkedIn renders explicit signals when a posting
+                        # is dead — everything else is "apply path not
+                        # found", which can be cookie/session variance and
+                        # deserves a human/orchestrator look, not a silent
+                        # "expired" label.
+                        _expired = ""
+                        try:
+                            _ptxt = (page.evaluate(
+                                "() => document.body ? document.body.innerText"
+                                ".slice(0, 8000) : ''") or "")
+                            for _sig in ("No longer accepting applications",
+                                         "This job is no longer available",
+                                         "Job has been removed",
+                                         "We're sorry, this job is no longer available"):
+                                if _sig.lower() in _ptxt.lower():
+                                    _expired = _sig
+                                    break
+                        except Exception:
+                            pass
+                        if _expired:
+                            print(f"  WARN: no Apply link or Easy Apply — {_expired}",
+                                  file=sys.stderr)
+                            state["status"] = "no_apply_path"
+                            state["status_detail"] = f"confirmed expired ({_expired[:40]})"
+                            save_state(state)
+                            emit_status("no_apply_path", f"confirmed expired ({_expired[:40]})")
+                            emit_next("none", "posting closed — skip")
+                        else:
+                            print("  WARN: no Apply link and no Easy Apply button — apply path not found",
+                                  file=sys.stderr)
+                            state["status"] = "no_apply_path"
+                            state["status_detail"] = "unconfirmed — may be cookie/session"
+                            save_state(state)
+                            emit_status("no_apply_path", "apply path not found (unconfirmed — may be cookie/session)")
+                            emit_next("none", "verify manually or apply via external URL")
                         return 1
                     max_pages = max(max_pages, 6)
 
@@ -503,6 +534,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             if not has_any_form(page, custom_widget_selectors=_cwd):
                 print("  WARN: no form, dialog, or iframe form found — job may be expired", file=sys.stderr)
                 state["status"] = "no_apply_path"
+                state["status_detail"] = "unconfirmed — no form on page"
                 save_state(state)
                 emit_status("no_apply_path", "no form or apply path found on page")
                 emit_next("none", "job may be expired — skip or apply via external URL")
@@ -535,6 +567,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 pass
 
             seen = set()
+            _followed_apply = False
             for page_num in range(1, max_pages + 1):
                 if _abort_timed_out():
                     return 1
@@ -592,23 +625,25 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                             f["_suspect"] = True
 
                 # ── Level 2 hook: LLM batch verification ──────────────
-                # If the local LLM is available, send ALL field→value pairs
-                # (both suspect and clear, MIXED — no labels) for independent
-                # review. The LLM sees only raw field data, not what Level 1
-                # decided. Cross-reference results to clear confirmed-wrong
-                # values without biasing the LLM.
+                # Batch LLM review of ALL field→value pairs is OFF by
+                # default (llm_policy): an LLM re-reviewing the
+                # deterministic core lowers accuracy. Level 1 alone
+                # decides — it clears suspect values so the orchestrator
+                # re-supplies them from reviewed evidence.
                 _llm_resolved = False
                 try:
-                    from lib.ask_api import available as _llm_avail
-                    if _llm_avail():
-                        _llm_results = _batch_verify(fields)
-                        if _llm_results is not None:
-                            _llm_resolved = True
-                            for idx in _llm_results:
-                                f = fields[idx]
-                                f["_original_value"] = f["value"]
-                                f["value"] = None
-                                f["_cleared_by"] = "code+llm" if f.get("_suspect") else "llm_only"
+                    from apply.common.llm_policy import allow as _llm_allow
+                    if _llm_allow("batch_verify"):
+                        from lib.ask_api import available as _llm_avail
+                        if _llm_avail():
+                            _llm_results = _batch_verify(fields)
+                            if _llm_results is not None:
+                                _llm_resolved = True
+                                for idx in _llm_results:
+                                    f = fields[idx]
+                                    f["_original_value"] = f["value"]
+                                    f["value"] = None
+                                    f["_cleared_by"] = "code+llm" if f.get("_suspect") else "llm_only"
                 except Exception as _llm_err:
                     print(f"  LLM_VERIFY_ERR: {_llm_err}", file=sys.stderr)
 
@@ -635,9 +670,69 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                             state["external_url"] = page.url
                             url = page.url
                             reg = resolve_registry(page.url)
+                            _followed_apply = False
                         except Exception:
                             pass
                         continue
+                    if not _followed_apply:
+                        # Job-detail page (Accenture-class): the apply CTA is
+                        # a link, not a form. Follow it once before giving up
+                        # — the target usually hosts the real form (Workday,
+                        # SmartRecruiters, ...) and may open in a new tab.
+                        _followed_apply = True
+                        try:
+                            link = page.locator('a:has-text("Apply")').first
+                            if link.count() > 0:
+                                print("  No fields yet — following apply link...",
+                                      file=sys.stderr)
+                                new_page = None
+                                try:
+                                    with ctx.expect_page(timeout=20000) as npi:
+                                        link.click()
+                                    new_page = npi.value
+                                except Exception:
+                                    pass
+                                if new_page is None:
+                                    try:
+                                        with page.expect_navigation(timeout=20000):
+                                            link.click()
+                                    except Exception:
+                                        pass
+                                if new_page is not None:
+                                    new_page.wait_for_load_state("domcontentloaded", timeout=30000)
+                                    page.close()
+                                    page = new_page
+                                    _wire_dialogs(page)
+                                time.sleep(3)
+                                _wait_for_fields(page, timeout=10)
+                                lw = _handle_login_wall(page, jid, quick)
+                                if lw:
+                                    state["status"] = lw
+                                    save_state(state)
+                                    return 1
+                                state["external_url"] = page.url
+                                url = page.url
+                                reg = resolve_registry(page.url)
+                                continue
+                        except Exception:
+                            pass
+                    if page_profile and page_profile.get("login_signals"):
+                        # Zero-input page with sign-in text after all
+                        # navigation attempts = login wall (Workday-class:
+                        # no password input for _handle_login_wall to see).
+                        _zero_form = (not page_profile.get("visible_text_inputs")
+                                      and not page_profile.get("email_fields")
+                                      and not page_profile.get("select_elements")
+                                      and not page_profile.get("textarea_count"))
+                        if _zero_form and not page_profile.get("dialog"):
+                            print(f"  LOGIN_WALL: {', '.join(page_profile['login_signals'][:3])}",
+                                  file=sys.stderr)
+                            emit_status("login_required",
+                                        f"sign in at {_host(page.url) or page.url}")
+                            emit_next("login", f"domain={_host(page.url)} jid={jid}")
+                            state["status"] = "login_required"
+                            save_state(state)
+                            return 1
 
                 filled, failed = _fill_with_playwright(page, fields, profile, answers,
                                                        filled_keys=filled_keys)
@@ -732,12 +827,19 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
             remaining_now = [r for r in failed_all if _field_key(r) not in filled_keys]
             if verify and filled_all and not remaining_now and field_total > 0:
+                # Screenshot verification of EVERY answer is OFF by default
+                # (llm_policy verify_reads): the deterministic re-read
+                # verification + check.py arbitration is the verifier; the
+                # orchestrator reviews dossiers for the residual
+                # unverified reads.
                 try:
-                    verify_result = _verify_with_ask_api(page, ans_dict)
-                    if not verify_result.get("ok"):
-                        mm = verify_result.get("mismatches", [])
-                        if mm:
-                            print(f"  Vision flag: {len(mm)} field(s) may need review", file=sys.stderr)
+                    from apply.common.llm_policy import allow as _llm_allow
+                    if _llm_allow("verify_reads"):
+                        verify_result = _verify_with_ask_api(page, ans_dict)
+                        if not verify_result.get("ok"):
+                            mm = verify_result.get("mismatches", [])
+                            if mm:
+                                print(f"  Vision flag: {len(mm)} field(s) may need review", file=sys.stderr)
                 except Exception as ve:
                     print(f"  Vision verify skipped: {ve}", file=sys.stderr)
 
