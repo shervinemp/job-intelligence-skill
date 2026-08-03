@@ -291,8 +291,17 @@ def advance_job(jid, new_stage, **updates):
 
 
 def get_job(jid):
+    """Fetch a job by id — accepts the full 16-hex id OR the 12-char
+    prefix that logs/transcripts display (identity must survive
+    truncation; see terms.trunc: display-only truncation is never an
+    identity boundary)."""
     conn = get_conn()
     r = conn.execute(f"SELECT {_JOBS_COLS} FROM jobs WHERE id=?", (jid,)).fetchone()
+    if r is None and len(str(jid)) < 16:
+        r = conn.execute(
+            f"SELECT {_JOBS_COLS} FROM jobs WHERE id LIKE ?",
+            (str(jid) + "%",)
+        ).fetchone()
     return _row_to_job(r) if r else None
 
 

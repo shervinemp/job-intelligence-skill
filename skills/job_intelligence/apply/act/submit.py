@@ -2,6 +2,7 @@
 import json, sys, time
 
 from lib.db import get_conn
+from apply.common import terms as _T
 from apply.common.output import emit_next, emit_status, emit_error
 from apply.common.page_helpers import load_state, save_state, handle_captcha, mark_applied
 from apply.act.helpers import (
@@ -190,12 +191,12 @@ def cmd_submit(jid, confirm=False, force=False):
     pol = load_policy()
     mode = resolve_mode()
     action, reason = submit_decision(mode, pol)
-    if action == "blocked":
-        emit_status("blocked", reason)
+    if action == _T.STATUS_BLOCKED:
+        emit_status(_T.STATUS_BLOCKED, reason)
         emit_next("none", "kill-switch active — resume via apply_policy.json")
         return 1
-    if action == "hold":
-        emit_status("hold", reason)
+    if action == _T.STATUS_HOLD:
+        emit_status(_T.STATUS_HOLD, reason)
         emit_next("none", "review form in browser, then run submit with policy=live")
         return 0
 
@@ -206,7 +207,7 @@ def cmd_submit(jid, confirm=False, force=False):
         check_rc = cmd_check(jid)
         if check_rc != 0:
             print("  CHECK FAILED — submit blocked. Use --force to override.", file=sys.stderr)
-            emit_status("check_failed", "run 'apply act --check' and fix errors first")
+            emit_status(_T.STATUS_CHECK_FAILED, "run 'apply act --check' and fix errors first")
             emit_next("check", "fix errors then resubmit (or --force to override)")
             return 1
 
@@ -235,7 +236,7 @@ def cmd_submit(jid, confirm=False, force=False):
                     print(f"  REGRESSION GATE: {len(d['regressed'])} field(s) "
                           f"regressed vs previous run: {labels}",
                           file=sys.stderr)
-                    emit_status("regression_gate",
+                    emit_status(_T.STATUS_REGRESSION_GATE,
                                 "filled-before fields now fail — investigate before submit")
                     emit_next("diff", f"python3 report.py diff {jid} (or --force to override)")
                     return 1

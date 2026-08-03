@@ -115,6 +115,29 @@ _READER_JS = """(config) => {
         return !v || PLACEHOLDER_VALUES.indexOf(v.trim().toLowerCase()) >= 0;
     }
 
+    function resolveLabelFull(el, scopeRoot) {
+        // Same derivation as resolveLabel but WITHOUT the 80-char cut —
+        // the untruncated identity for label_full.
+        let label = el.getAttribute('aria-label') || el.placeholder || el.name || '';
+        const normName = (el.name || '').toLowerCase();
+        if (el.type === 'radio' && normName && normName.length <= 24 && /^[a-z0-9_]+$/.test(normName)) {
+            label = normName;
+        }
+        if (!label) {
+            const parent = el.closest('div,fieldset,section,li,form');
+            const plbl = parent ? parent.querySelector('label, legend, strong, span') : null;
+            if (plbl) label = plbl.textContent.trim();
+        }
+        if (!label) {
+            const td = el.closest('td');
+            if (td) {
+                const firstCell = td.parentElement ? td.parentElement.querySelector('td:first-child, th:first-child') : null;
+                if (firstCell && firstCell !== td) label = firstCell.textContent.trim();
+            }
+        }
+        return (label || '').replace(/\\s+/g, ' ').trim();
+    }
+
     function fieldFromElement(el, scopeRoot) {
         const label = resolveLabel(el, scopeRoot);
         const opts = el.tagName === 'SELECT'
@@ -143,7 +166,12 @@ _READER_JS = """(config) => {
         return {
             tag: el.tagName, type: el.getAttribute('type') || '',
             id: el.id, name: el.getAttribute('name') || '',
-            label: label, option_label: resolveOptionLabel(el, scopeRoot, label),
+            label: label,
+            // IDENTITY, never truncated — label is display (may be cut to
+            // 80 chars); consumers that key on labels must use label_full
+            // when the field carries it.
+            label_full: resolveLabelFull(el, scopeRoot),
+            option_label: resolveOptionLabel(el, scopeRoot, label),
             placeholder: el.placeholder || '',
             autocomplete: el.getAttribute('autocomplete') || '',
             aria_autocomplete: el.getAttribute('aria-autocomplete') || '',
@@ -176,6 +204,11 @@ _READER_JS = """(config) => {
     }
 
     function makeDropdown(btn, sr) {
+        // Junk rejection: controls inside navigation/utility regions are
+        // page furniture (language selectors, hamburger menus), not form
+        // fields. Workday's header is a div soup, so match data-automation-id
+        // too — real form dropdowns never live in a nav/utility container.
+        if (btn.closest('nav, header, [data-automation-id*="navigation" i], [data-automation-id*="utility" i], [data-automation-id*="header" i]')) return null;
         const parentSelector = customWidgets.parent || '[data-automation-id], [role="dialog"], dialog, form, fieldset';
         const parent = btn.closest(parentSelector);
         if (!parent) return null;

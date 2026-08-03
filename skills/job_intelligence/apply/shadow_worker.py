@@ -20,6 +20,7 @@ import time
 
 os.environ["JI_APPLY_MODE"] = "shadow"
 os.environ.setdefault("JI_CAPTCHA_TIMEOUT", "60")
+from apply.common import terms as _T
 
 
 def _write_outcome(jid, rec):
@@ -45,41 +46,41 @@ def main():
     jid = sys.argv[1] if len(sys.argv) > 1 else ""
     quick = "--quick" in sys.argv
     if not jid:
-        _write_outcome("_nojid", {"outcome": "error", "detail": "no_jid"})
+        _write_outcome("_nojid", {"outcome": _T.OUTCOME_ERROR, "detail": "no_jid"})
         return 2
 
     from lib.db import get_job
     job = get_job(jid)
     if not job:
-        _write_outcome(jid, {"outcome": "error", "detail": "job_not_found"})
+        _write_outcome(jid, {"outcome": _T.OUTCOME_ERROR, "detail": "job_not_found"})
         return 2
 
     from apply.auto import _process_one
-    results = {"submitted": [], "stopped": [], "skipped": [],
-               "already_applied": []}
+    results = {_T.OUTCOME_SUBMITTED: [], _T.OUTCOME_STOPPED: [], _T.OUTCOME_SKIPPED: [],
+               _T.OUTCOME_ALREADY_APPLIED: []}
     t0 = time.time()
     try:
         _process_one(jid, job, quick=quick, max_pages=4, results=results)
-        if results["already_applied"]:
-            outcome, detail = "already_applied", ""
-        elif results["submitted"]:
-            outcome, detail = "submitted", str(results["submitted"][0][1])[:120]
-        elif results["stopped"]:
-            detail = str(results["stopped"][0][1])[:120]
+        if results[_T.OUTCOME_ALREADY_APPLIED]:
+            outcome, detail = _T.OUTCOME_ALREADY_APPLIED, ""
+        elif results[_T.OUTCOME_SUBMITTED]:
+            outcome, detail = _T.OUTCOME_SUBMITTED, str(results[_T.OUTCOME_SUBMITTED][0][1])[:120]
+        elif results[_T.OUTCOME_STOPPED]:
+            detail = str(results[_T.OUTCOME_STOPPED][0][1])[:120]
             if detail.startswith("submit returned 0"):
-                outcome, detail = "held_shadow", "fill+check OK, submit held (shadow)"
+                outcome, detail = _T.OUTCOME_HELD_SHADOW, "fill+check OK, submit held (shadow)"
             else:
-                outcome, detail = "stopped", detail
+                outcome, detail = _T.OUTCOME_STOPPED, detail
         else:
-            outcome, detail = "skipped", (
-                str(results["skipped"][0][1])[:120] if results["skipped"] else "?")
+            outcome, detail = _T.OUTCOME_SKIPPED, (
+                str(results[_T.OUTCOME_SKIPPED][0][1])[:120] if results[_T.OUTCOME_SKIPPED] else "?")
     except Exception as e:
-        outcome, detail = "exception", str(e)[:150]
+        outcome, detail = _T.OUTCOME_EXCEPTION, str(e)[:150]
 
     # Capture pre-submit check errors (stored by cmd_check) so
     # check-failed jobs are reviewable without re-running.
     check_errors = []
-    if outcome in ("stopped", "exception"):
+    if outcome in (_T.OUTCOME_STOPPED, _T.OUTCOME_EXCEPTION):
         try:
             from apply.common.page_helpers import load_state
             st = load_state()

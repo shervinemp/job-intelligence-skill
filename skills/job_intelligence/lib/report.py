@@ -18,6 +18,7 @@ Usage:
 """
 
 import csv
+from apply.common import terms as _T
 import io
 import json
 import re
@@ -203,7 +204,7 @@ def cmd_inspect(jid):
     for k in ["id", "email_id", "location", "url", "source_url", "salary",
               "salary_min", "salary_max", "salary_currency", "remote_status",
                "job_type", "department", "source", "stage", "state", "fit_score",
-              "error", "created_at", "updated_at", "applied_at"]:
+              _T.OUTCOME_ERROR, "created_at", "updated_at", "applied_at"]:
         v = job.get(k)
         if v:
             print(f"  {k:20s} {v}")
@@ -380,7 +381,7 @@ def cmd_outreach(limit=50):
         for a in attempts:
             print(f"  [{a['channel']:16s}] {a['status']:8s} {a['contact_name'][:22]:22s} "
                   f"{a.get('sent_at') or a.get('created_at') or ''}"
-                  + (f"  err: {a['error'][:40]}" if a.get("error") else ""))
+                  + (f"  err: {a['error'][:40]}" if a.get(_T.OUTCOME_ERROR) else ""))
     else:
         print("No outreach attempts yet.")
 
@@ -474,25 +475,25 @@ def cmd_shadow():
                 continue
         if _llm:
             print(f"  LLM_STATUS: {', '.join(f'{k}={v}' for k, v in _llm.most_common())}")
-            if _llm.get("api_down"):
+            if _llm.get(_T.LLM_API_DOWN):
                 print("  NOTE: ask_api was DOWN for some runs — escape-hatch "
                       "fields are unassisted; orchestrator review required.")
     except Exception:
         pass
     print()
 
-    order = ["held_shadow", "already_applied", "skipped", "stopped", "exception", "submitted"]
+    order = [_T.OUTCOME_HELD_SHADOW, _T.OUTCOME_ALREADY_APPLIED, _T.OUTCOME_SKIPPED, _T.OUTCOME_STOPPED, _T.OUTCOME_EXCEPTION, _T.OUTCOME_SUBMITTED]
     shots = os.path.join(JI_HOME, "screenshots")
     for kind in order:
         group = [r for r in recs if r.get("outcome") == kind]
         if not group:
             continue
-        label = {"held_shadow": "READY TO SUBMIT (fill+check OK)",
-                 "already_applied": "ALREADY APPLIED",
-                 "skipped": "SKIPPED (login/captcha/expired)",
-                 "stopped": "NEEDS REVIEW",
-                 "exception": "EXCEPTION",
-                 "submitted": "SUBMITTED (unexpected in shadow)"}[kind]
+        label = {_T.OUTCOME_HELD_SHADOW: "READY TO SUBMIT (fill+check OK)",
+                 _T.OUTCOME_ALREADY_APPLIED: "ALREADY APPLIED",
+                 _T.OUTCOME_SKIPPED: "SKIPPED (login/captcha/expired)",
+                 _T.OUTCOME_STOPPED: "NEEDS REVIEW",
+                 _T.OUTCOME_EXCEPTION: "EXCEPTION",
+                 _T.OUTCOME_SUBMITTED: "SUBMITTED (unexpected in shadow)"}[kind]
         print(f"== {label} ({len(group)}) " + "=" * 40)
         for r in sorted(group, key=lambda x: x.get("ts", "")):
             jid = r.get("jid", "?")
@@ -515,8 +516,8 @@ def cmd_shadow():
 
     # Actionable next steps
     print("NEXT:")
-    stopped = [r for r in recs if r.get("outcome") == "stopped"]
-    held = outcomes.get("held_shadow", 0)
+    stopped = [r for r in recs if r.get("outcome") == _T.OUTCOME_STOPPED]
+    held = outcomes.get(_T.OUTCOME_HELD_SHADOW, 0)
     if held:
         print(f"  - {held} job(s) passed fill+check — run live submits when ready")
     if stopped:
@@ -561,12 +562,12 @@ def cmd_shadow_classify():
     print("  " + ", ".join(f"{k}={v}" for k, v in outcomes.most_common()))
     print()
 
-    order = ["held_shadow", "already_applied", "skipped", "stopped",
-             "crash", "timeout", "error", "exception", "submitted"]
-    labels = {"held_shadow": "READY TO SUBMIT", "already_applied": "ALREADY APPLIED",
-              "skipped": "SKIPPED", "stopped": "NEEDS REVIEW", "crash": "CRASH",
-              "timeout": "TIMEOUT", "error": "ERROR", "exception": "EXCEPTION",
-              "submitted": "SUBMITTED (unexpected)"}
+    order = [_T.OUTCOME_HELD_SHADOW, _T.OUTCOME_ALREADY_APPLIED, _T.OUTCOME_SKIPPED, _T.OUTCOME_STOPPED,
+             _T.OUTCOME_CRASH, _T.OUTCOME_TIMEOUT, _T.OUTCOME_ERROR, _T.OUTCOME_EXCEPTION, _T.OUTCOME_SUBMITTED]
+    labels = {_T.OUTCOME_HELD_SHADOW: "READY TO SUBMIT", _T.OUTCOME_ALREADY_APPLIED: "ALREADY APPLIED",
+              _T.OUTCOME_SKIPPED: "SKIPPED", _T.OUTCOME_STOPPED: "NEEDS REVIEW", _T.OUTCOME_CRASH: "CRASH",
+              _T.OUTCOME_TIMEOUT: "TIMEOUT", _T.OUTCOME_ERROR: "ERROR", _T.OUTCOME_EXCEPTION: "EXCEPTION",
+              _T.OUTCOME_SUBMITTED: "SUBMITTED (unexpected)"}
 
     for kind in order:
         group = [r for r in recs if r.get("outcome") == kind]
@@ -575,7 +576,7 @@ def cmd_shadow_classify():
         print(f"== {labels.get(kind, kind)} ({len(group)}) " + "=" * 30)
         for r in sorted(group, key=lambda x: x.get("ts", ""))[:15]:
             flagged = ""
-            if kind == "held_shadow" and r.get("regressed"):
+            if kind == _T.OUTCOME_HELD_SHADOW and r.get("regressed"):
                 flagged = "  *** QUARANTINED (regression vs previous run) ***"
                 continue  # ready-gate: regressed jobs are NOT ready
             print(f"  {r.get('jid', '?')[:12]} {r.get('company', '?')[:20]:20s} "
@@ -592,7 +593,7 @@ def cmd_shadow_classify():
                   + ", ".join(r.get("jid", "?")[:12] for r in _quar))
         print()
 
-    stopped = [r for r in recs if r.get("outcome") == "stopped"]
+    stopped = [r for r in recs if r.get("outcome") == _T.OUTCOME_STOPPED]
 
     # Unconfirmed-skip clustering: a platform that is mostly UNCONFIRMED
     # is a platform-level hypothesis (cookie/session issue), not a pile
@@ -650,13 +651,13 @@ def cmd_shadow_classify():
         except Exception:
             pass
         bad = [f for f in fields
-               if f.get("kind") in ("rejected_by_form", "interaction_failed")
-               or (f.get("kind") == "needs_data" and f.get("required"))]
+               if f.get("kind") in (_T.REJECTED_BY_FORM, _T.INTERACTION_FAILED)
+               or (f.get("kind") == _T.NEEDS_DATA and f.get("required"))]
         if not bad:
             owners["unknown"].append((r, []))
             continue
         code = [f for f in bad
-                if f.get("kind") in ("rejected_by_form", "interaction_failed")]
+                if f.get("kind") in (_T.REJECTED_BY_FORM, _T.INTERACTION_FAILED)]
         unresolved = [f for f in bad if not _has_answer(f.get("label") or "")]
         handover = [f for f in unresolved
                     if any(kw in (f.get("label") or "").lower() for kw in _HANDOVER_KW)]
@@ -918,19 +919,19 @@ def cmd_fleet():
             pass
         for f in d.get("fields", []):
             kinds[f.get("kind", "?")] += 1
-            if f.get("kind") in ("verified", "unverified"):
+            if f.get("kind") in (_T.VERIFIED, _T.UNVERIFIED):
                 m = (f.get("method") or "deterministic").lower()
                 bucket = ("llm" if "llm" in m or "vision" in m
                           else "combobox" if "combobox" in m
                           else "deterministic")
                 methods[bucket] += 1
-            if f.get("kind") in ("rejected_by_form", "interaction_failed",
-                                 "needs_data"):
+            if f.get("kind") in (_T.REJECTED_BY_FORM, _T.INTERACTION_FAILED,
+                                 _T.NEEDS_DATA):
                 fail_labels[(f.get("label") or "?")[:60]] += 1
 
     print(f"FLEET ACCURACY: {n_jobs} dossier(s), {n_fields} field record(s)")
     print(f"  kinds: {', '.join(f'{k}={v}' for k, v in kinds.most_common())}")
-    filled = kinds.get("verified", 0) + kinds.get("unverified", 0)
+    filled = kinds.get(_T.VERIFIED, 0) + kinds.get(_T.UNVERIFIED, 0)
     bad = n_fields - filled
     if n_fields:
         print(f"  filled={filled} ({100 * filled // n_fields}%)  "
@@ -1040,6 +1041,11 @@ def main():
             cmd_shadow()
     elif cmd == "fleet":
         cmd_fleet()
+    elif cmd == "glossary":
+        from apply.common.terms import glossary
+        for term, meaning, note in glossary():
+            print(f"  {term:22s} {meaning}")
+            print(f"      {note}")
     elif cmd == "archive":
         cmd_archive()
     else:

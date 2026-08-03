@@ -12,6 +12,7 @@ Usage:
   python apply.py auto --max-pages N             Max form pages (default 4)
 """
 import os, sys, time, re
+from apply.common import terms as _T
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -259,7 +260,7 @@ def _process_one(jid, job, quick, max_pages, results):
                           max_pages=max_pages, quick=quick)
             st = load_state()
         if rc != 0:
-            if st.get("status") == "no_apply_path":
+            if st.get("status") == _T.STATUS_NO_APPLY_PATH:
                 # Discriminate confirmed-expired from unconfirmed
                 # (cookie/session variance deserves a look, not a silent
                 # "expired" label). Only auto-reject in live mode.
@@ -270,8 +271,8 @@ def _process_one(jid, job, quick, max_pages, results):
                                 error=_detail)
                 results["skipped"].append((jid, _detail))
                 return
-            if st.get("status") in ("login_required", "login_failed",
-                                    "captcha_required", "timed_out"):
+            if st.get("status") in (_T.STATUS_LOGIN_REQUIRED, _T.STATUS_LOGIN_FAILED,
+                                    _T.STATUS_CAPTCHA_REQUIRED, _T.STATUS_TIMED_OUT):
                 results["skipped"].append((jid, f"fill failed: {st.get('status')}"))
                 return
             print("  FILL_FAILED — inspecting...", file=sys.stderr)

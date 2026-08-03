@@ -208,6 +208,10 @@ def load_state():
 
 def save_state(state):
     from lib.config import atomic_write_json
+    # RUNTIME CACHE ONLY — the dossier (results/{jid}/handoff.json) is the
+    # truth; this marker keeps every reader from mistaking scratch for
+    # authority (see terms glossary: "dossier" vs "profile").
+    state["_role"] = "runtime_cache"
     atomic_write_json(STATE_PATH, state)
 
 

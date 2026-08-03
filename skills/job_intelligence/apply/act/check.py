@@ -14,6 +14,7 @@ import time
 
 from lib.db import get_conn
 from apply.common.output import emit_error, emit_status
+from apply.common import terms as _T
 from apply.common.page_helpers import load_state, tag_page
 from apply.act.helpers import (
     _load_profile, _build_ans_dict, chrome_session,
@@ -191,7 +192,7 @@ def cmd_check(jid):
                                 "label": label,
                                 "expected": "(no answer supplied)",
                                 "actual": "(unreadable)",
-                                "severity": "INFO",
+                                "severity": _T.SEV_INFO,
                                 "reason": "Required field with no answer — React widget, verify visually",
                             })
                         else:
@@ -199,7 +200,7 @@ def cmd_check(jid):
                                 "label": label,
                                 "expected": "(no answer supplied)",
                                 "actual": "(empty)",
-                                "severity": "ERROR",
+                                "severity": _T.SEV_ERROR,
                                 "reason": "Required field has no answer supplied — would fail submit",
                             })
                     continue
@@ -272,7 +273,7 @@ def cmd_check(jid):
                                 "label": label,
                                 "expected": str(expected),
                                 "actual": selected,
-                                "severity": "ERROR",
+                                "severity": _T.SEV_ERROR,
                                 "reason": f"Wrong location — user location words {loc_words} not in selected option",
                             })
                         else:
@@ -280,7 +281,7 @@ def cmd_check(jid):
                                 "label": label,
                                 "expected": str(expected),
                                 "actual": selected,
-                                "severity": "ERROR",
+                                "severity": _T.SEV_ERROR,
                                 "reason": "Radio selection doesn't match expected value",
                             })
                     continue
@@ -309,7 +310,7 @@ def cmd_check(jid):
                                 "label": label,
                                 "expected": str(expected),
                                 "actual": is_yesno,
-                                "severity": "ERROR",
+                                "severity": _T.SEV_ERROR,
                                 "reason": "Yes/No button doesn't match expected answer",
                             })
                     continue
@@ -326,7 +327,7 @@ def cmd_check(jid):
                         "label": label,
                         "expected": str(expected),
                         "actual": actual,
-                        "severity": "WARN",
+                        "severity": _T.SEV_WARN,
                         "reason": "Filled value doesn't match expected",
                     })
                 elif expected and not actual:
@@ -335,7 +336,7 @@ def cmd_check(jid):
                             "label": label,
                             "expected": str(expected),
                             "actual": "(unreadable)",
-                            "severity": "INFO",
+                            "severity": _T.SEV_INFO,
                             "reason": "React-controlled field — value not readable via DOM (verify visually)",
                         })
                     else:
@@ -343,7 +344,7 @@ def cmd_check(jid):
                             "label": label,
                             "expected": str(expected),
                             "actual": "(empty)",
-                            "severity": "ERROR",
+                            "severity": _T.SEV_ERROR,
                             "reason": "Required field appears empty",
                         })
 
@@ -366,7 +367,7 @@ def cmd_check(jid):
                         "label": "cross-field: country vs location",
                         "expected": f"both should reference '{user_city}'",
                         "actual": f"country={country_val}, location={loc_val}",
-                        "severity": "WARN",
+                        "severity": _T.SEV_WARN,
                         "reason": "Country and location fields may be inconsistent",
                     })
 
@@ -380,15 +381,15 @@ def cmd_check(jid):
                         "label": f"cross-field: {finding['rule']}",
                         "expected": f"{finding['left']} ↔ {finding['right']}",
                         "actual": finding["detail"],
-                        "severity": "ERROR",
+                        "severity": _T.SEV_ERROR,
                         "reason": f"contradiction ({finding['rule']})",
                     })
             except Exception:
                 pass
 
-            errors = [i for i in issues if i["severity"] == "ERROR"]
-            warnings = [i for i in issues if i["severity"] == "WARN"]
-            infos = [i for i in issues if i["severity"] == "INFO"]
+            errors = [i for i in issues if i["severity"] == _T.SEV_ERROR]
+            warnings = [i for i in issues if i["severity"] == _T.SEV_WARN]
+            infos = [i for i in issues if i["severity"] == _T.SEV_INFO]
 
             from apply.common.page_helpers import save_state
             state["check_errors"] = errors

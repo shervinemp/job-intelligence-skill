@@ -4,6 +4,7 @@ import random, re, sys, time
 
 from lib.db import get_conn
 from lib.config import RESULTS_DIR
+from apply.common import terms as _T
 from apply.common.output import emit_next, emit_status, emit_error, emit_fill_report
 from apply.common.page_helpers import load_state, save_state, handle_captcha, handle_session_timeout, tag_page
 from apply.act.helpers import (
@@ -133,7 +134,7 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
             "outcome": "filled",
             # The epistemic truth: verified by read-back, or accepted
             # without confirmation (check arbitrates).
-            "kind": "unverified" if r.get("unverified") else "verified",
+            "kind": _T.UNVERIFIED if r.get("unverified") else _T.VERIFIED,
             "method": r.get("method", "deterministic"),
             "reason": "accepted_unverified" if r.get("unverified") else "verified",
         })
@@ -141,10 +142,10 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
         diag = r.get("_diag") or {}
         is_no_answer = r.get("_why") == "no_answer"
         if is_no_answer:
-            kind = "needs_data"
+            kind = _T.NEEDS_DATA
         else:
-            kind = ("interaction_failed" if diag.get("reason") == "exception"
-                    else "rejected_by_form")
+            kind = (_T.INTERACTION_FAILED if diag.get("reason") == "exception"
+                    else _T.REJECTED_BY_FORM)
         fields.append({
             "label": r.get("label", ""), "answer": r.get("attempted", ""),
             "outcome": "no_answer" if is_no_answer else "failed",
@@ -159,35 +160,32 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
 
     # HONEST accounting: rejected/interaction-failed fields and REQUIRED
     # fields with no data are failures — they'd fail validation on submit.
-    failed_labels = [f["label"] for f in fields
-                     if f["kind"] in ("rejected_by_form", "interaction_failed")
-                     or (f["kind"] == "needs_data" and f.get("required"))]
-    # skipped-optional fields (no data, not required) — EXCLUDED from the
-    # failed count so summary.filled + summary.failed + summary.skipped
-    # equals the unique field total (no double counting).
-    skipped_labels = [f["label"] for f in fields
-                      if f["kind"] == "needs_data" and not f.get("required")]
+    # THE aggregate: terms.summarize is the single implementation — the
+    # DECISION line and the dossier summary can never disagree again.
+    failed_labels = _T.failed_labels(fields)
+    skipped_labels = _T.skipped_labels(fields)
+    summary = _T.summarize(fields)
 
     blockers = []
     status = state.get("status", "")
-    if status == "login_required":
+    if status == _T.STATUS_LOGIN_REQUIRED:
         domain = ""
         try:
             from urllib.parse import urlparse as _up
             domain = _up(url or "").netloc
         except Exception:
             pass
-        blockers.append({"type": "login_required", "domain": domain,
+        blockers.append({"type": _T.STATUS_LOGIN_REQUIRED, "domain": domain,
                          "needs": "account or creds",
                          "next": f"apply.py creds set {domain} <email>  then re-run fill"})
-    elif status == "captcha_required":
-        blockers.append({"type": "captcha_required",
+    elif status == _T.STATUS_CAPTCHA_REQUIRED:
+        blockers.append({"type": _T.STATUS_CAPTCHA_REQUIRED,
                          "needs": "human solve (or policy captcha_skip)"})
-    elif status == "2fa_required":
-        blockers.append({"type": "2fa_required",
+    elif status == _T.STATUS_2FA_REQUIRED:
+        blockers.append({"type": _T.STATUS_2FA_REQUIRED,
                          "needs": "complete 2FA in Chrome then re-run fill"})
-    elif status == "timed_out":
-        blockers.append({"type": "timed_out",
+    elif status == _T.STATUS_TIMED_OUT:
+        blockers.append({"type": _T.STATUS_TIMED_OUT,
                          "next": "raise job_timeout_sec or run again (resumable)"})
 
     decisions = []
@@ -223,11 +221,9 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
         "error": error,
         "llm_status": llm_status,
         "llm_status_detail": llm_detail,
-        # Mutually exclusive counts: filled + failed + skipped_optional =
-        # the unique field total (failed EXCLUDES optional no-data fields).
-        "summary": {"filled": len(filled_recs),
-                    "failed": len(failed_all) - len(skipped_labels),
-                    "skipped_optional": len(skipped_labels)},
+        # Mutually exclusive counts — THE single aggregate (terms.summarize):
+        # filled + failed + skipped_optional = unique field total.
+        "summary": summary,
         "fields": fields,
         "blockers": blockers,
         "decisions": decisions,
@@ -275,23 +271,23 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
     except Exception:
         pass
 
-    # Compact machine-parseable decision block for the orchestrator.
-    # Vocabulary: filled / rejected (form rejected or interaction failed) /
-    # needs_data (no answer; required ones block) / skipped (optional
-    # no-data) / blockers. Counts are mutually exclusive.
+    # Compact machine-parseable decision block for the orchestrator —
+    # counts derive from THE single aggregate (terms.summarize), so this
+    # line can never disagree with the dossier summary again.
     n_rejected = len([f for f in fields
-                      if f["kind"] in ("rejected_by_form", "interaction_failed")])
+                      if f["kind"] in (_T.REJECTED_BY_FORM,
+                                       _T.INTERACTION_FAILED)])
     n_needs = len([f for f in fields
-                   if f["kind"] == "needs_data" and f.get("required")])
+                   if f["kind"] == _T.NEEDS_DATA and f.get("required")])
     n_skipped = len(skipped_labels)
     ok = not failed_labels and not blockers
     print(f"DECISION: job {jid} fill {'OK' if ok else 'INCOMPLETE'}"
-          f" (filled={len(filled_recs)} rejected={n_rejected}"
+          f" (filled={summary[_T.K_FILLED]} rejected={n_rejected}"
           f" needs_data={n_needs} skipped={n_skipped}"
           f" blockers={len(blockers)})", file=sys.stderr)
     for f in fields:
-        if f["kind"] in ("rejected_by_form", "interaction_failed",
-                         "needs_data"):
+        if f["kind"] in (_T.REJECTED_BY_FORM, _T.INTERACTION_FAILED,
+                         _T.NEEDS_DATA):
             why = f"[{f['method']}:{f['reason']}]" if f["method"] else ""
             print(f"  {f['kind'].upper()} {f['label'][:50]} {why}",
                   file=sys.stderr)
@@ -358,8 +354,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
     def _abort_timed_out():
         if _expired():
-            emit_status("timed_out", "job_timeout_sec exceeded — aborting (resumable)")
-            state["status"] = "timed_out"
+            emit_status(_T.STATUS_TIMED_OUT, "job_timeout_sec exceeded — aborting (resumable)")
+            state["status"] = _T.STATUS_TIMED_OUT
             save_state(state)
             return True
         return False
@@ -377,7 +373,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
             if handle_captcha(page, state, wait_s=None if not deadline else max(0, int(deadline - time.time()))):
                 emit_status("captcha", "CAPTCHA still present after timeout")
-                state["status"] = "captcha_required"
+                state["status"] = _T.STATUS_CAPTCHA_REQUIRED
                 save_state(state)
                 return 1
 
@@ -497,18 +493,18 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         if _expired:
                             print(f"  WARN: no Apply link or Easy Apply — {_expired}",
                                   file=sys.stderr)
-                            state["status"] = "no_apply_path"
+                            state["status"] = _T.STATUS_NO_APPLY_PATH
                             state["status_detail"] = f"confirmed expired ({_expired[:40]})"
                             save_state(state)
-                            emit_status("no_apply_path", f"confirmed expired ({_expired[:40]})")
+                            emit_status(_T.STATUS_NO_APPLY_PATH, f"confirmed expired ({_expired[:40]})")
                             emit_next("none", "posting closed — skip")
                         else:
                             print("  WARN: no Apply link and no Easy Apply button — apply path not found",
                                   file=sys.stderr)
-                            state["status"] = "no_apply_path"
+                            state["status"] = _T.STATUS_NO_APPLY_PATH
                             state["status_detail"] = "unconfirmed — may be cookie/session"
                             save_state(state)
-                            emit_status("no_apply_path", "apply path not found (unconfirmed — may be cookie/session)")
+                            emit_status(_T.STATUS_NO_APPLY_PATH, "apply path not found (unconfirmed — may be cookie/session)")
                             emit_next("none", "verify manually or apply via external URL")
                         return 1
                     max_pages = max(max_pages, 6)
@@ -550,10 +546,10 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             _cwd = reg.widgets if reg and hasattr(reg, 'widgets') else None
             if not has_any_form(page, custom_widget_selectors=_cwd):
                 print("  WARN: no form, dialog, or iframe form found — job may be expired", file=sys.stderr)
-                state["status"] = "no_apply_path"
+                state["status"] = _T.STATUS_NO_APPLY_PATH
                 state["status_detail"] = "unconfirmed — no form on page"
                 save_state(state)
-                emit_status("no_apply_path", "no form or apply path found on page")
+                emit_status(_T.STATUS_NO_APPLY_PATH, "no form or apply path found on page")
                 emit_next("none", "job may be expired — skip or apply via external URL")
                 return 1
 
@@ -575,9 +571,9 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 from apply.common.capabilities import scan as _cap_scan
                 _login_profile = _cap_scan(page)
                 if _login_profile and _login_profile.get("two_factor_signals"):
-                    emit_status("2fa_required", "2FA interstitial after login — complete in Chrome then rerun")
+                    emit_status(_T.STATUS_2FA_REQUIRED, "2FA interstitial after login — complete in Chrome then rerun")
                     emit_next("login", f"jid={jid} — complete 2FA then rerun fill")
-                    state["status"] = "2fa_required"
+                    state["status"] = _T.STATUS_2FA_REQUIRED
                     save_state(state)
                     return 1
             except Exception:
@@ -744,10 +740,10 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         if _zero_form and not page_profile.get("dialog"):
                             print(f"  LOGIN_WALL: {', '.join(page_profile['login_signals'][:3])}",
                                   file=sys.stderr)
-                            emit_status("login_required",
+                            emit_status(_T.STATUS_LOGIN_REQUIRED,
                                         f"sign in at {_host(page.url) or page.url}")
                             emit_next("login", f"domain={_host(page.url)} jid={jid}")
-                            state["status"] = "login_required"
+                            state["status"] = _T.STATUS_LOGIN_REQUIRED
                             save_state(state)
                             return 1
 
@@ -798,7 +794,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                     _wait_for_fields(page, timeout=5)
                 if handle_captcha(page, state, wait_s=None if not deadline else max(0, int(deadline - time.time()))):
                     emit_status("captcha", "CAPTCHA during multi-page navigation")
-                    state["status"] = "captcha_required"
+                    state["status"] = _T.STATUS_CAPTCHA_REQUIRED
                     save_state(state)
                     return 1
                 handle_session_timeout(page)
@@ -932,7 +928,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
         pass
 
     if field_total == 0 and not skyvern_result:
-        emit_status("unknown", "no fields found by Playwright or Skyvern")
+        emit_status("unknown", "no fillable fields found (Playwright)")
         return 1
 
     msg = f"Playwright: {len(filled_all)} fields"
@@ -952,7 +948,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     elif submit_visible or filled_all:
         emit_next("check", "run 'apply act --check' to validate before submit")
     else:
-        emit_next("act --inspect", "no fillable fields and no Skyvern run")
+        emit_next("act --inspect", "no fillable fields found — inspect to confirm")
     return 0
 
 
@@ -980,7 +976,7 @@ def _handle_login_wall(page, jid, quick):
     """Detect login walls and auto-login or auto-create account.
 
     Returns a status string: "" to continue to form fill, or one of
-    "login_required" / "login_failed" / "2fa_required" to stop. The
+    _T.STATUS_LOGIN_REQUIRED / _T.STATUS_LOGIN_FAILED / _T.STATUS_2FA_REQUIRED to stop. The
     caller persists it into state so the orchestrator can classify
     the fill failure instead of treating it as a generic exception.
     """
@@ -1087,12 +1083,12 @@ def _handle_login_wall(page, jid, quick):
                             save_creds(domain, creds["email"], tried_pw, passwords=remaining)
                         except Exception:
                             pass
-                    emit_status("2fa_required",
+                    emit_status(_T.STATUS_2FA_REQUIRED,
                                 f"domain={domain} credentials accepted — "
                                 "complete 2FA manually then rerun")
                     emit_next("login",
                               f"domain={domain} jid={jid} — complete 2FA in Chrome then rerun fill")
-                    return "2fa_required"
+                    return _T.STATUS_2FA_REQUIRED
                 if result == "uncertain":
                     # SPA may be slow — wait longer and re-check once.
                     time.sleep(5)
@@ -1111,9 +1107,9 @@ def _handle_login_wall(page, jid, quick):
                 # result == "no" — try next candidate
                 _re_open_signin_form(page)
             print(f"  LOGIN: all {len(creds['passwords'])} password(s) failed", file=sys.stderr)
-            emit_status("login_failed", f"all {len(creds['passwords'])} password(s) rejected by {domain}")
+            emit_status(_T.STATUS_LOGIN_FAILED, f"all {len(creds['passwords'])} password(s) rejected by {domain}")
             emit_next("login", f"domain={domain} jid={jid} — update creds via 'apply.py creds set {domain} <email>'")
-            return "login_failed"
+            return _T.STATUS_LOGIN_FAILED
         except Exception as e:
             print(f"  LOGIN_FAIL: {e}", file=sys.stderr)
             return ""
@@ -1133,16 +1129,16 @@ def _handle_login_wall(page, jid, quick):
     defaults = get_account_defaults()
     if not defaults.get("email"):
         print(f"  LOGIN_REQUIRED: no creds for {domain}, no profile email", file=sys.stderr)
-        emit_status("login_required", f"create account at {domain}")
+        emit_status(_T.STATUS_LOGIN_REQUIRED, f"create account at {domain}")
         emit_next("login", f"domain={domain} jid={jid}")
-        return "login_required"
+        return _T.STATUS_LOGIN_REQUIRED
 
     pw_inputs = page.query_selector_all('input[type="password"]')
     if not pw_inputs:
         print(f"  LOGIN_REQUIRED: no creds for {domain}", file=sys.stderr)
-        emit_status("login_required", f"sign in or create account at {domain}")
+        emit_status(_T.STATUS_LOGIN_REQUIRED, f"sign in or create account at {domain}")
         emit_next("login", f"domain={domain} jid={jid}")
-        return "login_required"
+        return _T.STATUS_LOGIN_REQUIRED
 
     # Pick a password that satisfies platform complexity rules, preferring
     # the user's shared password pool entries when applicable so account
@@ -1221,11 +1217,11 @@ def _handle_login_wall(page, jid, quick):
                         return ""
                     if r == "2fa":
                         save_creds(domain, defaults["email"], pw)
-                        emit_status("2fa_required",
+                        emit_status(_T.STATUS_2FA_REQUIRED,
                                     f"domain={domain} credentials accepted — "
                                     "complete 2FA manually then rerun")
                         emit_next("login", f"domain={domain} jid={jid}")
-                        return "2fa_required"
+                        return _T.STATUS_2FA_REQUIRED
                     _re_open_signin_form(page)
                 print(f"  ACCOUNT_EXISTS: no known password works — create/reset manually", file=sys.stderr)
             print(f"  CREATE_FAIL: account creation rejected ({create_result})", file=sys.stderr)
@@ -1234,14 +1230,14 @@ def _handle_login_wall(page, jid, quick):
                     print(f"    ! {_e[:110]}", file=sys.stderr)
             except Exception:
                 pass
-            emit_status("login_required", f"account creation rejected at {domain}")
+            emit_status(_T.STATUS_LOGIN_REQUIRED, f"account creation rejected at {domain}")
             emit_next("login", f"domain={domain} jid={jid} — create account manually, then 'apply.py creds set {domain} {defaults.get('email','<email>')}'")
-            return "login_required"
+            return _T.STATUS_LOGIN_REQUIRED
     except Exception as e:
         print(f"  CREATE_FAIL: {e}", file=sys.stderr)
-    emit_status("login_required", f"account creation failed at {domain}")
+    emit_status(_T.STATUS_LOGIN_REQUIRED, f"account creation failed at {domain}")
     emit_next("login", f"domain={domain} jid={jid}")
-    return "login_required"
+    return _T.STATUS_LOGIN_REQUIRED
 
 
 def _check_account_created(page):

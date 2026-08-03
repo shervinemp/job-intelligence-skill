@@ -29,6 +29,7 @@ import sys
 import time
 
 from lib.config import JI_HOME
+from apply.common import terms as _T
 
 os.environ["JI_APPLY_MODE"] = "shadow"
 os.environ.setdefault("JI_CAPTCHA_TIMEOUT", "60")
@@ -347,7 +348,7 @@ def run(jids=None, limit=None, quick=False, recheck=False):
             break
         rec = {"jid": jid, "title": (job.get("title") or "?")[:50],
                "company": (job.get("company") or "?")[:25],
-               "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
+               "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
         t0 = time.time()
         print(f"\n=== [{processed + 1}] {jid[:12]} {rec['title']} @ {rec['company']} ===",
               file=sys.stderr)
@@ -361,12 +362,12 @@ def run(jids=None, limit=None, quick=False, recheck=False):
             crashed = False
         else:
             parsed = _parse_worker(out)
-            crashed = rc != 0 or not parsed.get("outcome") or parsed.get("outcome") == "error"
+            crashed = rc != 0 or not parsed.get("outcome") or parsed.get("outcome") == _T.OUTCOME_ERROR
 
         if crashed and rc == 0:
             # Worker reported an error outcome (job not found etc.) — not
             # a crash, but nothing to classify either.
-            rec["outcome"] = "error"
+            rec["outcome"] = _T.OUTCOME_ERROR
             rec["detail"] = parsed.get("detail", "?")
             rec["secs"] = round(time.time() - t0)
             rec["shadow"] = True
@@ -382,7 +383,7 @@ def run(jids=None, limit=None, quick=False, recheck=False):
         if timed_out:
             # Slow job, not a crash — record the timeout as-is; a
             # re-probe would just burn another budget on the same job.
-            rec["outcome"] = "timeout"
+            rec["outcome"] = _T.OUTCOME_TIMEOUT
             rec["detail"] = f"killed after {JOB_TIMEOUT}s"
             rec["transcript"] = tlog
             rec["exit_code"] = rc
@@ -404,7 +405,7 @@ def run(jids=None, limit=None, quick=False, recheck=False):
             print("  CRASH — re-probing once...", file=sys.stderr)
             rc2, tlog2, out2, timed_out2 = _run_worker(jid, quick=quick)
             parsed2 = _parse_worker(out2)
-            if rc2 == 0 and parsed2.get("outcome") and parsed2.get("outcome") != "error":
+            if rc2 == 0 and parsed2.get("outcome") and parsed2.get("outcome") != _T.OUTCOME_ERROR:
                 rec.update(parsed2)
                 rec["after_crash"] = True
                 rec["first_attempt"] = {
@@ -412,7 +413,7 @@ def run(jids=None, limit=None, quick=False, recheck=False):
                     "tail": "\n".join(out.splitlines()[-6:])[:400],
                 }
             else:
-                rec["outcome"] = "timeout" if timed_out2 else "crash"
+                rec["outcome"] = _T.OUTCOME_TIMEOUT if timed_out2 else _T.OUTCOME_CRASH
                 rec["detail"] = parsed.get("detail", "no OUTCOME emitted")
                 rec["exit_code"] = rc
                 rec["transcript"] = tlog2
@@ -421,7 +422,7 @@ def run(jids=None, limit=None, quick=False, recheck=False):
             rec.update(parsed)
 
         if not rec.get("outcome"):
-            rec["outcome"] = "crash"
+            rec["outcome"] = _T.OUTCOME_CRASH
             rec["detail"] = "no OUTCOME emitted"
             rec["exit_code"] = rc
             rec["transcript"] = tlog
@@ -429,7 +430,7 @@ def run(jids=None, limit=None, quick=False, recheck=False):
         # Cause-tagging: an unconfirmed no-apply-path skip is a LIVE
         # question (cookie/session variance), not a dead posting — it
         # must be re-examined, never silently forgotten.
-        if rec.get("outcome") == "skipped" and "unconfirmed" in (rec.get("detail") or ""):
+        if rec.get("outcome") == _T.OUTCOME_SKIPPED and "unconfirmed" in (rec.get("detail") or ""):
             rec["unconfirmed"] = True
             rec["recheck"] = True
 
@@ -444,7 +445,7 @@ def run(jids=None, limit=None, quick=False, recheck=False):
         print(f"    -> {rec['outcome']} {rec.get('detail', '')} ({rec['secs']}s)",
               file=sys.stderr)
         processed += 1
-        if rec["outcome"] in ("crash", "timeout"):
+        if rec["outcome"] in (_T.OUTCOME_CRASH, _T.OUTCOME_TIMEOUT):
             consec_fails += 1
         else:
             consec_fails = 0
