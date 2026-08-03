@@ -14,21 +14,28 @@ between a field and its value. Determinism buys: reproducibility, testability,
 cost, and — critically — verifiability: a fill is verified by *re-reading the
 form with the same scorer that picked the value*, mechanically.
 
-**Layer 2 — ask_api = selective escape hatch, never default.** The local LLM is
-invoked only where code is demonstrably blind:
+**Layer 2 — ask_api = selective escape hatch, never default.** The served
+local model is the WEAK model; the ORCHESTRATOR is the STRONG model.
+Routing hierarchy — deterministic core first; the ORCHESTRATOR is the
+semantic fallback of choice (no_match / no_option_match fields surface
+with full evidence — candidates, top_options — in dossiers, and the
+orchestrator answers them post-hoc via --answers, then re-fills); the
+served local model is reserved for where the orchestrator PHYSICALLY
+cannot act (vision — it has no page access) or live-page interactions
+that cannot wait; the user is the final authority.
 
 | kind | default | when |
 |---|---|---|
-| `vision` | on | image processing — code cannot read pixels |
-| `option_pick` | on | last resort, only after deterministic `no_option_match` |
-| `gap_fill` | on | only after the resolver declares `no_match` |
+| `vision` | on | image processing — the orchestrator cannot see the page |
+| `option_pick` | off | the orchestrator decides from `top_options` evidence |
+| `gap_fill` | off | the orchestrator decides from dossier evidence |
 | `batch_verify` | off | LLM re-reviewing ALL fields lowers accuracy |
-| `verify_reads` | off | same reasoning |
-| `auto_retry` | off | the pipeline never LLM-retries — failures surface as evidence |
+| `verify_reads` | off | deterministic re-read + check is the verifier |
+| `auto_retry` | off | failures surface as evidence, never hidden |
 
 `JI_LLM_MODE=off | auto | on`. Every LLM output must pass the *same*
-deterministic validator as every other fill — the escape hatch never bypasses
-the code's truth.
+deterministic validator as every other fill — the escape hatch never
+bypasses the code's truth.
 
 **Layer 3 — Orchestrator (LLM-in-the-middle) = the operator.** The pipeline is
 *designed to be operated by* an overarching orchestrator LLM, not to run

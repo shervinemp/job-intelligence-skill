@@ -23,13 +23,14 @@ class LLMStatus(unittest.TestCase):
 
     def test_api_down_recorded(self):
         from lib.automation.llm import pick_option, last_status
-        with patch("lib.ask_api.available", return_value=False):
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), patch("lib.ask_api.available", return_value=False):
             self.assertIsNone(pick_option([{"text": "Canada"}], "C", "Canada"))
         self.assertEqual(last_status()["state"], "api_down")
 
     def test_used_recorded(self):
         from lib.automation.llm import pick_option, last_status
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
+             patch("lib.ask_api.available", return_value=True), \
              patch("lib.ask_api.ask_text", return_value=("0", None)):
             pick = pick_option([{"text": "Canada"}], "C", "Canada")
         self.assertEqual(pick["text"], "Canada")
@@ -42,7 +43,8 @@ class GapFillFailClosed(unittest.TestCase):
 
     def _run(self, gap_map, fields, profile):
         from apply.act.helpers import _gap_fill_into_answers
-        with patch("apply.act.suggest.llm_field_key_mapping",
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
+             patch("apply.act.suggest.llm_field_key_mapping",
                    return_value=gap_map), \
              patch("lib.db.get_job", return_value={}):
             return _gap_fill_into_answers(fields, profile, {}, "j", None)

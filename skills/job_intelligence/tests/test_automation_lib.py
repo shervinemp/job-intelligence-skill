@@ -42,13 +42,13 @@ class LLMPick(unittest.TestCase):
     def test_picks_index(self):
         from lib.automation.llm import pick_option
         opts = [{"text": "A"}, {"text": "B"}]
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), patch("lib.ask_api.available", return_value=True), \
              patch("lib.ask_api.ask_text", return_value=("1", None)):
             self.assertEqual(pick_option(opts, "Q?", "ans")["text"], "B")
 
     def test_none_reply(self):
         from lib.automation.llm import pick_option
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), patch("lib.ask_api.available", return_value=True), \
              patch("lib.ask_api.ask_text", return_value=("NONE", None)):
             self.assertIsNone(pick_option([{"text": "A"}], "Q", "A"))
 
@@ -59,7 +59,7 @@ class LLMPick(unittest.TestCase):
 
     def test_out_of_range_index(self):
         from lib.automation.llm import pick_option
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), patch("lib.ask_api.available", return_value=True), \
              patch("lib.ask_api.ask_text", return_value=("9", None)):
             self.assertIsNone(pick_option([{"text": "A"}], "Q", "A"))
 
@@ -194,9 +194,9 @@ class LLMPolicyTest(unittest.TestCase):
     def test_default_auto(self):
         from lib.automation.llm import allow
         with self._set(None):
-            self.assertEqual(allow("vision"), True)          # image processing
-            self.assertEqual(allow("option_pick"), True)     # last-resort escape
-            self.assertEqual(allow("gap_fill"), True)        # code-exhausted
+            self.assertEqual(allow("vision"), True)          # orchestrator can't see
+            self.assertEqual(allow("option_pick"), False)    # orchestrator decides
+            self.assertEqual(allow("gap_fill"), False)       # orchestrator decides
             self.assertEqual(allow("batch_verify"), False)   # LLM re-reviews ALL
             self.assertEqual(allow("verify_reads"), False)   # LLM verifies ALL
             self.assertEqual(allow("auto_retry"), False)     # pipeline never LLM-retries

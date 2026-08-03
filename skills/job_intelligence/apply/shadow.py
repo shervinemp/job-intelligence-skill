@@ -311,15 +311,14 @@ def run(jids=None, limit=None, quick=False, recheck=False):
     _llmhdr = _probe_llm_availability()
     _api = "up" if _llmhdr.get("api_available") else "DOWN"
     print(f"LLM: mode={_llmhdr.get('mode')} api={_api} — "
-          f"escape hatches: vision={_llmhdr['auto_defaults'].get('vision')} "
-          f"option_pick={_llmhdr['auto_defaults'].get('option_pick')} "
-          f"gap_fill={_llmhdr['auto_defaults'].get('gap_fill')} "
-          f"(batch_verify/verify_reads/auto_retry off by default)",
+          f"local model reserved for vision (orchestrator handles "
+          f"semantic fallbacks via the evidence loop; vision="
+          f"{_llmhdr['auto_defaults'].get('vision')})",
           file=sys.stderr)
     if not _llmhdr.get("api_available"):
-        print("  NOTE: ask_api unavailable — escape-hatch fields will be "
-              "recorded as unassisted; orchestrator review required.",
-              file=sys.stderr)
+        print("  NOTE: ask_api unavailable — vision reads closed; "
+              "no_match/no_option_match fields surface for the "
+              "orchestrator instead.", file=sys.stderr)
     # Profile readiness gate: the fleet fails identically on missing
     # work_history/contact — surface it BEFORE burning browser time.
     try:

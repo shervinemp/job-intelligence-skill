@@ -8,47 +8,40 @@ Two responsibilities:
    thresholds. The CALLER decides how to verify the choice (mechanical
    identity is recommended).
 
-2. policy — the contract for WHEN ask_api may be invoked at all.
-   Architecture: the deterministic code core (resolve → validate →
-   fill → re-read verify → check) is the SOURCE OF TRUTH. ask_api is a
-   SELECTIVE escape hatch, never a default reviewer of that core:
+2. policy — the contract for WHEN ask_api (the served local model) may
+   be invoked at all. ROUTING HIERARCHY: the served local model is the
+   WEAK model; the orchestrator — the LLM-in-the-middle — is the STRONG
+   model and the intended operator of the whole pipeline:
 
-     vision        — ALWAYS ok (image processing; deterministic code
-                     cannot read pixels)
-     option_pick   — ok, but ONLY as last resort after the deterministic
-                     matcher found nothing (no_option_match)
-     gap_fill      — ok, but ONLY for fields the deterministic resolver
-                     declared no_match (code exhausted its vocabulary)
-     batch_verify  — OFF by default: an LLM re-reviewing ALL field→value
-                     pairs lowers accuracy vs the deterministic
-                     validation + re-read + check arbitration
-     verify_reads  — OFF by default: same reasoning — deterministic
-                     re-read verification + check.py + the orchestrator
-                     (human/agent review of dossiers) is the verifier
-     auto_retry    — OFF by default: the PIPELINE never auto-retries
-                     with LLM-mapped answers — that hides evidence and
-                     guesses in the hot path. Failures surface in the
-                     evidence trail; the ORCHESTRATOR retries from
-                     reviewed evidence (--answers), not the pipeline.
+     1. deterministic core (resolve → validate → fill → re-read verify
+        → check) — source of truth, always first;
+     2. ORCHESTRATOR — the semantic fallback of choice: no_match /
+        no_option_match fields surface with FULL evidence (candidates,
+        top_options, selection_readback) in dossiers, and the
+        orchestrator answers them post-hoc via --answers, then re-fills.
+        Stronger model; no per-field latency in the hot path;
+     3. served local model (ask_api) — ONLY where the orchestrator
+        physically cannot act: vision / image processing (the
+        orchestrator has no page access), or a live-page interaction
+        that cannot wait for the orchestrator round-trip;
+     4. user handover — identity/legal/life decisions.
 
-   The orchestrator — the LLM-in-the-middle operating OUTSIDE the hot
-   path — is the verifier and debugger: it consumes the evidence trail
-   (dossiers, _diag dicts, session events, audit logs) and arbitrates,
-   not an in-pipeline LLM call.
-
-   Override: JI_LLM_MODE=off (never call ask_api), auto (above),
-   on (allow everything — experimental).
+   So in auto mode: vision = ON; option_pick and gap_fill = OFF — the
+   orchestrator's evidence loop replaces them (the weak model's guess is
+   worse than the strong model's review of the same evidence).
+   JI_LLM_MODE=on forces the local-model escapes (experiments only);
+   off disables everything.
 """
 import os
 import re
 
 _KIND_AUTO = {
-    "vision": True,
-    "option_pick": True,
-    "gap_fill": True,
-    "batch_verify": False,
-    "verify_reads": False,
-    "auto_retry": False,
+    "vision": True,          # orchestrator cannot see the page
+    "option_pick": False,    # orchestrator decides from top_options evidence
+    "gap_fill": False,       # orchestrator decides from dossier evidence
+    "batch_verify": False,   # LLM re-reviewing ALL fields lowers accuracy
+    "verify_reads": False,   # deterministic re-read + check is the verifier
+    "auto_retry": False,     # failures surface as evidence, never hidden
 }
 
 

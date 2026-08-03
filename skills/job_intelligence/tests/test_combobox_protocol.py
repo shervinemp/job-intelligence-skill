@@ -240,7 +240,8 @@ class LLMFallback(unittest.TestCase):
         page = MagicMock()
         opts = [{"text": "Option A", "id": "a", "x": 1, "y": 1},
                 {"text": "Option B", "id": "b", "x": 2, "y": 2}]
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
+             patch("lib.ask_api.available", return_value=True), \
              patch("lib.ask_api.ask_text", return_value=("1", None)):
             picked = _llm_pick(page, "#q", opts, "Question?", "Some answer")
         self.assertEqual(picked["text"], "Option B")
@@ -249,13 +250,15 @@ class LLMFallback(unittest.TestCase):
         from apply.strategies.combobox import _llm_pick
         page = MagicMock()
         opts = [{"text": "Option A", "id": "a", "x": 1, "y": 1}]
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
+             patch("lib.ask_api.available", return_value=True), \
              patch("lib.ask_api.ask_text", return_value=("NONE", None)):
             self.assertIsNone(_llm_pick(page, "#q", opts, "Q", "A"))
 
     def test_llm_pick_unavailable_returns_none(self):
         from apply.strategies.combobox import _llm_pick
-        with patch("lib.ask_api.available", return_value=False):
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
+             patch("lib.ask_api.available", return_value=False):
             self.assertIsNone(_llm_pick(MagicMock(), "#q", [{"text": "A"}], "Q", "A"))
 
     def test_fill_uses_llm_when_deterministic_fails(self):
@@ -270,7 +273,8 @@ class LLMFallback(unittest.TestCase):
         page = FakePage(typed_options=[], menu_options=placeholder,
                         unfiltered_options=options, collect_budget=3)
         field = self._field()
-        with patch("lib.ask_api.available", return_value=True), \
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
+             patch("lib.ask_api.available", return_value=True), \
              patch("lib.ask_api.ask_text", return_value=("0", None)), \
              patch("apply.common.value_reader.AriaComboboxReader") as ac, \
              patch("apply.common.value_reader.ReactSelectReader") as rs, \
@@ -291,7 +295,8 @@ class LLMFallback(unittest.TestCase):
                                              "id": "r1", "x": 1, "y": 1}],
                         collect_budget=3)
         field = self._field()
-        with patch("lib.ask_api.available", return_value=False):
+        with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
+             patch("lib.ask_api.available", return_value=False):
             self.assertFalse(fill(page, field, "Currently open to relocation"))
         self.assertEqual(field["_diag"]["reason"], "no_option_match")
         self.assertTrue(field["_diag"]["llm_tried"])

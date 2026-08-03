@@ -107,10 +107,10 @@ def preflight(profile=None, known_labels=None):
             if resolve(lbl, profile, ephemeral=ephemeral).value is not None)
         coverage_pct = round(100 * resolvable / len(known_labels))
 
-    # Adaptability verdict: the OOD escape hatches (vision, LLM option
-    # picking) only exist when ask_api is up. When it's down, unknown
-    # widgets and ambiguous options hand over instead of resolving —
-    # the batch should know its reduced capability up front.
+    # Adaptability verdict: the served local model is used ONLY for
+    # vision (the orchestrator cannot see the page) — semantic fallbacks
+    # go to the ORCHESTRATOR via the evidence loop regardless. So
+    # api_down reduces capability to vision-only, nothing else.
     adaptability = "full"
     _ad_detail = ""
     try:
@@ -119,12 +119,14 @@ def preflight(profile=None, known_labels=None):
         m = _mode()
         if m == "off":
             adaptability = "reduced"
-            _ad_detail = "JI_LLM_MODE=off — escape hatches disabled"
+            _ad_detail = "JI_LLM_MODE=off — vision escape hatch disabled"
         else:
             try:
                 if not _avail():
                     adaptability = "reduced"
-                    _ad_detail = "ask_api unavailable — vision/option escape hatches closed"
+                    _ad_detail = ("ask_api unavailable — vision reads closed "
+                                  "(semantic fallbacks still go to the "
+                                  "orchestrator)")
             except Exception:
                 adaptability = "reduced"
                 _ad_detail = "ask_api probe failed"
