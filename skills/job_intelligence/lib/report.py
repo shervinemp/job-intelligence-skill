@@ -537,6 +537,34 @@ _HANDOVER_KW = (
     "relocat", "commute", "military", "sexual orientation", "citizenship",
 )
 
+_profile_cache = {}
+_ephemeral_cache = {}
+
+
+def _profile_has_answer(label):
+    """Does the canonical profile resolve an answer for this label?
+    Shared by the owner-split and the handovers surface — the ground
+    truth that keeps personal questions out of the data bucket."""
+    try:
+        from apply.common import resolve as _resolve_mod
+        from apply.act.helpers import _load_profile
+        if not _profile_cache:
+            try:
+                _profile_cache["p"] = _load_profile()
+            except Exception:
+                _profile_cache["p"] = {}
+        if not _ephemeral_cache:
+            try:
+                _ephemeral_cache["e"] = _resolve_mod._build_ephemeral(
+                    _profile_cache["p"])
+            except Exception:
+                _ephemeral_cache["e"] = {}
+        r = _resolve_mod.resolve(label or "", _profile_cache["p"],
+                                 ephemeral=_ephemeral_cache["e"])
+        return r.value is not None
+    except Exception:
+        return False
+
 
 def cmd_shadow_classify():
     """Orchestrator verification view: outcome counts, crash/timeout
@@ -617,26 +645,8 @@ def cmd_shadow_classify():
     # A personal keyword is only a handover when no answer exists — a
     # relocation question the profile already answers is DATA/code, not
     # a user decision.
-    profile = {}
-    ephemeral = {}
-    try:
-        from apply.common import resolve as _resolve_mod
-        from apply.act.helpers import _load_profile
-        try:
-            profile = _load_profile()
-        except Exception:
-            profile = {}
-        ephemeral = _resolve_mod._build_ephemeral(profile)
-    except Exception:
-        pass
-
     def _has_answer(label):
-        try:
-            from apply.common import resolve as _resolve_mod
-            r = _resolve_mod.resolve(label or "", profile, ephemeral=ephemeral)
-            return r.value is not None
-        except Exception:
-            return False
+        return _profile_has_answer(label)
 
     print("== OWNER SPLIT (stopped jobs) ==")
     owners = {"code": [], "data": [], "handover": [], "unknown": []}
@@ -951,6 +961,55 @@ def cmd_fleet():
           "| apply.py preflight")
 
 
+def cmd_handovers():
+    """The pending-USER-DECISIONS surface. Every personal question across
+    all dossiers, with the exact label, the dossier link, and a
+    recommended answer when the profile can derive one. This is how the
+    orchestrator asks WELL: one command, complete list, cheap to answer.
+    """
+    import glob as _glob
+    import os as _os
+    from collections import Counter
+    questions = []
+    for hf in _glob.glob(_os.path.join(RESULTS_DIR, "*", "handoff.json")):
+        jid = _os.path.basename(_os.path.dirname(hf))
+        try:
+            doc = json.load(open(hf, encoding="utf-8"))
+        except Exception:
+            continue
+        for f in doc.get("fields", []):
+            lbl = f.get("label") or ""
+            if f.get("kind") not in (_T.NEEDS_DATA, _T.REJECTED_BY_FORM):
+                continue
+            if not any(kw in lbl.lower() for kw in _HANDOVER_KW):
+                continue
+            if _profile_has_answer(lbl):
+                continue  # the profile answers it — data/code, not user
+            questions.append({"jid": jid, "label": lbl,
+                              "kind": f.get("kind"), "hf": hf})
+    if not questions:
+        print("HANDOVERS: none pending — the user has no open decisions.",
+              file=sys.stderr)
+        return
+    by_q = Counter(q["label"] for q in questions)
+    print(f"HANDOVERS: {len(questions)} question(s) across "
+          f"{len(set(q['jid'] for q in questions))} job(s)", file=sys.stderr)
+    print(file=sys.stderr)
+    for q in sorted(set(q["label"] for q in questions)):
+        jids = [x["jid"] for x in questions if x["label"] == q]
+        kinds = {x["kind"] for x in questions if x["label"] == q}
+        print(f"  [{by_q[q]}x] {q[:90]}", file=sys.stderr)
+        print(f"      kinds={','.join(sorted(kinds))} "
+              f"jobs={', '.join(j[:10] for j in jids[:5])}"
+              + (" ..." if len(jids) > 5 else ""), file=sys.stderr)
+        print(f"      review: python3 report.py handoff {jids[0][:12]}",
+              file=sys.stderr)
+    print(file=sys.stderr)
+    print("  ANSWER: apply act --fill <jid> --answers "
+          "'{\"<label>\": \"<value>\"}'  (profile gains the value)",
+          file=sys.stderr)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -1046,6 +1105,8 @@ def main():
         for term, meaning, note in glossary():
             print(f"  {term:22s} {meaning}")
             print(f"      {note}")
+    elif cmd == "handovers":
+        cmd_handovers()
     elif cmd == "archive":
         cmd_archive()
     else:
