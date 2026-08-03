@@ -36,13 +36,20 @@ After ANY hot-path change (fill/check/submit/resolve/shadow/terms):
 3. One live shadow job (regression canary compares vs its previous run) —
    e.g. `apply.py shadow --jid <lyft>` after removing it from the log.
 4. `report.py shadow --classify` — verify the outcome landed as expected.
-5. `python scripts/port.py` — the ONLY supported workspace→repo sync:
-   lint gate → workspace suite → manifest copy (hash-verified) → nested-dir
-   guard → repo suite. It refuses on any failure.
-6. Commit + push from the repo.
+5. MANUAL sync — never scripted blindly:
+   a. Review the change set in the workspace (git diff / file inventory).
+   b. Check the repo side: has IT changed since the last sync? If yes,
+      STOP — reconcile direction first. Never let a one-way copy decide.
+   c. Copy only the intended files, deliberately.
+   d. Verify BOTH directions with a symmetric two-way diff: every file in
+      the workspace must equal its counterpart in the repo, no orphans on
+      either side. Differences after the copy = a mistake, not a sync.
+6. Repo suite: `python -m pytest skills/job_intelligence/tests -q` (from the repo root). Must PASS.
+7. Commit + push from the repo.
 
-The port manifest lives in `scripts/port.py` — add new owned files there.
 Never Copy-Item a directory by hand (the apply/apply nesting lesson).
+A sync tool that cannot detect direction is poison: hash equality is not
+proof of intent.
 
 ## Commands
 

@@ -136,7 +136,7 @@ The orchestrator's day is a fixed loop — never improvised:
 6. **Verify** — re-run the touched jobs; the regression canary arbitrates.
 7. **Close classes permanently** — `report.py fleet` rule-candidates and
    `report.py widgets` become resolver rules and widget handlers.
-8. **Port** (`scripts/port.py`) — lint → suite → copy → repo suite → push.
+8. **Sync manually** - review the change set on BOTH sides first; a one-way copy that cannot detect direction is poison (it would silently overwrite repo-side work). Copy only intended files, then verify with a symmetric two-way diff (every file equal, no orphans either side). Repo suite, commit, push.
 
 ## 8. The self-check commitment
 
@@ -144,11 +144,11 @@ The orchestrator's verdicts and completion claims are only as good as the
 gates they pass. **No claim without a gate:**
 
 - every change runs `scripts/lint.py` (vocabulary literals, dead strings,
-  nested dirs, compile) → full suite → a live shadow job → port.py (hash-
-  verified copy + repo suite);
+  nested dirs, compile) -> full suite -> a live shadow job -> manual sync with a symmetric two-way diff (every file equal, no orphans either side). Repo suite, commit, push.
 - verdicts cite evidence (`_diag` facts, dossier fields) — anti-sycophancy:
   never confirm a conclusion because it was expected;
-- "fully wired" means the mechanical checks prove it, not the narrative.
+- "fully wired" means the mechanical checks prove it, not the narrative;
+- a sync tool that only copies one way is NOT a gate - hash equality is not proof of intent.
 
 The failure mode this guards against is the orchestrator's own
 self-verification blindness: the gates are the instruments, the same way the
