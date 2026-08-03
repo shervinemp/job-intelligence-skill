@@ -1,0 +1,152 @@
+# ETHOS — The Operating Contract
+
+> The entire value of this pipeline is **trust**: you must be able to act on an
+> outcome without auditing how it was made. Every design decision below serves
+> that: code where precision matters, a local LLM only where code is blind, and
+> an orchestrator LLM-in-the-middle as the operator, verifier and debugger —
+> grounded in a mechanically produced evidence trail.
+
+## 1. The three-layer trust model
+
+**Layer 1 — Deterministic core = source of truth.** Everything in the hot path
+(resolve → validate → fill → re-read verify → check) is code. No LLM sits
+between a field and its value. Determinism buys: reproducibility, testability,
+cost, and — critically — verifiability: a fill is verified by *re-reading the
+form with the same scorer that picked the value*, mechanically.
+
+**Layer 2 — ask_api = selective escape hatch, never default.** The local LLM is
+invoked only where code is demonstrably blind:
+
+| kind | default | when |
+|---|---|---|
+| `vision` | on | image processing — code cannot read pixels |
+| `option_pick` | on | last resort, only after deterministic `no_option_match` |
+| `gap_fill` | on | only after the resolver declares `no_match` |
+| `batch_verify` | off | LLM re-reviewing ALL fields lowers accuracy |
+| `verify_reads` | off | same reasoning |
+| `auto_retry` | off | the pipeline never LLM-retries — failures surface as evidence |
+
+`JI_LLM_MODE=off | auto | on`. Every LLM output must pass the *same*
+deterministic validator as every other fill — the escape hatch never bypasses
+the code's truth.
+
+**Layer 3 — Orchestrator (LLM-in-the-middle) = the operator.** The pipeline is
+*designed to be operated by* an overarching orchestrator LLM, not to run
+unattended. The orchestrator runs batches, classifies outcomes, fixes failure
+classes (code bug / data gap), arbitrates with evidence, and routes only
+personal decisions to the user. The evidence trail is the orchestrator's
+working memory; `report.py` commands are its toolset; the shadow run is its
+test harness (run → classify → fix → re-run → diff).
+
+## 2. Why — the foundation in LLM architecture
+
+LLM weaknesses are **architectural**, not bugs that prompting or tuning can fix:
+
+| root cause | induced weaknesses |
+|---|---|
+| training objective is plausibility, not truth | confabulation, poor calibration, non-reproducibility |
+| parameters are lossy corpus compression | confidence without knowledge, out-of-distribution failure, cutoff |
+| learned structure is co-occurrence, not causation | competence cliffs, compounding multi-step errors |
+| no state, only context | context fragility, self-contradiction, blindness to the world |
+| data and instructions are undifferentiated tokens | prompt injection, prompt sensitivity, sycophancy |
+
+Implication: these can only be **compensated externally**. This design *is*
+that compensation — determinism where exactness matters, mechanical
+verification where self-check fails, sanitized inputs where injection lives,
+external memory (files, dossiers, summaries) where recall fails, and the
+evidence trail as the checksum on every judgment.
+
+## 3. The handoff seams
+
+Each seam sits exactly where the *nature of the decision* changes:
+
+1. **Hot path → evidence.** Every fill ends in a dossier: `kind`
+   (`verified / unverified / needs_data / rejected_by_form / interaction_failed`),
+   `_diag` evidence, counts that sum. Truth is written at the moment of action —
+   the page state won't exist later. The hot path never blocks on judgment.
+2. **Evidence → orchestrator.** Failure-classification needs batch context
+   ("has this platform ever worked?") which cannot live in a field decision.
+   The owner-split (code / data / handover) is argued from *profile truth*
+   (`_has_answer`), not keywords alone.
+3. **Orchestrator → user.** Identity/legal/life decisions (sponsorship, essays,
+   EEOC, preferred name) and live-send consent. Any automation would be a
+   guess, and a wrong guess is the most expensive failure mode. Handovers are a
+   precious resource — the funnel routes to the user only what is not
+   answerable (121 jobs → 47 ready → 4 user-decides).
+
+## 4. Operating principles
+
+- **Honest outcomes, no silent lies.** Verified vs unverified is an epistemic
+  state, not a mechanism. Counts are mutually exclusive and sum to the field
+  total. `confirmed expired` vs `unconfirmed (cookie/session variance)`.
+  `login_required` is never a fake success.
+- **Evidence over guessing.** Investigate before retrying. Silent deaths become
+  tracebacks (faulthandler, subprocess isolation, outcome files). One job can
+  never kill a batch.
+- **One-shot semantics.** Submit and send are single-shot, flagged, never
+  re-clicked. Uncertain outcome → investigate and report; never resend.
+- **Ask when in doubt.** Profile/common-answers data before deciding; if the
+  data doesn't cover it, ask — never assume.
+- **Robustness by construction.** Subprocess workers, per-job wall-clock
+  budgets, consecutive-failure aborts, atomic outcome files, resumable logs.
+
+## 5. The honest ledger — known gaps (2026-08-03)
+
+The hot path is well compensated; **the open flank is judgment surfaces**:
+
+1. **Gap-fill validation bypass** — mappings whose label doesn't match a known
+   field skip the validator and are accepted. Fix: unmatched labels must be
+   dropped, never silently trusted.
+2. **Tailor factual-grounding gate** — tailored output must be traceable to
+   resume.json + the posting (rephrase-only, never invent). Highest stakes in
+   the system; currently unverified.
+3. **Pre-flight profile gate** — fleet runs proceed with an incomplete profile
+   (`work_history` missing) and fail identically on every "Current Company".
+   Profile completeness must gate the batch.
+4. **Learned-mapping hygiene** — `field_mappings.json` persists a single
+   confirmed fill with no threshold, expiry, or review; one wrong-but-verified
+   mapping poisons a label deterministically, forever. Needs confidence,
+   expiry, review queue.
+5. **Canary enforcement** — the regression canary prints but doesn't act.
+   A regression must gate/quarantine the affected outcome.
+6. **Instrumentation** — `llm_status: policy_off / api_down / declined / used`
+   is missing; vision unavailability is invisible to the operator.
+7. **Cross-field coherence** — check.py validates per field; application-level
+   contradictions (sponsorship=Yes + visa=citizen) go undetected.
+8. **Corpus snapshots** — browser-level fixes ship without captured-DOM
+   regression tests (`mock_page`/`corpus` exist for exactly this).
+9. **Unconfirmed-skip follow-up** — honest labels with no action are a quieter
+   version of a lie; unconfirmed skips need a re-examination mechanism.
+10. **Fleet accuracy report** — per-platform field success/wrong-fill rates
+    don't exist yet; the ethos is only falsifiable with metrics.
+
+## 6. Metrics we steer by
+
+- **Wrong-fill rate** (per field class, per platform) — the falsification
+  instrument for the ethos itself; the orchestrator's calibration feedback.
+- **Batch survivability** — zero silent deaths; every crash becomes evidence.
+- **Orchestrator cycle cost** — iterations (fix → re-run → diff) per failure
+  class; evidence must be actionable at a glance, in finite context.
+- **Handover precision** — false handovers minimized via profile truth, not
+  keyword heuristics.
+
+## 7. Guardrails for the orchestrator (me)
+
+The orchestrator is an LLM with the same weaknesses; the guardrails exist to
+constrain it:
+
+- **Hold-mode by default**; live submits and sends only with explicit user
+  consent.
+- **Verdicts cite evidence** (`_diag` facts, dossier fields) — anti-sycophancy:
+  never confirm a conclusion because it was expected.
+- **Memory: files over recall.** Anchored summaries are lossy compression;
+  treat them as such and re-verify from files.
+- **Red lines** (AGENTS.md): no data exfiltration, no destructive commands,
+  ask before anything leaves the machine.
+- **The evidence trail is the checksum on every judgment** — including mine.
+
+## 8. This document
+
+A living contract. Amendments are improvements to trust, never license for
+shortcuts. When in doubt between two designs, choose the one that makes the
+next failure easier to see.
