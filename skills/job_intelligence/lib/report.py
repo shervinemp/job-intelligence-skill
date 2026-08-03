@@ -1,7 +1,13 @@
-"""lib/report.py — CLI for DB inspection, export, and pipeline management.
+"""lib/report.py — the evidence surface: one command per question.
+
+The grouped surface (see `report.py help`):
+  DECISIONS:  handovers [USER|ORCHESTRATOR|DATA|REVIEW]
+  EVIDENCE:   handoff / audit / diff / observe / session / inspect <jid>
+  FLEET:      shadow [--classify] / fleet / widgets / candidates
+  READINESS:  profile / glossary
+  GENERAL:    stats / summary / search / export / events / archive
 
 Usage:
-  python3 report.py shell                     Open SQLite shell
   python3 report.py stats                     Pipeline statistics
   python3 report.py candidates [--limit N]    Tailored jobs ready to apply (with guard flags)
   python3 report.py inspect <jid>             Full job details
@@ -9,11 +15,7 @@ Usage:
   python3 report.py export json [--stage S]   Export jobs as JSON
   python3 report.py export csv [--stage S]    Export jobs as CSV
   python3 report.py summary [--days N]        Recent activity digest
-  python3 report.py companies [query]         List/search companies
   python3 report.py events [--upcoming]       List events
-  python3 report.py contacts <jid>            Contacts for a job
-  python3 report.py connections [company]     My connections grouped by company
-  python3 report.py outreach [--limit N]      Outreach attempts + pending contacts
   python3 report.py archive                   Archive state/registry entries for reset jobs
 """
 
@@ -27,16 +29,12 @@ import sys
 from datetime import datetime, timedelta
 
 from .db import (
-    DB_PATH, get_conn,
+    get_conn,
     load_state, get_job, search_jobs, job_count_by_stage,
-    company_search, event_list, contact_list,
+    event_list,
     desc_get, app_list, app_get,
 )
 from .config import STATE_PATH, REGISTRY_PATH, RESULTS_DIR, atomic_write_json
-
-
-def cmd_shell():
-    subprocess.run(["sqlite3", DB_PATH])
 
 
 def cmd_stats():
@@ -297,25 +295,6 @@ def _clean(s):
     return re.sub(r'[\u200b\u200c\u200d\ufffe\ufeff]', '', s).strip()
 
 
-def cmd_companies(query=None):
-    conn = get_conn()
-    if query:
-        results = company_search(query)
-    else:
-        results = [dict(r) for r in conn.execute(
-            "SELECT * FROM companies ORDER BY name LIMIT 50"
-        ).fetchall()]
-    if not results:
-        print("No companies found")
-        return
-    print(f"Companies ({len(results)}):")
-    for c in results:
-        jc = conn.execute("SELECT COUNT(*) as c FROM jobs WHERE company=?", (c["name"],)).fetchone()["c"]
-        name = _clean(c["name"])[:30]
-        ind = _clean(c.get("industry", "") or "")[:20]
-        print(f"  {name:30s} {ind} ({jc} jobs)")
-
-
 def cmd_events(upcoming=False):
     events = event_list(upcoming=upcoming)
     if not events:
@@ -329,75 +308,6 @@ def cmd_events(upcoming=False):
             print(f"     at {e['event_at']}")
         if e.get("description"):
             print(f"     {e['description'][:100]}")
-
-
-def cmd_contacts(jid=None):
-    contacts = contact_list(job_id=jid)
-    if not contacts:
-        print("No contacts" if not jid else f"No contacts for {jid}")
-        return
-    for c in contacts:
-        reached = "mail" if c.get("reached_out") else "[ ]"
-        print(f"  {reached} {c['name']:20s} {c.get('role','') or '':25s} {c.get('email','') or ''}")
-
-
-def cmd_connections(company_query=None):
-    """Show connections (contacts) grouped by company — or for one company."""
-    conn = get_conn()
-    if company_query:
-        rows = conn.execute(
-            "SELECT j.company, c.* FROM contacts c JOIN jobs j ON j.id=c.job_id "
-            "WHERE j.company LIKE ? AND c.source='my_connection' "
-            "ORDER BY j.company, c.name",
-            (f"%{company_query}%",),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT j.company, c.* FROM contacts c JOIN jobs j ON j.id=c.job_id "
-            "WHERE c.source='my_connection' "
-            "ORDER BY j.company, c.name LIMIT 100"
-        ).fetchall()
-    if not rows:
-        print("No my-connection contacts found" + (f" for '{company_query}'" if company_query else ""))
-        return
-    print(f"Connections ({len(rows)}):")
-    for r in rows:
-        deg = r["connection_degree"] or ""
-        deg_s = f" ({deg})" if deg else ""
-        print(f"  {_clean(r['company'] or '')[:30]:30s} {r['name'][:25]:25s} "
-              f"{_clean(r['role'] or '')[:35]:35s} {r['linkedin_url'] or ''}{deg_s}")
-
-
-def cmd_outreach(limit=50):
-    """Show outreach attempts + pending contacts."""
-    conn = get_conn()
-    attempts = conn.execute(
-        "SELECT a.*, c.name as contact_name, c.job_id FROM contact_attempts a "
-        "JOIN contacts c ON c.id=a.contact_id ORDER BY a.created_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    if attempts:
-        print(f"Attempts ({len(attempts)}):")
-        for a in attempts:
-            print(f"  [{a['channel']:16s}] {a['status']:8s} {a['contact_name'][:22]:22s} "
-                  f"{a.get('sent_at') or a.get('created_at') or ''}"
-                  + (f"  err: {a['error'][:40]}" if a.get(_T.OUTCOME_ERROR) else ""))
-    else:
-        print("No outreach attempts yet.")
-
-    pending = conn.execute(
-        "SELECT j.company, c.name, c.email, c.linkedin_url FROM contacts c "
-        "JOIN jobs j ON j.id=c.job_id "
-        "WHERE c.reached_out=0 AND (c.email != '' OR c.linkedin_url != '') "
-        "ORDER BY j.company LIMIT 25"
-    ).fetchall()
-    if pending:
-        print(f"\nPending outreach ({len(pending)}):")
-        for p in pending:
-            addr = p["email"] or p["linkedin_url"]
-            print(f"  {_clean(p['company'] or '')[:25]:25s} {p['name'][:22]:22s} {addr or ''}")
-    else:
-        print("\nNo pending outreach.")
 
 
 def cmd_archive():
@@ -697,7 +607,8 @@ def cmd_shadow_classify():
             print(f"  {r.get('jid', '?')[:12]} {r.get('company', '?')[:22]:22s} "
                   f"| {', '.join((f.get('label') or '?')[:38] for f in fl[:3])}")
         print()
-    print("  actions: report.py handoff <jid> | apply act --fill <jid> --answers '{}'")
+    print("  full decision list with evidence: python3 report.py handovers",
+          file=sys.stderr)
 
 
 def cmd_audit(jid):
@@ -985,16 +896,30 @@ def cmd_fleet():
           "| apply.py preflight")
 
 
-def cmd_handovers():
-    """The pending-USER-DECISIONS surface. Every personal question across
-    all dossiers, with the exact label, the dossier link, and a
-    recommended answer when the profile can derive one. This is how the
-    orchestrator asks WELL: one command, complete list, cheap to answer.
+def cmd_handovers(owner=None):
+    """THE decisions inbox — every open decision across the fleet, in
+    one place, grouped by OWNER, with the evidence needed to decide
+    WITHOUT opening the dossier, and the exact answer command.
+
+      USER         — personal questions (identity/legal/life) the profile
+                     can't answer: the USER decides.
+      ORCHESTRATOR — evidence-backed fields: no_option_match with
+                     top_options (the answer IS in the evidence), and
+                     no_match labels. Per the routing hierarchy this is
+                     the ORCHESTRATOR's queue — answer via --answers +
+                     re-fill.
+      DATA         — profile/answer gaps (work_history, missing answer
+                     classes) that block fields fleet-wide.
+      REVIEW       — stopped/blocked jobs (login/captcha/2fa/regression):
+                     investigate, then decide.
+
+    `report.py handovers <owner>` filters to one group. Answered items
+    disappear once the dossier updates — no separate state to maintain.
     """
     import glob as _glob
     import os as _os
     from collections import Counter
-    questions = []
+    groups = {"USER": [], "ORCHESTRATOR": [], "DATA": [], "REVIEW": []}
     for hf in _glob.glob(_os.path.join(RESULTS_DIR, "*", "handoff.json")):
         jid = _os.path.basename(_os.path.dirname(hf))
         try:
@@ -1002,36 +927,70 @@ def cmd_handovers():
         except Exception:
             continue
         for f in doc.get("fields", []):
-            lbl = f.get("label") or ""
-            if f.get("kind") not in (_T.NEEDS_DATA, _T.REJECTED_BY_FORM):
+            kind = f.get("kind")
+            if kind not in (_T.NEEDS_DATA, _T.REJECTED_BY_FORM):
                 continue
-            if not any(kw in lbl.lower() for kw in _HANDOVER_KW):
+            lbl = f.get("label") or ""
+            diag = f.get("diag") or {}
+            if kind == _T.REJECTED_BY_FORM and diag.get("reason") == "no_option_match":
+                # Evidence-backed: the answer menu is in the diag.
+                groups["ORCHESTRATOR"].append({
+                    "jid": jid, "label": lbl,
+                    "evidence": (diag.get("top_options") or [])[:3],
+                    "answer": None})
                 continue
             if _profile_has_answer(lbl):
-                continue  # the profile answers it — data/code, not user
-            questions.append({"jid": jid, "label": lbl,
-                              "kind": f.get("kind"), "hf": hf})
-    if not questions:
-        print("HANDOVERS: none pending — the user has no open decisions.",
+                continue  # the profile answers it — not an open decision
+            if any(kw in lbl.lower() for kw in _HANDOVER_KW):
+                groups["USER"].append({"jid": jid, "label": lbl,
+                                       "answer": None})
+            else:
+                groups["DATA"].append({"jid": jid, "label": lbl,
+                                       "answer": None})
+        for b in doc.get("blockers") or []:
+            groups["REVIEW"].append({"jid": jid,
+                                     "label": f"blocker: {b.get('type', '?')}",
+                                     "answer": None})
+
+    if owner:
+        owner = owner.upper()
+        if owner not in groups:
+            print(f"HANDOVERS: unknown owner '{owner}' — "
+                  f"use USER | ORCHESTRATOR | DATA | REVIEW",
+                  file=sys.stderr)
+            return 1
+        groups = {owner: groups[owner]}
+
+    total = sum(len(v) for v in groups.values())
+    if not total:
+        print("HANDOVERS: nothing open — no pending decisions.",
               file=sys.stderr)
         return
-    by_q = Counter(q["label"] for q in questions)
-    print(f"HANDOVERS: {len(questions)} question(s) across "
-          f"{len(set(q['jid'] for q in questions))} job(s)", file=sys.stderr)
-    print(file=sys.stderr)
-    for q in sorted(set(q["label"] for q in questions)):
-        jids = [x["jid"] for x in questions if x["label"] == q]
-        kinds = {x["kind"] for x in questions if x["label"] == q}
-        print(f"  [{by_q[q]}x] {q[:90]}", file=sys.stderr)
-        print(f"      kinds={','.join(sorted(kinds))} "
-              f"jobs={', '.join(j[:10] for j in jids[:5])}"
-              + (" ..." if len(jids) > 5 else ""), file=sys.stderr)
-        print(f"      review: python3 report.py handoff {jids[0][:12]}",
-              file=sys.stderr)
-    print(file=sys.stderr)
-    print("  ANSWER: apply act --fill <jid> --answers "
-          "'{\"<label>\": \"<value>\"}'  (profile gains the value)",
+    print(f"HANDOVERS: {total} open decision(s)", file=sys.stderr)
+    for name, items in groups.items():
+        if not items:
+            continue
+        by_q = Counter(i["label"] for i in items)
+        print(file=sys.stderr)
+        print(f"== {name} ({len(items)}) ==", file=sys.stderr)
+        for q, n in by_q.most_common(12):
+            jids = [i["jid"] for i in items if i["label"] == q]
+            print(f"  [{n}x] {q[:80]}", file=sys.stderr)
+            ev = next((i["evidence"] for i in items
+                       if i["label"] == q and i.get("evidence")), None)
+            if ev:
+                opts = ", ".join(f"{o.get('text', '?')[:30]}"
+                                 for o in ev if o.get("score", 0) >= 2)
+                if opts:
+                    print(f"      evidence (top options): {opts}",
+                          file=sys.stderr)
+            print(f"      jobs: {' '.join(j[:10] for j in jids[:4])}"
+                  + (" ..." if len(jids) > 4 else ""), file=sys.stderr)
+        print(file=sys.stderr)
+    print("  USER/DATA/ORCHESTRATOR answer:", file=sys.stderr)
+    print("    apply act --fill <jid> --answers '{\"<label>\": \"<value>\"}'",
           file=sys.stderr)
+    print("  REVIEW: python3 report.py handoff <jid>", file=sys.stderr)
 
 
 def cmd_widgets():
@@ -1073,6 +1032,37 @@ def cmd_widgets():
           "+ registry entry + corpus snapshot")
 
 
+def _cmd_help():
+    """The grouped surface map — every question the orchestrator asks has
+    one command; the groups are the mental model."""
+    print("REPORT SURFACE (one command per question)", file=sys.stderr)
+    print(file=sys.stderr)
+    print("  DECISIONS (the inbox):", file=sys.stderr)
+    print("    handovers [USER|ORCHESTRATOR|DATA|REVIEW]  every open decision, grouped by owner, evidence included", file=sys.stderr)
+    print(file=sys.stderr)
+    print("  EVIDENCE (per job):", file=sys.stderr)
+    print("    handoff <jid>    the dossier (kinds, diag, decisions)", file=sys.stderr)
+    print("    audit <jid>      per-field fill attempt log", file=sys.stderr)
+    print("    diff <jid>       regression canary (vs previous run)", file=sys.stderr)
+    print("    observe <jid>    session event timeline", file=sys.stderr)
+    print("    session [run_id] raw events", file=sys.stderr)
+    print("    inspect <jid>    job snapshot", file=sys.stderr)
+    print(file=sys.stderr)
+    print("  FLEET (aggregates):", file=sys.stderr)
+    print("    shadow [--classify]  batch outcomes + owner split", file=sys.stderr)
+    print("    fleet              accuracy report + steering memo + rule candidates", file=sys.stderr)
+    print("    widgets            unhandled widget-class backlog", file=sys.stderr)
+    print("    candidates         pending tailored jobs", file=sys.stderr)
+    print(file=sys.stderr)
+    print("  READINESS:", file=sys.stderr)
+    print("    profile          profile/resume completeness", file=sys.stderr)
+    print("    glossary         the vocabulary (generated from terms.py)", file=sys.stderr)
+    print(file=sys.stderr)
+    print("  GENERAL: stats | summary | search | export | events | archive", file=sys.stderr)
+    print(file=sys.stderr)
+    print("  LEGACY (replaced by reach.py — kept for compat): none — removed", file=sys.stderr)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -1081,9 +1071,7 @@ def main():
     cmd = sys.argv[1]
     args = sys.argv[2:]
 
-    if cmd == "shell":
-        cmd_shell()
-    elif cmd == "stats":
+    if cmd == "stats":
         cmd_stats()
     elif cmd == "candidates":
         lim = None
@@ -1117,21 +1105,8 @@ def main():
             if i + 1 < len(args):
                 days = int(args[i + 1])
         cmd_summary(days)
-    elif cmd == "companies":
-        cmd_companies(" ".join(args) if args else None)
     elif cmd == "events":
         cmd_events(upcoming="--upcoming" in args)
-    elif cmd == "contacts":
-        cmd_contacts(args[0] if args else None)
-    elif cmd == "connections":
-        cmd_connections(" ".join(args) if args else None)
-    elif cmd == "outreach":
-        lim = 50
-        if "--limit" in args:
-            i = args.index("--limit")
-            if i + 1 < len(args):
-                lim = int(args[i + 1])
-        cmd_outreach(limit=lim)
     elif cmd == "profile":
         cmd_profile()
     elif cmd == "session":
@@ -1169,7 +1144,9 @@ def main():
             print(f"  {term:22s} {meaning}")
             print(f"      {note}")
     elif cmd == "handovers":
-        cmd_handovers()
+        cmd_handovers(args[0] if args else None)
+    elif cmd == "help":
+        _cmd_help()
     elif cmd == "widgets":
         cmd_widgets()
     elif cmd == "archive":

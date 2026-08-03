@@ -79,8 +79,9 @@ Never Copy-Item a directory by hand (the apply/apply nesting lesson).
 | `reach.py status` | Pipeline state with contact/outreach summary |
 | `reach.py retry <jid>` | Re-run contact discovery |
 | `reach.py undo <jid>` | Reset contact state for a job |
-| `report.py connections [company]` | My connections grouped by company |
-| `report.py outreach` | Outreach attempts + pending contacts |
+| `report.py handovers [USER\|ORCHESTRATOR\|DATA\|REVIEW]` | THE decisions inbox: every open decision, grouped by owner, with evidence + answer commands |
+| `report.py help` | The grouped surface map (decisions / evidence / fleet / readiness) |
+| `report.py widgets` | Unhandled widget-class backlog (probe-failure artifacts) |
 | `gmail-cli send <to> <subject> --body <text>` | Send email (low-level) |
 | `gmail-cli auth add <email> --services gmail.send` | Auth Gmail send scope |
 
