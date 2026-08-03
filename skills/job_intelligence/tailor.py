@@ -2,7 +2,7 @@
 
 Usage:
   tailor.py [--auto]                  Craft all described jobs
-  tailor.py admit <jid> [jid...]      Mark job as tailored (also: done)
+  tailor.py admit <jid> [jid...]      Mark job as tailored (grounding-gated)
   tailor.py reject <jid> [jid...]      Reject job(s)
   tailor.py retry                     Retry all failed (batch)
   tailor.py retry <jid>               Re-tailor a specific job
@@ -508,7 +508,7 @@ def cmd_reset(job_id=None, states=None, stages=None):
 def cmd_help():
     print("""Usage:
   [--auto]                                  Craft all described jobs (gem route only)
-  admit <jid> [jid...]                      Mark tailored (also: done)
+  admit <jid> [jid...]                      Mark tailored (grounding-gated)
   reject <jid> [jid...]                     Reject
   undo <jid>                                Move back one stage
   retry                                     Retry all failed (batch)
@@ -532,9 +532,6 @@ def main():
     admit_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
     admit_p.add_argument("--force", action="store_true",
                          help="Skip the factual-grounding gate (after human review)")
-    done_p = sub.add_parser("done", help="Alias for admit (backward compat)")
-    done_p.add_argument("jids", nargs="+")
-    done_p.add_argument("--pdf", help="Path to generated PDF (verifies file exists)")
     ground_p = sub.add_parser("ground", help="Factual-grounding manifest for a tailored resume")
     ground_p.add_argument("jids", nargs="+")
     sub.add_parser("reject", help="Reject job").add_argument("jids", nargs="+")
@@ -561,7 +558,7 @@ def main():
         for jid in args.jids:
             rc |= cmd_ground(jid, RESULTS_DIR)
         return rc
-    elif args.command in ("admit", "done"):
+    elif args.command == "admit":
         cmd_admit(*args.jids, pdf_path=args.pdf, force=getattr(args, "force", False))
     elif args.command == "reject":
         cmd_reject(*args.jids)
