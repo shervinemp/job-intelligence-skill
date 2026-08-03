@@ -132,5 +132,63 @@ class MultiSelectList(unittest.TestCase):
         ff.assert_called_once()
 
 
+class A11yReader(unittest.TestCase):
+    """Closed shadow DOM is invisible to JS queries — the AX tree is the
+    escape hatch for detection."""
+
+    def _snap(self):
+        return {
+            "role": "RootWebArea", "name": "",
+            "children": [
+                {"role": "textbox", "name": "First name"},
+                {"role": "combobox", "name": "Country"},
+                {"role": "checkbox", "name": "I consent"},
+                {"role": "button", "name": "Submit"},
+                {"role": "StaticText", "name": "noise"},
+            ],
+        }
+
+    def test_detects_form_fields(self):
+        from apply.common.a11y_reader import read_fields_from_a11y
+        page = MagicMock()
+        page.accessibility.snapshot.return_value = self._snap()
+        fields = read_fields_from_a11y(page)
+        labels = [f["label"] for f in fields]
+        self.assertIn("First name", labels)
+        self.assertIn("Country", labels)
+        self.assertIn("I consent", labels)
+        self.assertNotIn("Submit", labels)  # buttons skipped
+        types = {f["label"]: f["type"] for f in fields}
+        self.assertEqual(types["Country"], "combobox")
+        self.assertEqual(types["I consent"], "checkbox")
+        self.assertTrue(all(f.get("a11y") for f in fields))
+
+    def test_no_snapshot_returns_empty(self):
+        from apply.common.a11y_reader import read_fields_from_a11y
+        page = MagicMock()
+        page.accessibility.snapshot.side_effect = Exception("no a11y")
+        self.assertEqual(read_fields_from_a11y(page), [])
+
+
+class PreflightAdaptability(unittest.TestCase):
+    def test_reduced_when_api_down(self):
+        from apply.preflight import preflight
+        prof = {"first_name": "A", "last_name": "B", "email": "a@b.c",
+                "phone": "+1", "location": "Ottawa, ON",
+                "work_history": [{"company": "X"}]}
+        with patch("lib.ask_api.available", return_value=False):
+            m = preflight(profile=prof)
+        self.assertEqual(m["adaptability"], "reduced")
+
+    def test_full_when_api_up(self):
+        from apply.preflight import preflight
+        prof = {"first_name": "A", "last_name": "B", "email": "a@b.c",
+                "phone": "+1", "location": "Ottawa, ON",
+                "work_history": [{"company": "X"}]}
+        with patch("lib.ask_api.available", return_value=True):
+            m = preflight(profile=prof)
+        self.assertEqual(m["adaptability"], "full")
+
+
 if __name__ == "__main__":
     unittest.main()

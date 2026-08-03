@@ -107,11 +107,37 @@ def preflight(profile=None, known_labels=None):
             if resolve(lbl, profile, ephemeral=ephemeral).value is not None)
         coverage_pct = round(100 * resolvable / len(known_labels))
 
+    # Adaptability verdict: the OOD escape hatches (vision, LLM option
+    # picking) only exist when ask_api is up. When it's down, unknown
+    # widgets and ambiguous options hand over instead of resolving —
+    # the batch should know its reduced capability up front.
+    adaptability = "full"
+    _ad_detail = ""
+    try:
+        from .common.llm_policy import mode as _mode
+        from lib.ask_api import available as _avail
+        m = _mode()
+        if m == "off":
+            adaptability = "reduced"
+            _ad_detail = "JI_LLM_MODE=off — escape hatches disabled"
+        else:
+            try:
+                if not _avail():
+                    adaptability = "reduced"
+                    _ad_detail = "ask_api unavailable — vision/option escape hatches closed"
+            except Exception:
+                adaptability = "reduced"
+                _ad_detail = "ask_api probe failed"
+    except Exception:
+        pass
+
     return {
         "hard_missing": hard_missing,
         "soft_missing": soft_missing,
         "answer_gaps": answer_gaps,
         "coverage_pct": coverage_pct,
+        "adaptability": adaptability,
+        "adaptability_detail": _ad_detail,
     }
 
 
@@ -125,6 +151,9 @@ def fmt_manifest(manifest):
     if manifest["answer_gaps"]:
         lines.append("  ANSWER GAPS: " + ", ".join(manifest["answer_gaps"]))
     lines.append(f"  COVERAGE: {manifest['coverage_pct']}% of known labels resolvable")
+    if manifest.get("adaptability") == "reduced":
+        lines.append(f"  ADAPTABILITY REDUCED: {manifest.get('adaptability_detail', '')} "
+                     f"— OOD widgets/ambiguity will hand over, not resolve")
     return "\n".join(lines)
 
 

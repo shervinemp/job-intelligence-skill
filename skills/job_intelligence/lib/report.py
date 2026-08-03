@@ -957,6 +957,30 @@ def cmd_fleet():
         print(f"  {n:3d}x  {lbl}")
     print("  -> repeated labels are resolver/rule candidates, not noise")
     print()
+
+    # Rule-suggestion pipeline: for each top failing label, is it
+    # resolvable with the current profile? If NOT, emit a ready-to-add
+    # alias-rule candidate (content-word pattern) — the orchestrator
+    # confirms or edits instead of writing from scratch.
+    print("== RULE CANDIDATES (confirm or edit, then add to resolve.py) ==")
+    _suggested = 0
+    for lbl, n in fail_labels.most_common(12):
+        if _profile_has_answer(lbl):
+            continue  # profile answers it — the failure is widget-level
+        _words = [w for w in re.split(r"[^a-z0-9]+", (lbl or "").lower())
+                  if len(w) > 2][:4]
+        if len(_words) < 2:
+            continue
+        _pat = r"\b" + r"\b.*\b".join(re.escape(w) for w in _words) + r"\b"
+        _suggested += 1
+        print(f"  {n:3d}x  {lbl[:60]}")
+        print(f"      pattern: {_pat[:90]}")
+        print(f"      profile keys: resolve() returned nothing — check "
+              f"profile.json answers")
+    if not _suggested:
+        print("  (none — every top failure is either widget-level or "
+              "already answerable)")
+    print()
     print("  actions: report.py handoff <jid> | report.py shadow --classify "
           "| apply.py preflight")
 
@@ -1008,6 +1032,45 @@ def cmd_handovers():
     print("  ANSWER: apply act --fill <jid> --answers "
           "'{\"<label>\": \"<value>\"}'  (profile gains the value)",
           file=sys.stderr)
+
+
+def cmd_widgets():
+    """The widget backlog: every captured probe failure (registry-failures
+    artifacts), grouped by capability profile — the orchestrator's list of
+    unhandled OOD widget classes. A cluster is a widget-registry TODO."""
+    import glob as _glob
+    import os as _os
+    from collections import Counter
+    from .config import JI_HOME
+    fails_dir = _os.path.join(JI_HOME, "registry-failures")
+    artifacts = sorted(_glob.glob(_os.path.join(fails_dir, "*.json")))
+    if not artifacts:
+        print("WIDGETS: no probe-failure artifacts — no known unhandled "
+              "widget classes.", file=sys.stderr)
+        return
+    by_profile = Counter()
+    by_cap = Counter()
+    urls = {}
+    for a in artifacts:
+        try:
+            d = json.load(open(a, encoding="utf-8"))
+            h = d.get("profile_hash", "?")
+            by_profile[h] += 1
+            caps = d.get("capability_summary", "?")
+            by_cap[caps] += 1
+            urls.setdefault(h, d.get("url", "?")[:70])
+        except Exception:
+            continue
+    print(f"WIDGETS: {len(artifacts)} probe-failure artifact(s) "
+          f"({len(by_profile)} capability profile(s))", file=sys.stderr)
+    print("  by capability:", ", ".join(f"{k}={v}" for k, v in
+                                         by_cap.most_common(8)))
+    print()
+    print("  profiles (new widget classes to handle):")
+    for h, n in by_profile.most_common(10):
+        print(f"    {h[:16]}  {n:3d}x  {urls.get(h, '')[:60]}")
+    print("  next: investigate the newest artifact, write a widget handler "
+          "+ registry entry + corpus snapshot")
 
 
 def main():
@@ -1107,6 +1170,8 @@ def main():
             print(f"      {note}")
     elif cmd == "handovers":
         cmd_handovers()
+    elif cmd == "widgets":
+        cmd_widgets()
     elif cmd == "archive":
         cmd_archive()
     else:

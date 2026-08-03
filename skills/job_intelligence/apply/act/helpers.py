@@ -220,6 +220,22 @@ def _probe_form(page, reg, jid, allow_vision=True):
                     page.goto(orig_url, wait_until="domcontentloaded", timeout=15000)
                 except Exception:
                     pass
+        # Closed-shadow-DOM escape hatch: DOM queries cannot pierce closed
+        # roots, so a form inside them looks empty — which would be
+        # misclassified (login wall / expired). The browser's OWN
+        # accessibility tree exposes them; use it before giving up.
+        if not fields:
+            try:
+                from apply.common.a11y_reader import read_fields_from_a11y
+                a11y_fields = read_fields_from_a11y(page)
+                a11y_fields = [f for f in a11y_fields if not _is_junk_field(f)]
+                if a11y_fields:
+                    print(f"  {len(a11y_fields)} field(s) via accessibility tree "
+                          f"(closed shadow DOM)", file=sys.stderr)
+                    pr.fields = a11y_fields
+                    return pr
+            except Exception:
+                pass
         if _click_apply_button(page):
             # The click may trigger a navigation (SSO redirect, lazy
             # apply link) — settle before probing so the JS context
