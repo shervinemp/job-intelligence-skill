@@ -227,8 +227,8 @@ class AccountExists(unittest.TestCase):
 
 class PolicyBatchKeys(unittest.TestCase):
     def test_captcha_skip_defaults_false(self):
-        from apply.common.policy import load_policy
-        with patch("apply.common.policy._policy_path",
+        from apply.common.submit_policy import load_policy
+        with patch("apply.common.submit_policy._policy_path",
                    return_value=os.path.join(tempfile.mkdtemp(), "nope.json")):
             pol = load_policy()
         self.assertFalse(pol["captcha_skip"])

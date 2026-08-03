@@ -1,5 +1,13 @@
 # Skyvern Migration
 
+> **SUPERSEDED (2026-08-03).** This design is not the architecture. The
+> current pipeline is the deterministic-core design of ETHOS.md: Playwright
+> strategies, readers, and inspector are the hot path; the served local
+> model is reserved for vision. `skyvern_bridge.py` was removed — a zero-
+> real-adapter seam with an LLM-driven agent in the hot path contradicts
+> ETHOS.md §1 (determinism as the source of truth). Kept as historical
+> record only. Re-open only as an explicit re-litigation of §1.
+
 ## Architecture
 
 ```

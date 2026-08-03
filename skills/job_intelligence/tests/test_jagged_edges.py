@@ -114,7 +114,7 @@ class GapFillValidationGate(unittest.TestCase):
         """The LLM's mapped value must pass the same deterministic
         validator as deterministic fills — a URL in a plain-text field is
         rejected, an option-member value is accepted."""
-        from apply.act.helpers import _gap_fill_into_answers
+        from apply.common.fill_runner import gap_fill_into_answers as _gap_fill_into_answers
         fields = [
             {"label": "Place you call home", "tag": "INPUT", "type": "text"},
             {"label": "Nation", "tag": "SELECT",
@@ -131,7 +131,7 @@ class GapFillValidationGate(unittest.TestCase):
         self.assertEqual(ans.get("Nation"), "Canada")
 
     def test_valid_llm_value_accepted(self):
-        from apply.act.helpers import _gap_fill_into_answers
+        from apply.common.fill_runner import gap_fill_into_answers as _gap_fill_into_answers
         fields = [{"label": "GitHub", "tag": "INPUT", "type": "url"}]
         profile = {"github": "https://github.com/shervinemp"}
         with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \

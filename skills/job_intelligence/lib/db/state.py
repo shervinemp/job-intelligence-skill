@@ -1,10 +1,13 @@
-"""lib/db/state.py — per-job state load/save."""
+"""lib/db/state.py — whole-fleet DB snapshot load/save.
 
+Distinct from apply.common.page_helpers.load_state/save_state (the
+per-job RUNTIME cache): these read/write the jobs table snapshot."""
+
+from .jobs import _row_to_job
 from .schema import STAGES, _JOBS_COLS, get_conn
 
 
-def load_state():
-    from .jobs import _row_to_job
+def load_snapshot():
     conn = get_conn()
     rows = conn.execute(f"SELECT {_JOBS_COLS} FROM jobs ORDER BY created_at").fetchall()
     jobs = {}
@@ -25,7 +28,7 @@ def load_state():
     return {"jobs": jobs, "stages": stage_counts, "states": state_counts}
 
 
-def save_state(state):
+def save_snapshot(state):
     from .jobs import _insert_job
     for jid, entry in state["jobs"].items():
         fields = {k: v for k, v in entry.items() if v is not None or k in ("stage", "state", "scripts", "notes")}

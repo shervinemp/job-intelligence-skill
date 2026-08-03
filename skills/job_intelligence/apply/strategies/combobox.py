@@ -36,7 +36,7 @@ def _trace(stage, *args):
     msg = " ".join(str(a) for a in args)
     print(f"  [CBX:{stage}] {msg}", file=sys.stderr)
     try:
-        from apply.common.obs import obs
+        from lib.automation.obs import obs
         obs("combobox", stage, detail=msg)
     except Exception:
         pass
@@ -493,7 +493,7 @@ def _try_llm(page, sel, opts, label, ans, candidates, diag, stage):
     if not opts:
         return False
     try:
-        from apply.common.llm_policy import allow as _llm_allow
+        from lib.automation.llm import allow as _llm_allow
         if not _llm_allow("option_pick"):
             diag["llm_tried"] = False
             diag["llm_skipped"] = "policy"

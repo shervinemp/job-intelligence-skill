@@ -1,7 +1,7 @@
 #! /usr/bin/env python3
 """verify.py — Check if a job was submitted. No state mutation.
 4 strategies: modal closed, success text, Applied button, DB stage.
-Plus Skyvern-assisted vision verification as last-resort."""
+Plus ask_api vision verification as last-resort (mode-gated)."""
 import os, sys
 from urllib.parse import urlparse
 
@@ -36,8 +36,14 @@ def _registrable_domain(url):
 
 
 def _vision_confirms(page, jid):
-    """Last-resort: ask the vision model if the page shows a successful submission."""
+    """Last-resort: ask the vision model if the page shows a successful submission.
+    Gated on the routing hierarchy — vision is the one ask_api escape
+    allowed in auto mode; `off` forbids it."""
     try:
+        from lib.automation.llm import allow, set_last_status
+        if not allow("vision"):
+            set_last_status("policy_off", "vision verify gated by JI_LLM_MODE")
+            return False
         from lib.ask_api import available, ask
         if not available():
             return False
@@ -66,57 +72,6 @@ def _vision_confirms(page, jid):
     except Exception as e:
         print(f"  VISION_SKIP: {e}", file=sys.stderr)
     return False
-
-
-def _skyvern_confirms(page, jid, state):
-    """Use Skyvern data extraction to verify submission on the current page."""
-    try:
-        url = ""
-        if page is not None:
-            url = getattr(page, "url", "") or ""
-        if not url or "about:blank" in url:
-            url = (state or {}).get("external_url", "")
-        if not url:
-            return False
-        from apply.common.skyvern_bridge import SkyvernExtraction
-        extractor = SkyvernExtraction()
-        result = extractor.extract_text(url, "Read the visible page content and answer: Did this job application submit successfully? Look for confirmation messages, thank you text, application IDs, or success indicators.")
-        if not result:
-            return False
-        text = (result.get("extracted_text", "") or "").lower()
-        for signal in ["submitted", "thank you", "application received", "success", "confirmation", "applied"]:
-            if signal in text:
-                return True
-    except Exception as e:
-        print(f"  SKYVERN_VERIFY_SKIP: {e}", file=sys.stderr)
-    return False
-
-
-def _poll_skyvern_fill(state):
-    """Check the status of a non-blocking Skyvern fill run, if one was started.
-    Returns (done: bool, status: str). done=True means the run finished
-    (successfully or not) and verification can proceed."""
-    run_id = (state or {}).get("fill_run_id", "")
-    if not run_id:
-        return True, ""
-    try:
-        from apply.common.skyvern_bridge import get_task
-        task = get_task(run_id)
-        status = (task.get("status") or "unknown").lower()
-        print(f"  SKYVERN_FILL: run_id={run_id} status={status}", file=sys.stderr)
-        if status in ("running", "queued", "created", "pending"):
-            # Stale-run guard: if the server died mid-task (orphaned run),
-            # don't wait forever — 20 min with the local model is generous.
-            import time as _t
-            started = (state or {}).get("fill_run_started", 0)
-            if started and (_t.time() - started) > 20 * 60:
-                print("  SKYVERN_FILL: run looks stale (>20 min) — treating as done", file=sys.stderr)
-                return True, "stale"
-            return False, status
-        return True, status
-    except Exception as e:
-        print(f"  SKYVERN_FILL_POLL_SKIP: {e}", file=sys.stderr)
-        return True, "poll_error"
 
 
 def _playwright_verify(page, jid, state):
@@ -200,16 +155,6 @@ def run(jid):
     if state.get("jid") != jid:
         state = {}
 
-    # If a background Skyvern fill is still running, report and wait — the form
-    # isn't ready for submission verification yet.
-    fill_done, fill_status = _poll_skyvern_fill(state)
-    if not fill_done:
-        emit_status("skyvern_fill_running", f"run_id={state['fill_run_id']} still {fill_status} — check again later")
-        emit_next("verify")
-        return
-    if fill_status == "completed" and state.get("fill_run_id"):
-        print("  SKYVERN_FILL: background fill completed — form should be ready to submit", file=sys.stderr)
-
     # Try CDP Chrome page verification
     try:
         from lib.chrome_manager import connect as chrome_connect
@@ -248,16 +193,6 @@ def run(jid):
                 return
     except Exception as e:
         print(f"  CHROME_VERIFY_SKIP: {e}", file=sys.stderr)
-
-    # Fallback: Skyvern verify (only if ask_api vision already failed above)
-    try:
-        if _skyvern_confirms(None, jid, state):
-            mark_applied(jid)
-            emit_status("submitted (skyvern vision)")
-            emit_next("none")
-            return
-    except Exception as e:
-        print(f"  SKYVERN_VERIFY_FAILED: {e}", file=sys.stderr)
 
     emit_status("unknown", "all verification strategies inconclusive")
     emit_next("act --fill or check manually")

@@ -1,4 +1,4 @@
-"""act/fill.py — Hybrid fill command: Playwright-first, Skyvern-fallback."""
+"""act/fill.py — Hybrid fill command: Playwright-first."""
 import os
 import random, re, sys, time
 
@@ -7,9 +7,10 @@ from lib.config import RESULTS_DIR
 from apply.common import terms as _T
 from apply.common.output import emit_next, emit_status, emit_error, emit_fill_report
 from apply.common.page_helpers import load_state, save_state, handle_captcha, handle_session_timeout, tag_page
+from apply.common.fill_runner import fill_page
 from apply.act.helpers import (
     _load_profile, chrome_session, _host, _is_error_page, _url_fallbacks,
-    _wait_for_fields, _probe_form, _fill_with_playwright, _find_next_button,
+    _wait_for_fields, _probe_form, _find_next_button,
     _empty_required, _click_action, _verify_with_ask_api, _detect_submit_button,
     _field_key, _build_ans_dict, _resolve_linkedin_apply, _wire_dialogs,
     _is_junk_field, _dismiss_confirm_modal, _get_validation_errors,
@@ -252,7 +253,7 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
 
     # Emit structured observations for the session log (always on).
     try:
-        from apply.common.obs import obs
+        from lib.automation.obs import obs
         obs("fill", "end", jid=jid,
             outcome="ok" if not failed_labels and not blockers else "incomplete",
             detail=f"filled={len(filled_recs)} failed={len(failed_labels)} "
@@ -342,7 +343,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     # Checked at loop boundaries so a stuck page can't stall a batch.
     deadline = 0.0
     try:
-        from apply.common.policy import load_policy as _load_pol
+        from apply.common.submit_policy import load_policy as _load_pol
         _tmo = int(_load_pol().get("job_timeout_sec") or 0)
         if _tmo > 0:
             deadline = time.time() + _tmo
@@ -645,7 +646,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 # re-supplies them from reviewed evidence.
                 _llm_resolved = False
                 try:
-                    from apply.common.llm_policy import allow as _llm_allow
+                    from lib.automation.llm import allow as _llm_allow
                     if _llm_allow("batch_verify"):
                         from lib.ask_api import available as _llm_avail
                         if _llm_avail():
@@ -747,7 +748,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                             save_state(state)
                             return 1
 
-                filled, failed = _fill_with_playwright(page, fields, profile, answers,
+                filled, failed = fill_page(page, fields, profile, answers,
                                                        filled_keys=filled_keys)
                 for rec in filled:
                     if rec["key"] not in filled_keys:
@@ -821,7 +822,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 if not new_fields:
                     break
                 print(f"  Sweep {sweep+1}: {len(new_fields)} new field(s) revealed", file=sys.stderr)
-                filled2, failed2 = _fill_with_playwright(page, new_fields, profile, answers,
+                filled2, failed2 = fill_page(page, new_fields, profile, answers,
                                                          filled_keys=filled_keys)
                 for rec in filled2:
                     if rec["key"] not in filled_keys:
@@ -846,7 +847,7 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                 # orchestrator reviews dossiers for the residual
                 # unverified reads.
                 try:
-                    from apply.common.llm_policy import allow as _llm_allow
+                    from lib.automation.llm import allow as _llm_allow
                     if _llm_allow("verify_reads"):
                         verify_result = _verify_with_ask_api(page, ans_dict)
                         if not verify_result.get("ok"):
@@ -867,7 +868,6 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
         return 1
 
     remaining = [r for r in failed_all if _field_key(r) not in filled_keys]
-    skyvern_fields = [r for r in remaining if r["_why"] == "fill_failed" or r.get("required")]
     skipped = [r for r in remaining if r["_why"] == "no_answer" and not r.get("required")]
 
     if remaining:
@@ -875,42 +875,6 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     if skipped:
         skip_labels = [r["label"] for r in skipped]
         print(f"  SKIPPED (optional, no answer): {', '.join(skip_labels)}", file=sys.stderr)
-
-    skyvern_result = None
-    needs_skyvern = (bool(skyvern_fields) or field_total == 0) and not quick
-    if needs_skyvern:
-        # Skyvern is an OPTIONAL external agent (module not installed in
-        # this deployment) — the user-visible strings must not reference
-        # it when it cannot possibly run.
-        try:
-            from apply.common.skyvern_bridge import fill_remaining as _fill_remaining
-            _skyvern_ok = True
-        except Exception:
-            _skyvern_ok = False
-        if _skyvern_ok:
-            n = len(skyvern_fields) if skyvern_fields else 8
-            budget = min(30, 6 + 3 * n)
-            print(f"  Handing off {n} field(s) to Skyvern (non-blocking, max_steps={budget})...", file=sys.stderr)
-            try:
-                skyvern_result = _fill_remaining(
-                    url=url,
-                    answers=ans_dict,
-                    filled_fields=filled_all + [r["label"] for r in skipped],
-                    wait=False,
-                    timeout=30,
-                    max_steps=budget,
-                )
-                status = skyvern_result.get("status", "unknown")
-                print(f"  Skyvern: {status}", file=sys.stderr)
-                if skyvern_result.get("browser_session_id"):
-                    state["browser_session_id"] = skyvern_result["browser_session_id"]
-                if skyvern_result.get("run_id"):
-                    state["fill_run_id"] = skyvern_result["run_id"]
-                    state["fill_run_started"] = time.time()
-                    print(f"  Skyvern run_id: {state['fill_run_id']}", file=sys.stderr)
-                    print(f"  Check status later via 'apply verify {jid}'", file=sys.stderr)
-            except Exception as se:
-                print(f"  Skyvern fill failed: {se}", file=sys.stderr)
 
     state["filled_count"] = len(filled_all)
     state["remaining_fields"] = [
@@ -923,9 +887,6 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     # verify the DOM against them (LLM key-mapped --answers and history
     # entries are ephemeral and would otherwise be invisible to it).
     state["fill_answers"] = {**dict(ans_dict), **dict(answers)}
-    if not (skyvern_result and skyvern_result.get("run_id")):
-        state.pop("fill_run_id", None)
-        state.pop("fill_run_started", None)
     save_state(state)
 
     # Hand the structured dossier to the orchestrator.
@@ -935,25 +896,19 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     except Exception:
         pass
 
-    if field_total == 0 and not skyvern_result:
+    if field_total == 0:
         emit_status("unknown", "no fillable fields found (Playwright)")
         return 1
 
     msg = f"Playwright: {len(filled_all)} fields"
-    if skyvern_fields:
-        msg += f", to Skyvern: {len(skyvern_fields)}"
     if skipped:
         msg += f", skipped optional: {len(skipped)}"
     req_no_answer = [r for r in remaining if r.get("required")]
     if req_no_answer:
         msg += f", {len(req_no_answer)} REQUIRED unanswered"
-    if skyvern_result:
-        msg += f" + Skyvern: {skyvern_result.get('status', 'unknown')}"
     emit_status(_T.STATUS_FILLED, msg)
 
-    if skyvern_result and skyvern_result.get("run_id"):
-        emit_next("verify", "poll Skyvern fill progress")
-    elif submit_visible or filled_all:
+    if submit_visible or filled_all:
         emit_next("check", "run 'apply act --check' to validate before submit")
     else:
         emit_next("act --inspect", "no fillable fields found — inspect to confirm")

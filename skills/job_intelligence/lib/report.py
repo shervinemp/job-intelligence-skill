@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 
 from .db import (
     get_conn,
-    load_state, get_job, search_jobs, job_count_by_stage,
+    load_snapshot, get_job, search_jobs, job_count_by_stage,
     event_list,
     desc_get, app_list, app_get,
 )
@@ -245,7 +245,7 @@ def cmd_search(query):
 
 
 def cmd_export(fmt, stage=None):
-    s = load_state()
+    s = load_snapshot()
     jobs = list(s["jobs"].values())
     if stage:
         jobs = [j for j in jobs if j.get("stage") == stage]
@@ -693,7 +693,7 @@ def cmd_handoff(jid):
 def cmd_session(run_id=None):
     """Render the event timeline of a run (latest by default) — the
     machine-readable observation log as a human/LLM timeline."""
-    from apply.common.obs import load as obs_load
+    from lib.automation.obs import load as obs_load
     events = obs_load(run_id)
     if not events:
         print("No session events found.", file=sys.stderr)

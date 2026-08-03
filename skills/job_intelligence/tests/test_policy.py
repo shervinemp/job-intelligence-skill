@@ -1,4 +1,4 @@
-"""Unit tests for apply submission policy (apply/common/policy.py).
+"""Unit tests for apply submission policy (apply/common/submit_policy.py).
 
 Mode resolution gates whether an unattended run actually submits, so the default
 (live) and the override precedence (cli > env > file > default) are worth pinning.
@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from apply.common import policy
+from apply.common import submit_policy
 
 
 class PolicyModes(unittest.TestCase):
@@ -27,34 +27,34 @@ class PolicyModes(unittest.TestCase):
                 os.environ[k] = v
 
     def test_default_is_live(self):
-        self.assertEqual(policy.resolve_mode(), "live")
-        self.assertTrue(policy.submits_for_real("live"))
+        self.assertEqual(submit_policy.resolve_mode(), "live")
+        self.assertTrue(submit_policy.submits_for_real("live"))
 
     def test_env_override(self):
         os.environ["JI_APPLY_MODE"] = "shadow"
-        self.assertEqual(policy.resolve_mode(), "shadow")
-        self.assertFalse(policy.submits_for_real("shadow"))
+        self.assertEqual(submit_policy.resolve_mode(), "shadow")
+        self.assertFalse(submit_policy.submits_for_real("shadow"))
 
     def test_invalid_mode_fails_closed_to_hold(self):
         # A typo in a safety control must never cause real submits.
         os.environ["JI_APPLY_MODE"] = "bogus"
-        self.assertEqual(policy.resolve_mode(), "hold")
-        self.assertFalse(policy.submits_for_real(policy.resolve_mode()))
+        self.assertEqual(submit_policy.resolve_mode(), "hold")
+        self.assertFalse(submit_policy.submits_for_real(submit_policy.resolve_mode()))
 
     def test_invalid_file_mode_fails_closed_to_hold(self):
         with open(os.path.join(self._home, "apply_policy.json"), "w") as f:
             f.write('{"mode": "shdow"}')
-        self.assertEqual(policy.resolve_mode(), "hold")
+        self.assertEqual(submit_policy.resolve_mode(), "hold")
 
     def test_cli_override_wins(self):
         os.environ["JI_APPLY_MODE"] = "live"
-        self.assertEqual(policy.resolve_mode("shadow"), "shadow")
+        self.assertEqual(submit_policy.resolve_mode("shadow"), "shadow")
 
     def test_file_policy(self):
         with open(os.path.join(self._home, "apply_policy.json"), "w") as f:
             f.write('{"mode": "hold"}')
-        self.assertEqual(policy.resolve_mode(), "hold")
-        self.assertFalse(policy.submits_for_real("hold"))
+        self.assertEqual(submit_policy.resolve_mode(), "hold")
+        self.assertFalse(submit_policy.submits_for_real("hold"))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """chrome_manager.py — Shared Chrome lifecycle management for the pipeline.
 
-All components (fetch, tailor, apply, gemini.js, skyvern_bridge) use this
-module instead of managing their own profile paths and CDP connections.
+All components (fetch, tailor, apply, gemini.js) use this module instead
+of managing their own profile paths and CDP connections.
 
 Import-time side effects are deliberately avoided: call init() explicitly
 before first use, or rely on start()/connect() which call it automatically.

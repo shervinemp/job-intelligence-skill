@@ -2,17 +2,22 @@
 
 import hashlib
 
+from ..auth_walls import count as auth_count, domains as auth_domains
 from . import schema
+from .companies import company_upsert
+from .jobs import (add_job, advance_job, get_failed_jobs, get_job,
+                   get_jobs_by_stage, next_pending_job)
+from .settings import setting_get
+from .stages import stage_count
+from .state import load_snapshot, save_snapshot
 
 
 def load():
-    from .state import load_state
-    return load_state()
+    return load_snapshot()
 
 
 def save(state):
-    from .state import save_state
-    save_state(state)
+    save_snapshot(state)
 
 
 def job_id(url):
@@ -20,8 +25,6 @@ def job_id(url):
 
 
 def add(state, job_data):
-    from .companies import company_upsert
-    from .jobs import add_job, get_job
     jid = add_job(job_data)
     if jid:
         state["jobs"][jid] = get_job(jid)
@@ -35,7 +38,6 @@ def add(state, job_data):
 
 
 def advance(entry, new_stage, **updates):
-    from .jobs import advance_job
     jid = entry.get("id")
     entry["stage"] = new_stage
     for k, v in updates.items():
@@ -44,27 +46,19 @@ def advance(entry, new_stage, **updates):
 
 
 def get_by_stage(state, stage):
-    from .jobs import get_jobs_by_stage
     return get_jobs_by_stage(stage)
 
 
 def next_pending(state):
-    from .jobs import next_pending_job
     return next_pending_job()
 
 
 def get_failed(state):
-    from .jobs import get_failed_jobs
     return get_failed_jobs()
 
 
 def pipeline_status():
-    from ..auth_walls import count as auth_count, domains as auth_domains
-    from .settings import setting_get
-    from .state import load_state
-    from .stages import stage_count
-
-    state = load_state()
+    state = load_snapshot()
     staged_total = stage_count()
     extracted_ids = setting_get("extracted_ids", [])
     pending_staged = max(0, staged_total - len(extracted_ids))
@@ -98,6 +92,4 @@ def pipeline_status():
 
 
 def close():
-    if schema._conn:
-        schema._conn.close()
-        schema._conn = None
+    schema.close()

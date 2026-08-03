@@ -61,36 +61,9 @@ def cmd_investigate(jid):
                     emit_next("act --fill")
                     return 0
                 if err:
-                    print(f"  VISION_FAIL: {err} — falling back to external agent", file=sys.stderr)
+                    print(f"  VISION_FAIL: {err}", file=sys.stderr)
             except Exception as ve:
-                print(f"  VISION_FAIL: {ve} — falling back to external agent", file=sys.stderr)
+                print(f"  VISION_FAIL: {ve}", file=sys.stderr)
 
-    try:
-        from apply.common.skyvern_bridge import SkyvernExtraction
-    except Exception:
-        SkyvernExtraction = None
-    if SkyvernExtraction is None:
-        emit_error("no field analysis agent available (ask_api down, "
-                   "external agent not installed)")
-        return 1
-    print("  Running external field-investigation agent (slow, 10-step)...", file=sys.stderr)
-    report = SkyvernExtraction().investigate_form(url, timeout=300)
-    if not report:
-        emit_error("investigation returned nothing")
-        return 1
-
-    rd = os.path.join(RESULTS_DIR, jid)
-    os.makedirs(rd, exist_ok=True)
-    rpt_path = os.path.join(rd, "investigate_report.json")
-    with open(rpt_path, "w", encoding="utf-8") as fh:
-        json.dump({"url": url, **report}, fh, indent=2)
-    state["investigate_report"] = rpt_path
-    save_state(state)
-
-    fields = (report.get("fields") or {})
-    n = len(fields.get("fields", [])) if isinstance(fields, dict) else 0
-    print(f"  Report saved: {rpt_path}", file=sys.stderr)
-    print(f"  Agent saw {n} fields, multi_page={fields.get('multi_page') if isinstance(fields, dict) else '?'}", file=sys.stderr)
-    emit_status("investigated", f"report at {rpt_path}")
-    emit_next("none", "write a registry YAML for this platform from the report")
-    return 0
+    emit_error("no field analysis agent available (ask_api down)")
+    return 1

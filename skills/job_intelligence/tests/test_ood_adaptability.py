@@ -67,7 +67,7 @@ class MatrixRowKeys(unittest.TestCase):
     """Same-label fields on one page must not collapse into one."""
 
     def test_duplicate_keys_get_occurrence_suffix(self):
-        from apply.act.helpers import _fill_with_playwright
+        from apply.common.fill_runner import fill_page as _fill_with_playwright
         fields = [
             {"label": "Start date", "name": "q1", "tag": "INPUT",
              "type": "text", "_sel": "#q1"},
@@ -77,7 +77,7 @@ class MatrixRowKeys(unittest.TestCase):
         page = MagicMock()
         page.evaluate.return_value = ""  # pre-check read: empty value
         profile = {"answers": {"start_date": "2020-01"}}
-        with patch("apply.strategies.dispatch.field_deterministic",
+        with patch("apply.common.fill_runner.field_deterministic",
                    return_value=True), \
              patch("apply.act.helpers._build_ans_dict",
                    return_value={"Start date": "2020-01"}):
@@ -121,7 +121,7 @@ class MultiSelectList(unittest.TestCase):
         self.assertTrue(ok)
 
     def test_dispatch_skips_format_validation_for_lists(self):
-        from apply.strategies.dispatch import field_deterministic
+        from apply.common.fill_runner import field_deterministic
         page = MagicMock()
         f = {"tag": "SELECT", "type": "select-multiple", "name": "skills",
              "_sel": "#s", "label": "Skills"}

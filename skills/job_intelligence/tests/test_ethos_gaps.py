@@ -42,7 +42,7 @@ class GapFillFailClosed(unittest.TestCase):
     silently trusted; truncation-tolerant lookup keeps legit ones."""
 
     def _run(self, gap_map, fields, profile):
-        from apply.act.helpers import _gap_fill_into_answers
+        from apply.common.fill_runner import gap_fill_into_answers as _gap_fill_into_answers
         with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
              patch("apply.act.suggest.llm_field_key_mapping",
                    return_value=gap_map), \
@@ -203,8 +203,8 @@ class CanaryEnforcement(unittest.TestCase):
 
     def test_submit_blocked_on_regression(self):
         from apply.act.submit import cmd_submit
-        with patch("apply.common.policy.load_policy", return_value={}), \
-             patch("apply.common.policy.resolve_mode", return_value="live"), \
+        with patch("apply.common.submit_policy.load_policy", return_value={}), \
+             patch("apply.common.submit_policy.resolve_mode", return_value="live"), \
              patch("apply.common.gate.submit_decision",
                    return_value=("go", "")), \
              patch("apply.act.check.cmd_check", return_value=0), \

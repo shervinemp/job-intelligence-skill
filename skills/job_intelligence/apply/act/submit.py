@@ -186,7 +186,7 @@ def cmd_submit(jid, confirm=False, force=False):
         emit_next("verify")
         return 0
 
-    from apply.common.policy import load_policy, resolve_mode
+    from apply.common.submit_policy import load_policy, resolve_mode
     from apply.common.gate import submit_decision
     pol = load_policy()
     mode = resolve_mode()
@@ -361,20 +361,7 @@ def cmd_submit(jid, confirm=False, force=False):
                 for _nav in range(10):
                     if not _has_dialog(page):
                         break
-                    submit_btn = page.evaluate("""() => {
-                        const d = document.querySelector('dialog, [role="dialog"]');
-                        if (!d) return null;
-                        for (const b of d.querySelectorAll('button')) {
-                            const t = b.textContent.trim().toLowerCase();
-                            if (t === 'submit' || t === 'submit application' || t === 'send application') return t;
-                        }
-                        // Fallback: any button with 'submit' in text
-                        for (const b of d.querySelectorAll('button')) {
-                            const t = b.textContent.trim().toLowerCase();
-                            if (t.includes('submit') && t.length < 30) return t;
-                        }
-                        return null;
-                    }""")
+                    submit_btn = _detect_submit_button(page)
                     if submit_btn:
                         print("  Found submit button on review page", file=sys.stderr)
                         break
@@ -627,25 +614,6 @@ def cmd_submit(jid, confirm=False, force=False):
                         emit_status("already applied")
                     emit_next("verify")
                     return 0
-
-                # 3. External agent — absolute last resort (module-gated)
-                try:
-                    from apply.common.skyvern_bridge import click_submit
-                except Exception:
-                    click_submit = None
-                if click_submit is None:
-                    print("  External submit agent not available (module not installed)",
-                          file=sys.stderr)
-                else:
-                    print("  Keyboard methods failed — handing off to external agent", file=sys.stderr)
-                    result = click_submit(url=page.url,
-                                          browser_session_id=browser_session_id,
-                                          timeout=60)
-                    if result.get("status") == "completed":
-                        mark_applied(jid)
-                        emit_status(_T.OUTCOME_SUBMITTED, "external agent clicked submit")
-                        emit_next("verify")
-                        return 0
 
             # Only reach here if we could not click submit at all
             emit_status("submit_failed", "could not click submit button")

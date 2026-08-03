@@ -212,7 +212,6 @@ _DEFAULT_CASCADE = [
     AriaComboboxReader(),
     ReactSelectReader(),
     FuzzyComboboxReader(),
-    VisionReader(),
 ]
 
 
@@ -226,3 +225,29 @@ def read_value(page, sel: str, ans: Optional[str] = None,
         if v is not None:
             return v
     return ""
+
+
+def read_value_vision(page, sel, ans=None):
+    """Explicit vision escape — the only ask_api use in the read path.
+
+    The routing hierarchy reserves the served local model for vision; the
+    CALLER (the fill runner) decides when to invoke it, never the
+    deterministic cascade. Gated on JI_LLM_MODE via lib.automation.llm.
+    Returns the read value, or None when the mode forbids it, ask_api is
+    down, or the model does not confirm the value.
+    """
+    try:
+        from lib.automation.llm import allow, set_last_status
+        if not allow("vision"):
+            set_last_status("policy_off", "vision escape gated by JI_LLM_MODE")
+            return None
+    except Exception:
+        return None
+    if not ans:
+        return None
+    try:
+        v = VisionReader().read(page, sel, ans=ans)
+        set_last_status("used" if v else "declined", "vision read")
+        return v
+    except Exception:
+        return None

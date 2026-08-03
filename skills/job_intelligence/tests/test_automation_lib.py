@@ -147,7 +147,7 @@ class HandoffVocabulary(unittest.TestCase):
 
     def test_write_handoff_kinds_and_counts(self):
         from apply.act.fill import _write_handoff
-        from apply.common.obs import current_run_id
+        from lib.automation.obs import current_run_id
         tmp = tempfile.mkdtemp()
         filled = [{"label": "A", "answer": "x", "unverified": False,
                    "method": "deterministic"},

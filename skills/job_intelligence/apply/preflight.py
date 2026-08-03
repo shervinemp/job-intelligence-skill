@@ -114,7 +114,7 @@ def preflight(profile=None, known_labels=None):
     adaptability = "full"
     _ad_detail = ""
     try:
-        from .common.llm_policy import mode as _mode
+        from lib.automation.llm import mode as _mode
         from lib.ask_api import available as _avail
         m = _mode()
         if m == "off":

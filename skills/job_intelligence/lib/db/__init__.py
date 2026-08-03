@@ -9,7 +9,7 @@ __all__ = [
     "job_count", "job_count_by_stage", "next_pending_job",
     "record_failure", "search_jobs",
     # state
-    "load_state", "save_state",
+    "load_snapshot", "save_snapshot",
     # stages
     "stage_count", "stage_delete", "stage_exists", "stage_get",
     "stage_list_all", "stage_save",
@@ -52,7 +52,7 @@ from .jobs import (  # noqa: F401
     record_failure,
     search_jobs,
 )
-from .state import load_state, save_state  # noqa: F401
+from .state import load_snapshot, save_snapshot  # noqa: F401
 from .stages import (  # noqa: F401
     stage_count,
     stage_delete,

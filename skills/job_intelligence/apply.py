@@ -56,7 +56,7 @@ def main():
     import argparse
     import atexit
 
-    from apply.common.obs import begin_run, end_run
+    from lib.automation.obs import begin_run, end_run
     run_id, session_path = begin_run(name="apply")
     atexit.register(end_run)
     print(f"SESSION: {session_path}", file=sys.stderr)
@@ -157,12 +157,12 @@ def main():
     elif args.command == "reject":
         from lib.db import get_job, advance_job
         from lib.auth_walls import remove
-        from apply.common.apply_state import clear as _clear_state
+        from apply.common.page_helpers import clear_runtime_state
         job = get_job(args.jid)
         if job:
             advance_job(args.jid, job.get("stage", "tailored"), state="rejected")
             remove(args.jid)
-            _clear_state(args.jid)
+            clear_runtime_state(args.jid)
             print(f"REJECTED: {args.jid}", file=sys.stderr)
     elif args.command == "flag":
         from lib.db import get_conn, get_job
@@ -198,8 +198,7 @@ def main():
     elif args.command == "undo":
         from lib.db import get_job, advance_job
         from lib.auth_walls import remove
-        from apply.common.apply_state import clear as _clear_state
-        from apply.common.page_helpers import load_state, save_state
+        from apply.common.page_helpers import clear_runtime_state
         job = get_job(args.jid)
         if job:
             stage = job.get("stage", "")
@@ -207,12 +206,9 @@ def main():
             new_stage = prev.get(stage, "tailored")
             advance_job(args.jid, new_stage, state="active", error=None)
             remove(args.jid)
-            _clear_state(args.jid)
-            # Clear submit_clicked from global state if it belongs to this job
-            _st = load_state()
-            if _st.get("jid") == args.jid and _st.get("submit_clicked"):
-                _st["submit_clicked"] = False
-                save_state(_st)
+            # Resets the runtime cache — including the submit_clicked
+            # one-shot flag — so a re-run may submit again.
+            clear_runtime_state(args.jid)
             print(f"UNDO: {args.jid} {stage} -> {new_stage}", file=sys.stderr)
     elif args.command == "mappings":
         from lib.config import STATE_DIR as _STATE_DIR

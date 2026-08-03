@@ -13,7 +13,7 @@ class FillWithPlaywright(unittest.TestCase):
     and must actually dispatch fields to the deterministic filler."""
 
     def test_fills_field_and_returns_it(self):
-        from apply.act.helpers import _fill_with_playwright
+        from apply.common.fill_runner import fill_page as _fill_with_playwright
         page = MagicMock()
         page.evaluate.return_value = ""
         field = {
@@ -22,10 +22,10 @@ class FillWithPlaywright(unittest.TestCase):
             "placeholder": "", "autocomplete": "", "role": "",
             "accept": None, "_why": "",
         }
-        with patch("apply.act.helpers.load_state", return_value={}), \
-             patch("apply.strategies.dispatch.field_deterministic", return_value=True), \
-             patch("apply.act.helpers.resolve", ) as resolve_mock, \
-             patch("apply.common.resolve._build_ephemeral", return_value={}):
+        with patch("apply.common.fill_runner.load_state", return_value={}), \
+             patch("apply.common.fill_runner.field_deterministic", return_value=True), \
+             patch("apply.common.fill_runner.resolve", ) as resolve_mock, \
+             patch("apply.common.fill_runner._build_ephemeral", return_value={}):
             resolve_mock.return_value.value = "John"
             resolve_mock.return_value.provenance = "profile"
             filled, failed = _fill_with_playwright(page, [field], {"location": ""}, None)
@@ -35,7 +35,7 @@ class FillWithPlaywright(unittest.TestCase):
     def test_prefilled_field_skipped_not_failed(self):
         """A field whose current DOM value already matches the answer must be
         counted as filled (skip), NOT recorded as fill_failed."""
-        from apply.act.helpers import _fill_with_playwright
+        from apply.common.fill_runner import fill_page as _fill_with_playwright
         page = MagicMock()
         # querySelector(...).value returns the already-correct value
         page.evaluate.return_value = "John"
@@ -45,10 +45,10 @@ class FillWithPlaywright(unittest.TestCase):
             "placeholder": "", "autocomplete": "", "role": "",
             "accept": None,
         }
-        with patch("apply.act.helpers.load_state", return_value={}), \
-             patch("apply.strategies.dispatch.field_deterministic") as fd_mock, \
-             patch("apply.act.helpers.resolve") as resolve_mock, \
-             patch("apply.common.resolve._build_ephemeral", return_value={}):
+        with patch("apply.common.fill_runner.load_state", return_value={}), \
+             patch("apply.common.fill_runner.field_deterministic") as fd_mock, \
+             patch("apply.common.fill_runner.resolve") as resolve_mock, \
+             patch("apply.common.fill_runner._build_ephemeral", return_value={}):
             resolve_mock.return_value.value = "John"
             resolve_mock.return_value.provenance = "profile"
             filled, failed = _fill_with_playwright(page, [field], {"location": ""}, None)
@@ -59,7 +59,7 @@ class FillWithPlaywright(unittest.TestCase):
     def test_filled_keys_dedupes_across_calls(self):
         """The caller populates filled_keys from returned filled records;
         a field already present must be skipped (not re-filled, not failed)."""
-        from apply.act.helpers import _fill_with_playwright
+        from apply.common.fill_runner import fill_page as _fill_with_playwright
         page = MagicMock()
         page.evaluate.return_value = ""
         field = {
@@ -69,10 +69,10 @@ class FillWithPlaywright(unittest.TestCase):
             "accept": None,
         }
         filled_keys = set()
-        with patch("apply.act.helpers.load_state", return_value={}), \
-             patch("apply.strategies.dispatch.field_deterministic", return_value=True), \
-             patch("apply.act.helpers.resolve") as resolve_mock, \
-             patch("apply.common.resolve._build_ephemeral", return_value={}):
+        with patch("apply.common.fill_runner.load_state", return_value={}), \
+             patch("apply.common.fill_runner.field_deterministic", return_value=True), \
+             patch("apply.common.fill_runner.resolve") as resolve_mock, \
+             patch("apply.common.fill_runner._build_ephemeral", return_value={}):
             resolve_mock.return_value.value = "a@b.com"
             resolve_mock.return_value.provenance = "profile"
             filled, _ = _fill_with_playwright(page, [field], {"location": ""}, None,
@@ -89,7 +89,7 @@ class FillWithPlaywright(unittest.TestCase):
         self.assertEqual(len(failed2), 0)
 
     def test_no_answer_recorded_not_failed(self):
-        from apply.act.helpers import _fill_with_playwright
+        from apply.common.fill_runner import fill_page as _fill_with_playwright
         page = MagicMock()
         field = {
             "label": "Some optional field", "tag": "INPUT", "type": "text",
@@ -97,9 +97,9 @@ class FillWithPlaywright(unittest.TestCase):
             "placeholder": "", "autocomplete": "", "role": "",
             "accept": None,
         }
-        with patch("apply.act.helpers.load_state", return_value={}), \
-             patch("apply.act.helpers.resolve") as resolve_mock, \
-             patch("apply.common.resolve._build_ephemeral", return_value={}):
+        with patch("apply.common.fill_runner.load_state", return_value={}), \
+             patch("apply.common.fill_runner.resolve") as resolve_mock, \
+             patch("apply.common.fill_runner._build_ephemeral", return_value={}):
             resolve_mock.return_value.value = None
             resolve_mock.return_value.provenance = "no_match"
             filled, failed = _fill_with_playwright(page, [field], {"location": ""}, None)
@@ -186,7 +186,7 @@ class FillAnswersPersisted(unittest.TestCase):
             patch("apply.act.fill._dismiss_popups_if_present"),
             patch("apply.act.fill._find_next_button", return_value=None),
             patch("apply.act.fill._detect_submit_button", return_value=False),
-            patch("apply.act.fill._fill_with_playwright", return_value=([], [])),
+            patch("apply.common.fill_runner.fill_page", return_value=([], [])),
             patch("apply.act.fill.time.sleep"),
         ]
         for p in patches:
@@ -286,7 +286,7 @@ class AutoConsentScoped(unittest.TestCase):
     never work-history/sponsorship/location checkboxes."""
 
     def test_consent_checkbox_auto_checked(self):
-        from apply.act.helpers import _fill_with_playwright
+        from apply.common.fill_runner import fill_page as _fill_with_playwright
         page = MagicMock()
         page.evaluate.return_value = ""
         field = {
@@ -295,10 +295,10 @@ class AutoConsentScoped(unittest.TestCase):
             "placeholder": "", "autocomplete": "", "role": "",
             "accept": None,
         }
-        with patch("apply.act.helpers.load_state", return_value={}), \
-             patch("apply.strategies.dispatch.field_deterministic", return_value=True), \
-             patch("apply.act.helpers.resolve") as resolve_mock, \
-             patch("apply.common.resolve._build_ephemeral", return_value={}), \
+        with patch("apply.common.fill_runner.load_state", return_value={}), \
+             patch("apply.common.fill_runner.field_deterministic", return_value=True), \
+             patch("apply.common.fill_runner.resolve") as resolve_mock, \
+             patch("apply.common.fill_runner._build_ephemeral", return_value={}), \
              patch.dict(os.environ, {"JI_AUTO_CONSENT": "1"}):
             resolve_mock.return_value.value = None
             resolve_mock.return_value.provenance = "no_match"
@@ -308,7 +308,7 @@ class AutoConsentScoped(unittest.TestCase):
 
     def test_non_consent_checkbox_not_auto_checked(self):
         """'Current role' (work-history) must stay unfilled, not auto-true."""
-        from apply.act.helpers import _fill_with_playwright
+        from apply.common.fill_runner import fill_page as _fill_with_playwright
         page = MagicMock()
         field = {
             "label": "Current role", "tag": "INPUT", "type": "checkbox",
@@ -316,9 +316,9 @@ class AutoConsentScoped(unittest.TestCase):
             "placeholder": "", "autocomplete": "", "role": "",
             "accept": None,
         }
-        with patch("apply.act.helpers.load_state", return_value={}), \
-             patch("apply.act.helpers.resolve") as resolve_mock, \
-             patch("apply.common.resolve._build_ephemeral", return_value={}), \
+        with patch("apply.common.fill_runner.load_state", return_value={}), \
+             patch("apply.common.fill_runner.resolve") as resolve_mock, \
+             patch("apply.common.fill_runner._build_ephemeral", return_value={}), \
              patch.dict(os.environ, {"JI_AUTO_CONSENT": "1"}):
             resolve_mock.return_value.value = None
             resolve_mock.return_value.provenance = "no_match"

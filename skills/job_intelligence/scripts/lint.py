@@ -54,18 +54,10 @@ LEGIT = [
     '"outcome": "filled"', '"outcome": "failed"', '"outcome": "no_answer"',
     'accepted_unverified',  # reason-local string, not vocabulary
 ]
-# Dead-weight strings in USER-VISIBLE output. Lines are exempt when the
-# component is provably gated: skyvern_result/_skyvern_ok variables
-# (only set when the optional module imports) and guarded helpers.
+# Dead-weight strings in USER-VISIBLE output.
 DEAD_STRINGS = [
     r'Skyvern',
 ]
-DEAD_EXEMPT = ["skyvern_result", "_skyvern_ok", "skyvern_bridge",
-               "Handing off", "Skyvern run_id", "Skyvern fill failed",
-               "Skyvern: {status}", "poll Skyvern fill progress",
-               "fill_run_id", "_poll_skyvern", "SKYVERN_FILL",
-               "skyvern vision", "SKYVERN_VERIFY"]  # data-gated channels
-DEAD_SKIP_MODULES = {"skyvern_bridge.py"}  # the adapter module itself
 NESTED_DIRS = [
     os.path.join("apply", "apply"), os.path.join("lib", "lib"),
     os.path.join("apply", "lib"), os.path.join("tests", "tests"),
@@ -120,23 +112,12 @@ def check_dead_strings():
     fails = []
     for root, _dirs, files in os.walk(os.path.join(SKILL, "apply")):
         for f in files:
-            if not f.endswith(".py") or f in DEAD_SKIP_MODULES:
+            if not f.endswith(".py"):
                 continue
             p = os.path.join(root, f)
-            in_guarded = False
             for i, line in enumerate(open(p, encoding="utf-8"), 1):
                 code = _strip_comments(line)
                 if not code.strip():
-                    continue
-                # Block-level guard tracking: a def line mentioning skyvern
-                # (e.g. _poll_skyvern_fill) marks its whole body guarded —
-                # those functions are unreachable without the module.
-                if code.strip().startswith(("def ", "class ")):
-                    in_guarded = "skyvern" in code.lower()
-                    continue
-                if in_guarded:
-                    continue
-                if any(x in code for x in DEAD_EXEMPT):
                     continue
                 if "skyvern" in code.lower() and ("print" in code or
                                                   "emit_" in code or

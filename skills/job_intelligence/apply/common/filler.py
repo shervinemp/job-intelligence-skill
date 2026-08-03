@@ -44,8 +44,11 @@ def _frame_for_sel(page, sel):
 
 
 def _read_element_value(page, sel, ans=None, field=None):
-    """Read field value using FieldValueReader cascade.
-    Combobox-role fields skip StandardReader (phantom-success source)."""
+    """Read field value using the deterministic FieldValueReader cascade.
+    Combobox-role fields skip StandardReader (phantom-success source).
+    When the deterministic cascade comes back empty and an expected value
+    exists, the runner invokes the explicit gated vision escape — never
+    the other way around."""
     try:
         fr = _frame_for_sel(page, sel) or page
         if field is not None and _is_combobox(field):
@@ -55,7 +58,15 @@ def _read_element_value(page, sel, ans=None, field=None):
                 if v:
                     return v
             return ""
-        return _read_value(fr, sel, ans=ans)
+        v = _read_value(fr, sel, ans=ans)
+        if v:
+            return v
+        if ans:
+            from apply.common.value_reader import read_value_vision
+            vv = read_value_vision(fr, sel, ans=ans)
+            if vv:
+                return vv
+        return ""
     except Exception:
         return ""
 

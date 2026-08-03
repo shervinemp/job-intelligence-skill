@@ -245,7 +245,7 @@ def add_job(job_data, skip_known=False):
 def record_failure(jid, reason, detail=""):
     """Record a structured failure reason for a job."""
     from .events import event_add
-    from .pipeline import advance
+    from .pipeline import advance  # circular (pipeline→jobs) — keep lazy
     job = get_job(jid)
     if not job:
         return
@@ -255,14 +255,13 @@ def record_failure(jid, reason, detail=""):
 
 def failure_stats():
     """Aggregate failure reasons across failed jobs."""
-    from .state import load_state
-    state = load_state()
-    from collections import Counter
-    reasons = Counter()
-    for jid, job in state["jobs"].items():
-        if job.get("state") == "failed" and job.get("error"):
-            reasons[job["error"]] += 1
-    return [{"error": k, "cnt": v} for k, v in reasons.most_common(20)]
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT error, COUNT(*) as cnt FROM jobs "
+        "WHERE state='failed' AND error IS NOT NULL AND error != '' "
+        "GROUP BY error ORDER BY cnt DESC LIMIT 20"
+    ).fetchall()
+    return [{"error": r["error"], "cnt": r["cnt"]} for r in rows]
 
 
 def advance_job(jid, new_stage, **updates):
@@ -322,9 +321,11 @@ def next_pending_job():
 
 
 def get_failed_jobs():
-    from .state import load_state
-    state = load_state()
-    return [(jid, job) for jid, job in state["jobs"].items() if job.get("state") == "failed"]
+    conn = get_conn()
+    rows = conn.execute(
+        f"SELECT {_JOBS_COLS} FROM jobs WHERE state='failed' ORDER BY created_at"
+    ).fetchall()
+    return [(r["id"], _row_to_job(r)) for r in rows]
 
 
 def search_jobs(query, stage=None, limit=50):

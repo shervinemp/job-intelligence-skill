@@ -23,6 +23,15 @@ def get_conn():
     return _conn
 
 
+def close():
+    """Close the singleton connection. Idempotent; public so callers
+    never poke _conn directly."""
+    global _conn
+    if _conn is not None:
+        _conn.close()
+        _conn = None
+
+
 def _import_legacy_auth_walls():
     old_path = AUTH_WALLS_PATH
     if not os.path.exists(old_path):

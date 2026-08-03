@@ -412,7 +412,18 @@ def _extract_password_hints_via_llm(page):
     """LLM fallback: ask local ask_api to extract password rules from
     visible page text. Returns the same dict shape as the deterministic
     parser, or None on any failure / unavailability.
+
+    Gated by the routing hierarchy (lib.automation.llm.allow): in
+    JI_LLM_MODE=auto this escape is OFF — the deterministic parser is
+    the source of truth; only `on` (experiments) permits it.
     """
+    try:
+        from lib.automation.llm import allow, set_last_status
+        if not allow("gap_fill"):
+            set_last_status("policy_off", "password-hint escape gated by JI_LLM_MODE")
+            return None
+    except Exception:
+        return None
     if page is None:
         return None
     try:
@@ -674,7 +685,17 @@ def _gen_password_via_llm(existing_pws, min_len, require_upper,
 
     Returns None if ask_api is unavailable or the model returns
     something unusable (too short, fails rules, contains spaces).
+    Gated by the routing hierarchy (lib.automation.llm.allow): in
+    JI_LLM_MODE=auto this escape is OFF — the secrets-based generator is
+    the source of truth; only `on` (experiments) permits it.
     """
+    try:
+        from lib.automation.llm import allow, set_last_status
+        if not allow("gap_fill"):
+            set_last_status("policy_off", "password-generation escape gated by JI_LLM_MODE")
+            return None
+    except Exception:
+        return None
     try:
         from lib import ask_api
         if not ask_api.available():

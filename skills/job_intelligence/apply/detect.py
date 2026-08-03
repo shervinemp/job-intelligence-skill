@@ -88,6 +88,6 @@ def run(jid):
              "title": title or "", "company": company or "", "type": job_type}
     if plat_name:
         state["platform"] = plat_name
-    from lib.config import atomic_write_json, STATE_PATH as _SP
-    atomic_write_json(_SP, state)
+    from apply.common.page_helpers import save_state
+    save_state(state)
     return 0

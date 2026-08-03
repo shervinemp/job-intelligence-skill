@@ -91,7 +91,7 @@ def _retry_fill_with_llm(jid, job, results):
     # auto-retry with LLM-mapped answers — that hides evidence and
     # guesses inside the hot path. Failures surface in the evidence
     # trail; the ORCHESTRATOR retries from reviewed evidence.
-    from apply.common.llm_policy import allow as _llm_allow
+    from lib.automation.llm import allow as _llm_allow
     if not _llm_allow("auto_retry"):
         return False
     from apply.common.page_helpers import load_state
@@ -134,7 +134,7 @@ def _retry_fill_with_llm(jid, job, results):
 
 def _retry_submit_with_llm(jid, job, results):
     # Policy-gated (auto_retry, OFF by default) — see _retry_fill_with_llm.
-    from apply.common.llm_policy import allow as _llm_allow
+    from lib.automation.llm import allow as _llm_allow
     if not _llm_allow("auto_retry"):
         return False
     from apply.common.page_helpers import load_state
@@ -195,7 +195,7 @@ def _process_one(jid, job, quick, max_pages, results):
     from apply.act.submit import cmd_submit
     from apply.common.page_helpers import load_state
     from lib.db import get_conn, find_duplicate
-    from apply.common.policy import resolve_mode
+    from apply.common.submit_policy import resolve_mode
 
     def _stage():
         row = get_conn().execute("SELECT stage FROM jobs WHERE id=?", (jid,)).fetchone()

@@ -162,7 +162,7 @@ def handle_captcha(page, state, wait_s=None, poll_s=3):
     # Policy skip: don't block a batch on a human solve — abort so the
     # caller records captcha_required (resumable when a human is present).
     try:
-        from apply.common.policy import load_policy
+        from apply.common.submit_policy import load_policy
         if load_policy().get("captcha_skip"):
             print("  CAPTCHA_SKIP: policy captcha_skip=true — aborting this step",
                   file=sys.stderr)
@@ -208,11 +208,20 @@ def load_state():
 
 def save_state(state):
     from lib.config import atomic_write_json
-    # RUNTIME CACHE ONLY — the dossier (results/{jid}/handoff.json) is the
+    # RUNTIME CACHE ONLY - the dossier (results/{jid}/handoff.json) is the
     # truth; this marker keeps every reader from mistaking scratch for
     # authority (see terms glossary: "dossier" vs "profile").
     state["_role"] = "runtime_cache"
     atomic_write_json(STATE_PATH, state)
+
+
+def clear_runtime_state(jid):
+    """Reset the runtime cache when it belongs to this job (reject/undo).
+    The dossier remains the truth; this drops job-scoped scratch —
+    including the submit_clicked one-shot flag."""
+    st = load_state()
+    if st.get("jid") == jid:
+        save_state({})
 
 
 def read_page(p, custom_widgets=None):

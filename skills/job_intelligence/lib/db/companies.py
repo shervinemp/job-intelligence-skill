@@ -3,6 +3,7 @@
 import hashlib
 from datetime import datetime
 
+from .jobs import _row_to_job
 from .schema import _JOBS_COLS, get_conn
 
 
@@ -65,7 +66,6 @@ def company_search(query, limit=20):
 
 
 def company_list_jobs(company_name):
-    from .jobs import _row_to_job
     c = get_conn()
     rows = c.execute(
         f"SELECT {_JOBS_COLS} FROM jobs WHERE company=? ORDER BY created_at DESC",
