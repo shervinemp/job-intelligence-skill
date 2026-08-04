@@ -26,8 +26,6 @@ Before running pipeline, read these:
 | `reach.py email/message/connect <jid>` | Send email / LinkedIn DM / connect request |
 | `apply.py detect/act/verify <jid>` | Follow apply pipeline |
 
-> `tailor.py` crafts one job at a time. Use `--auto` to process all described jobs with rate-limit handling.
-
 ## Change protocol (cooked-in lessons — do NOT skip)
 
 After ANY hot-path change (fill/check/submit/resolve/shadow/terms):
@@ -63,9 +61,9 @@ proof of intent.
 | `enrich.py retry` | Retry failed |
 | `enrich.py retry-skipped` | Reset skipped → extracted |
 | `enrich.py open [<jid>]` | Open in Chrome |
-| `tailor.py [--auto]` | Start tailoring (crafst 1, --auto = all) |
+| `tailor.py [--jid <jid>] [--auto]` | Start tailoring (crafts 1; --auto = all described) |
 | `tailor.py admit <jid>` | Confirm → stage = tailored (auto-finds resume in results dir) |
-| `tailor.py build <jid>` | Validate resume.json schema + quality, build PDFs |
+| `python -m lib.build_resume <resume.json> <out_dir>` | Validate schema + build CV/cover PDFs (`--validate` = check only) |
 | `tailor.py reject <jid>` | Skip |
 | `tailor.py undo <jid>` | Move back one stage |
 | `tailor.py review [--jobs N]` | Review tailored jobs (approve or retry --feedback) |
@@ -91,6 +89,10 @@ proof of intent.
 | `report.py widgets` | Unhandled widget-class backlog (probe-failure artifacts) |
 | `gmail-cli send <to> <subject> --body <text>` | Send email (low-level) |
 | `gmail-cli auth add <email> --services gmail.send` | Auth Gmail send scope |
+| `extract.py auto` | Auto-extract URLs from staged emails |
+| `apply.py registry <action>` | Probe observations: candidates / confirm / clear / corpus / failures / drift |
+| `report.py candidates [--limit N]` | Tailored jobs ready to apply |
+| `report.py archive` | Archive state/registry entries for reset jobs |
 
 
 ## Tailoring
@@ -101,8 +103,8 @@ Two backends via `JI_TAILOR` env var:
 
 - **`JI_TAILOR=agent`** (default): Prompt printed to stdout. Write `resume.json` in [JSON Resume](https://jsonresume.org/) format (standard — LLMs already know it). Build and admit:
   ```
-  tailor.py build <jid>                # schema validation + PDF generation
-  tailor.py admit <jid>                # confirm and advance stage (auto-finds resume)
+  python -m lib.build_resume results/<jid>/resume.json results/<jid>   # validate + PDFs
+  tailor.py admit <jid>                # grounding gate + advance stage
   ```
   The LLM reads the generated resume.json and PDFs to judge quality before admitting.
 - **`JI_TAILOR=gem`**: Uses Gemini Web gem. Gem generates `resume.json`, builder runs inline. Run `admit <jid>` to confirm + advance stage.
@@ -126,7 +128,7 @@ If the cover letter or CV needs fixes: `retry <jid> --feedback "what to fix"` �
 
 The `resume.json` data file lives at `results/<jid>/resume.json`. You can read it directly to check for quality issues: does it mention the company name? Does it pander? Are there fabricated metrics? JSON is easier to audit than fpdf2 code.
 
-The builder also validates the JSON before generating PDFs — run `--validate` separately to check without building:
+The builder also validates the JSON before generating PDFs — run `python -m lib.build_resume --validate <resume.json>` to check without building.
 
 ## Apply pipeline
 
@@ -140,9 +142,10 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS. Auto-clicks "Apply now" on job listing pages. Prompts for login on auth wall — cookies persist via Chrome profile. |
 | `act --fill <jid> [--answers '{}']` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
-| `act --back <jid>` | Click Back |
 | `act --submit <jid>` | Submit. Runs pre-submit check (incl. cross-field coherence) + regression canary. Sets `submit_clicked` flag before clicking. Investigates (no re-click) on retry. `--force` clears guard + gates. |
-| `act --inspect <jid> [--candidate N]` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
+| `act --check <jid>` | Pre-submit validation: cross-field contradictions |
+| `act --inspect <jid>` | Full diagnostic: screenshot + HTML dump + probes + fields + buttons + dialog/iframe detection. Use when stuck. |
+| `act --investigate <jid>` | Deep-analyze unknown platform |
 | `verify <jid>` | Scan open pages for success signals + optional vision check. Updates DB stage to "applied" if confirmed. |
 | `apply.py reject <jid>` | Skip permanently |
 | `apply.py flag <jid>` | Toggle auth wall flag |
@@ -175,54 +178,42 @@ act --fill → Catalogs every field on the page.
 act --fill --answers '{"label": "value"}' → Fill fields marked ❓.
     • Fill ALL required fields in one shot. SPA forms wipe everything on validation error.
     • Only fill fields you're confident about.
-    • Check every value against profile answers. Don't contradict.
+    • Check every value against profile answers (rule 10).
     • Leave salary, dates, referral source unfilled unless profile has them.
     • The preview shows provenance (profile/answers/derived/auto_decline)
       for every value. Check it before confirming.
     • If unfilled remain, repeat with more --answers.
-
-─── PHASE 4.5: PREVIEW (MANDATORY) ───
-act --submit → Read every value in the preview.
-    Compare against Profile answers block. Flag contradictions.
 
 ─── PHASE 4: NAVIGATE & REPEAT ───
 act --next → Advance to next page.
              If submission detected → routed to --submit.
              If validation errors → routed back to --fill.
 
+─── PHASE 4.5: PREVIEW (MANDATORY) ───
+act --submit → Read every value in the preview against the
+               Profile answers block (rule 7).
+
 ─── PHASE 5: SUBMIT (ONE-SHOT) ───
-act --submit → Pre-submit check runs automatically.
-              Submit is clicked ONCE. The pipeline records submit_clicked
-              before clicking. If the outcome is uncertain (no success
-              signal, no validation error), it marks as applied
-              conservatively and flags for review.
-              On the next run, if submit_clicked is set, the pipeline
-              INVESTIGATES the page — success text, URL change, form
-              disappearance, validation errors, vision API — it does
-              NOT click submit again.
-              Use --force only after human confirms the previous
-              attempt truly failed.
+act --submit → Pre-submit check runs automatically. Submit is clicked
+               ONCE (submit_clicked recorded first). Uncertain outcome →
+               next run INVESTIGATES, never re-clicks; only --force after
+               human confirms failure (rules 12-13).
 
 ─── PHASE 6: VERIFY ───
-verify → Confirm the application was received.
-          Never skip this step. If STATUS was "uncertain", verify
-          is especially important — check email for confirmation,
-          or visit the ATS page to check application status.
+verify → Confirm the application was received (rule 4). Never skip
+         this step; after STATUS "uncertain" check email or the ATS
+         page for confirmation.
 ```
 
 ### Apply tips
 
-- Omit JID on `detect` to auto-pick the first tailored job from the queue.
 - Auth walls: navigate prompts for login. Log in via the open browser, press Enter to continue. Type `flag` to skip. Cookies persist via Chrome profile — same platform won't re-prompt.
 - `--answers` — normalized exact match (case/punctuation insensitive). Full label text.
-- `--candidate N` — picks from CANDIDATES list. Works on --fill/--next/--submit/--inspect.
 - Fill report shows resolved answers and field detection for each field.
-- Multi-page: fill → next → fill → ... until Submit appears or verify passes.
 - Guest apply: auto-clicks "continue without signing in" when available.
-- Pipeline cannot create accounts, remember passwords, or handle 2FA.
 - 3x guard: same page 3 fills in a row → warns.
 - EEO/demographic fields: auto-detected by decline-option presence (language-agnostic). Saved answers persist under `common_answers.eeo` for reuse.
-- Platform registry (`apply/registry/*.yaml`): per-ATS config. `handler_class` field loads `PlatformHandler` from `apply/handlers/`. See `handler_base.py` header for add-platform guide.
+- Platform registry (`apply/registry/*.yaml`): per-ATS widget config, auto-resolved from the page URL — no caller changes needed.
 
 ## Reach (outreach)
 
@@ -261,7 +252,6 @@ Platform-specific notes live in `apply/registry/*.yaml` under the `notes:` field
 
 ## Account & login notes
 
-- Guest apply auto-clicked when available.
 - Repeat portals (e.g., 2nd Workday): guest apply works but creates new account per company. No credential reuse.
 - Pipeline cannot create accounts, remember passwords, handle 2FA. Login walls need manual intervention.
 
@@ -328,13 +318,11 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 
 - **JI_TAILOR**: `"agent"` (default) = SLM writes `resume.json`, `admit` confirms. `"gem"` = Gemini Web gem.
 - **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
-- **LinkedIn title dedup**: Cards repeat title — `linkedin_scraper.py` deduplicates by matching repeated half.
+- **LinkedIn title dedup**: Cards repeat title — duplicates are detected at add time via `find_duplicate` in `lib/db/jobs.py`.
 - **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
 - **EEO detection**: Uses decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic, zero false positives. Saved under `common_answers.eeo` sub-key.
 - **Chrome lifecycle**: Pipeline starts its own Chrome instance on a free port (never reuses user's browser). Port persisted to `chrome-config.json` across processes. Profile lives at `~/.ji/chrome-profile/` — sessions (cookies, localStorage) persist between pipeline runs.
-- **Injected agent** (`apply/common/agent.js`): Auto-injected into every page via `context.add_init_script()` in `chrome_manager.connect()`. Provides `window.__opencode` with framework auto-detection, unified `setValue()` (jQuery → React nativeValueSetter → vanilla), `click()` with disabled re-enable, `fillAutocomplete(label, value)` for multiselect dropdowns (Province, Country), MutationObserver field discovery (no polling), value change tracking, and console error capture. Bridge wrapper at `apply/common/agent_bridge.py` with `fill_autocomplete()` helper. All calls use optional chaining — if agent fails to inject, pipeline falls through to legacy strategies with zero regressions.
 - **PDF guard**: `detect` refuses to proceed if stage is `tailored` but no Resume PDF exists. Run `tailor.py undo <jid> && tailor.py --jid <jid>` to regenerate.
-- **Platform registry**: `apply/registry/*.yaml` defines per-ATS configs (`widget_parent` selector, custom widgets). Auto-resolved from page URL — no caller changes needed.
 - **Gems**: `categories.json` → `gems.json` → `gemini.js` resolution chain.
 - **Type normalization at boundaries**: All external data sources (profile.json, --answers JSON, common_answers) are normalized to their expected types at the load point, not at each consumer. If a value can be int or string (`"salary": 120000`), it's normalized to string once. If `common_answers` is accidentally a string instead of dict, it's coerced to `{}` at validation time. Add new normalizations to `_validate_profile` in `act.py` or the `--answers` parse block — never guard at individual access sites.
 - **Provenance tracking**: Every filled field is tagged with its source (`profile`, `answers`, `auto_decline`, `file`). The submit preview groups fields by provenance so all LLM-provided answers appear in one block for self-audit. Cross-page field values are tracked in `_field_values_history` and compared at submit time via `_reconcile_fields` — mismatches are printed before confirm.

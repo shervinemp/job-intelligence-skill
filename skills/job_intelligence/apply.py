@@ -70,7 +70,7 @@ def main():
     nav_p = sub.add_parser("navigate", help="LinkedIn -> External ATS")
     nav_p.add_argument("jid", help="Job ID")
 
-    act_p = sub.add_parser("act", help="Fill / next / submit / inspect / investigate (hybrid Playwright+Skyvern)")
+    act_p = sub.add_parser("act", help="Fill / next / submit / inspect / investigate")
     act_p.add_argument("jid", help="Job ID")
     act_p.add_argument("--fill", action="store_true", help="Fill the application form")
     act_p.add_argument("--next", action="store_true", help="Next page on multi-step form")
@@ -78,10 +78,10 @@ def main():
     act_p.add_argument("--force", action="store_true", help="Force submit, skipping pre-submit check")
     act_p.add_argument("--inspect", action="store_true", help="Analyze the page (screenshot, fields, buttons)")
     act_p.add_argument("--check", action="store_true", help="Pre-submit validation: flag contradictions before submitting")
-    act_p.add_argument("--investigate", action="store_true", help="Deep-analyze unknown platform (Skyvern investigator)")
+    act_p.add_argument("--investigate", action="store_true", help="Deep-analyze unknown platform")
     act_p.add_argument("--answers", help="JSON field->value mapping for --fill")
     act_p.add_argument("--no-verify", action="store_true", help="Skip vision verification after fill")
-    act_p.add_argument("--quick", action="store_true", help="Deterministic-only pass: no vision, no Skyvern")
+    act_p.add_argument("--quick", action="store_true", help="Deterministic-only pass: no vision")
     act_p.add_argument("--max-pages", type=int, default=4, help="Max form pages to fill in one --fill run")
 
     verify_p = sub.add_parser("verify", help="Check submission result")

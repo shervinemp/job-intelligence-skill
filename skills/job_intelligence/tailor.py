@@ -86,7 +86,7 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         prompt = instructions + "\n\n---\n\n" + prompt
         prompt += "\n\nWrite the resume.json file with the tailored JSON Resume data."
         print(f"PROMPT: {os.path.join(RESULTS_DIR, job_id, 'prompt.txt')}", file=sys.stderr)
-        print(f"  Write resume.json, then: tailor.py build {job_id} && tailor.py admit {job_id}", file=sys.stderr)
+        print(f"  Write resume.json, then: python -m lib.build_resume {os.path.join(RESULTS_DIR, job_id, 'resume.json')} {os.path.join(RESULTS_DIR, job_id)} && tailor.py admit {job_id}", file=sys.stderr)
         return True, {"text": prompt, "response_path": None, "scripts": []}
 
     # Gem route — output JSON block (gem has instructions built-in)
@@ -172,7 +172,7 @@ def cmd_craft(auto=False):
     try:
         success, result = generate_tailored_docs(entry)
         if success and os.environ.get("JI_TAILOR", "agent") == "agent":
-            print(f"  PROMPT_READY {jid} — review prompt.txt, create resume.json, then run 'tailor.py build {jid} && tailor.py admit {jid}'", file=sys.stderr)
+            print(f"  PROMPT_READY {jid} — review prompt.txt, create resume.json, then run 'python -m lib.build_resume {os.path.join(RESULTS_DIR, jid, 'resume.json')} {os.path.join(RESULTS_DIR, jid)}' && 'tailor.py admit {jid}'", file=sys.stderr)
         elif success:
             print(f"  COMPLETE {jid} — run 'tailor.py review --jid {jid}'", file=sys.stderr)
         else:
@@ -210,7 +210,7 @@ def craft_jid(jid):
     success, result = generate_tailored_docs(entry)
     if success:
         mode = os.environ.get("JI_TAILOR", "agent")
-        print(f"  PROMPT_READY {jid} — review prompt.txt, create resume.json, then run 'tailor.py build {jid} && tailor.py admit {jid}'" if mode == "agent" else f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check", file=sys.stderr)
+        print(f"  PROMPT_READY {jid} — review prompt.txt, create resume.json, then run 'python -m lib.build_resume {os.path.join(RESULTS_DIR, jid, 'resume.json')} {os.path.join(RESULTS_DIR, jid)}' && 'tailor.py admit {jid}'" if mode == "agent" else f"  COMPLETE {jid} — run 'admit {jid}' to confirm, or 'review' to check", file=sys.stderr)
     else:
         err_str = str(result)[:120]
         if any(x in err_str for x in ["RATE_LIMIT", "Chrome not responding", "[gemini]"]):
