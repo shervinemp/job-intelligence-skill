@@ -269,6 +269,10 @@ def can_message(ctx, profile_url):
 def send_message(ctx, profile_url, message_body, name=None, timeout=30):
     """Send a LinkedIn DM to the given profile.
 
+    Hard sandbox: refuses to transmit while JI_TESTS is set (the pytest
+    session sets it via tests/conftest.py), so no test — no matter how
+    its mocks resolve — can reach a real send.
+
     VERIFIED flow (2026-07): the compose URL recipient params do NOT resolve
     the recipient. The working path is the recipient typeahead on
     /messaging/thread/new/:
@@ -287,6 +291,11 @@ def send_message(ctx, profile_url, message_body, name=None, timeout=30):
         {"status": "sent"|"uncertain"|"failed"|"connect_required"|"premium_required"|"error",
          "conversation_url": str, "detail": str}
     """
+    import os
+    if os.environ.get("JI_TESTS"):
+        return {"status": "sandbox_refused",
+                "detail": "JI_TESTS is set — transmission refused (test runner)"}
+
     if not name:
         return {"status": "error", "detail": "contact name required for typeahead flow"}
 
@@ -441,6 +450,10 @@ def _click_send(page):
 def send_connect_request(ctx, profile_url, note=""):
     """Send a LinkedIn connection request with optional note.
 
+    Hard sandbox: refuses to transmit while JI_TESTS is set (the pytest
+    session sets it via tests/conftest.py), so no test — no matter how
+    its mocks resolve — can reach a real send.
+
     VERIFIED (2026-07-30): navigating DIRECTLY to the Connect link's
     /preload/custom-invite/?vanityName={username} URL renders the
     send-invite modal as a page — no click needed. Modal structure:
@@ -458,6 +471,11 @@ def send_connect_request(ctx, profile_url, note=""):
     Returns:
         {"status": "sent"|"uncertain"|"failed"|"already_connected"|"error", "detail": str}
     """
+    import os
+    if os.environ.get("JI_TESTS"):
+        return {"status": "sandbox_refused",
+                "detail": "JI_TESTS is set — transmission refused (test runner)"}
+
     page = ctx.new_page()
     try:
         username = _extract_profile_id(profile_url)

@@ -24,9 +24,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from lib.contacts import discover_contacts
 from lib.db import get_conn, get_job, pipeline_status
 from lib.db.contacts import (
-    contact_list,
-    contact_update,
-    attempt_add,
+    attempt_add, contact_add, contact_list, contact_update,
+    attempt_list,
 )
 from lib.db.events import event_add
 from lib.linkedin_messaging import (
@@ -36,6 +35,42 @@ from lib.linkedin_messaging import (
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 GMAIL_CLI = os.path.join(SKILL_DIR, "..", "gmail-cli", "gmail_cli.py")
+
+
+def _prior_outreach(conn, contact):
+    """Any sent/pending outreach to the SAME PERSON on any OTHER contact row.
+
+    One-shot guards are per contact row, so the same person discovered on
+    two jobs (or twice within a job) gets two rows and nothing blocks the
+    second message — that repeat would give away the automation. Matches
+    on linkedin_url or email, and counts both flag-based sends and
+    attempts (covers the 'uncertain' path, which never sets reached_out).
+    The current row itself is excluded so a connect -> DM funnel on one
+    row keeps working."""
+    url = (contact.get("linkedin_url") or "").strip()
+    email = (contact.get("email") or "").strip()
+    if not url and not email:
+        return None
+    q = ("SELECT c.job_id, c.name, a.channel, a.status, a.created_at "
+         "FROM contacts c LEFT JOIN contact_attempts a ON a.contact_id = c.id "
+         "WHERE c.id != ? "
+         "AND (c.linkedin_url = ? OR (c.email != '' AND c.email IS NOT NULL AND c.email = ?)) "
+         "AND (c.reached_out = 1 OR a.status IN ('sent', 'pending')) "
+         "ORDER BY a.created_at DESC LIMIT 1")
+    return conn.execute(q, (contact["id"], url, email)).fetchone()
+
+
+def _block_if_prior(conn, contact, force):
+    """Cross-job/duplicate-row one-shot gate shared by email/message/connect."""
+    prior = _prior_outreach(conn, contact)
+    if prior and not force:
+        print(f"ALREADY_REACHED: {contact.get('name','')} was already contacted "
+              f"for job {prior['job_id'][:8]} "
+              f"({prior['channel'] or '?'}/{prior['status'] or 'sent'}) — "
+              f"one-shot guard. Use --force to override.",
+              file=sys.stderr)
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +185,9 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
         print(f"Already emailed {name}. Use --force to re-send.", file=sys.stderr)
         return
 
+    if _block_if_prior(conn, contact, force):
+        return
+
     # Get job info for subject
     job = get_job(jid)
     company = job.get("company", "") if job else ""
@@ -180,6 +218,11 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
         print(f"  Subject: {subject}", file=sys.stderr)
         print(f"  Body:\n{body_text}\n", file=sys.stderr)
         print(f"NEXT: reach.py email {jid} --contact {contact_idx}  (remove --dry-run to send)", file=sys.stderr)
+        return
+
+    if os.environ.get("JI_TESTS"):
+        print(f"TEST_SANDBOX: transmission refused under the test runner — "
+              f"remove JI_TESTS from the environment to send.", file=sys.stderr)
         return
 
     # Send via gmail-cli
@@ -255,6 +298,22 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
         print(f"Already messaged {name} on LinkedIn. Use --force to re-send.", file=sys.stderr)
         return
 
+    if _block_if_prior(conn, contact, force):
+        return
+
+    if not force:
+        pending = conn.execute(
+            "SELECT 1 FROM contact_attempts WHERE contact_id=? AND status='pending' LIMIT 1",
+            (contact["id"],),
+        ).fetchone()
+        if pending:
+            print(f"UNCERTAIN_SEND: {name} has an unconfirmed previous send — "
+                  f"verify in the LinkedIn inbox, then "
+                  f"reach.py update {jid} --contact {contact_idx} --set-sent message, "
+                  f"or re-send with --force.",
+                  file=sys.stderr)
+            return
+
     # Get job info
     job = get_job(jid)
     company = job.get("company", "") if job else ""
@@ -289,6 +348,11 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
     b, ctx = connect(timeout=30)
     if not ctx:
         print("ERROR: Could not connect to Chrome.", file=sys.stderr)
+        return
+
+    if os.environ.get("JI_TESTS"):
+        print(f"TEST_SANDBOX: transmission refused under the test runner — "
+              f"remove JI_TESTS from the environment to send.", file=sys.stderr)
         return
 
     try:
@@ -335,7 +399,7 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
 # Connect
 # ---------------------------------------------------------------------------
 
-def cmd_connect(jid, contact_idx=1, note=None):
+def cmd_connect(jid, contact_idx=1, note=None, force=False):
     contacts = contact_list(job_id=jid)
     if not contacts:
         print(f"No contacts for {jid}.", file=sys.stderr)
@@ -354,6 +418,9 @@ def cmd_connect(jid, contact_idx=1, note=None):
         print(f"No LinkedIn URL for {name}.", file=sys.stderr)
         return
 
+    if _block_if_prior(conn, contact, force):
+        return
+
     job = get_job(jid)
     company = job.get("company", "") if job else ""
 
@@ -364,6 +431,11 @@ def cmd_connect(jid, contact_idx=1, note=None):
     b, ctx = chrome_connect(timeout=30)
     if not ctx:
         print("ERROR: Could not connect to Chrome.", file=sys.stderr)
+        return
+
+    if os.environ.get("JI_TESTS"):
+        print(f"TEST_SANDBOX: transmission refused under the test runner — "
+              f"remove JI_TESTS from the environment to send.", file=sys.stderr)
         return
 
     try:
@@ -491,9 +563,11 @@ def cmd_retry(jid):
 def cmd_undo(jid):
     conn = get_conn()
     conn.execute("UPDATE contacts SET email_sent=0, message_sent=0, reached_out=0 WHERE job_id=?", (jid,))
+    conn.execute("DELETE FROM contact_attempts WHERE contact_id IN "
+                 "(SELECT id FROM contacts WHERE job_id=?)", (jid,))
     conn.execute("UPDATE jobs SET outreach_attempted=0 WHERE id=?", (jid,))
     conn.commit()
-    print(f"Undone: contact state reset for {jid}", file=sys.stderr)
+    print(f"Undone: contact state + attempts reset for {jid}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +620,8 @@ def main():
     connect_p.add_argument("jid", help="Job ID")
     connect_p.add_argument("--contact", type=int, default=1, help="Contact index from list (1-based)")
     connect_p.add_argument("--note", help="Connection request note")
+    connect_p.add_argument("--force", action="store_true",
+                           help="Override the cross-job one-shot guard")
 
     update_p = sub.add_parser("update", help="Backfill or edit contact fields")
     update_p.add_argument("jid", help="Job ID")
@@ -580,11 +656,14 @@ def main():
     elif args.command == "list":
         cmd_list(args.jid)
     elif args.command == "email":
-        cmd_email(args.jid, contact_idx=args.contact, dry_run=args.dry_run, body=args.body, body_file=args.body_file, force=args.force)
+        cmd_email(args.jid, contact_idx=args.contact, dry_run=args.dry_run,
+                  body=args.body, body_file=args.body_file, force=args.force)
     elif args.command == "message":
-        cmd_message(args.jid, contact_idx=args.contact, dry_run=args.dry_run, body=args.body, body_file=args.body_file, force=args.force)
+        cmd_message(args.jid, contact_idx=args.contact, dry_run=args.dry_run,
+                    body=args.body, body_file=args.body_file, force=args.force)
     elif args.command == "connect":
-        cmd_connect(args.jid, contact_idx=args.contact, note=args.note)
+        cmd_connect(args.jid, contact_idx=args.contact, note=args.note,
+                    force=args.force)
     elif args.command == "update":
         cmd_update(args.jid, contact_idx=args.contact, email=args.email, note=args.note, set_sent=args.set_sent)
     elif args.command == "attempts":
