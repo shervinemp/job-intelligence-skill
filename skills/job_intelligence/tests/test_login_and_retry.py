@@ -126,7 +126,7 @@ class AutoLLMRetryFill(unittest.TestCase):
              patch("apply.common.page_helpers.load_state",
                    return_value={"remaining_fields": [{"label": "Email"}]}), \
              patch("apply.act.helpers._load_profile", return_value={}), \
-             patch("apply.act.suggest.llm_field_key_mapping",
+             patch("apply.common.fill_runner.llm_field_key_mapping",
                    return_value={"Email": "a@b.com"}) as map_mock, \
              patch("apply.act.fill.cmd_fill", return_value=0) as fill_mock, \
              patch("apply.act.check.cmd_check", return_value=0):
@@ -140,7 +140,7 @@ class AutoLLMRetryFill(unittest.TestCase):
              patch("apply.common.page_helpers.load_state",
                    return_value={"remaining_fields": [{"label": "Email"}]}), \
              patch("apply.act.helpers._load_profile", return_value={}), \
-             patch("apply.act.suggest.llm_field_key_mapping", return_value={}):
+             patch("apply.common.fill_runner.llm_field_key_mapping", return_value={}):
             self.assertFalse(_retry_fill_with_llm("jid", {}, None))
 
 
@@ -165,7 +165,7 @@ class AutoLLMRetrySubmit(unittest.TestCase):
                    return_value={"submit_errors":
                                  ["Missing entry for required field: Email"]}), \
              patch("apply.act.helpers._load_profile", return_value={}), \
-             patch("apply.act.suggest.llm_field_key_mapping",
+             patch("apply.common.fill_runner.llm_field_key_mapping",
                    return_value={"Email": "a@b.com"}), \
              patch("apply.act.fill.cmd_fill", return_value=0), \
              patch("apply.act.check.cmd_check", return_value=0), \
@@ -180,7 +180,7 @@ class AutoLLMRetrySubmit(unittest.TestCase):
                    return_value={"submit_errors":
                                  ["Missing entry for required field: Email"]}), \
              patch("apply.act.helpers._load_profile", return_value={}), \
-             patch("apply.act.suggest.llm_field_key_mapping",
+             patch("apply.common.fill_runner.llm_field_key_mapping",
                    return_value={"Email": "a@b.com"}), \
              patch("apply.act.fill.cmd_fill", return_value=0), \
              patch("apply.act.check.cmd_check", return_value=0), \

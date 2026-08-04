@@ -44,7 +44,7 @@ class GapFillFailClosed(unittest.TestCase):
     def _run(self, gap_map, fields, profile):
         from apply.common.fill_runner import gap_fill_into_answers as _gap_fill_into_answers
         with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
-             patch("apply.act.suggest.llm_field_key_mapping",
+             patch("apply.common.fill_runner.llm_field_key_mapping",
                    return_value=gap_map), \
              patch("lib.db.get_job", return_value={}):
             return _gap_fill_into_answers(fields, profile, {}, "j", None)

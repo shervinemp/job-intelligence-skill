@@ -474,11 +474,6 @@ def _detect_submit_button(page) -> str | None:
                     const t = b.textContent.trim().toLowerCase();
                     if (t === "submit" || t === "submit application" || t === "send" || t === "send application") return t;
                 }
-                // Fallback: any button with 'submit' in text
-                for (const b of dlgBtns) {
-                    const t = b.textContent.trim().toLowerCase();
-                    if (t.includes('submit') && t.length < 30) return t;
-                }
             }
             // Fallback: check page-level buttons
             const all = document.querySelectorAll('button');

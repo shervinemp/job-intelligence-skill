@@ -99,7 +99,7 @@ def _retry_fill_with_llm(jid, job, results):
     from apply.act.check import cmd_check
     from lib.ask_api import available as llm_avail
     from apply.act.helpers import _load_profile
-    from apply.act.suggest import llm_field_key_mapping
+    from apply.common.fill_runner import llm_field_key_mapping
 
     if not llm_avail():
         print("  LLM unavailable — cannot retry fill", file=sys.stderr)
@@ -143,7 +143,7 @@ def _retry_submit_with_llm(jid, job, results):
     from apply.act.submit import cmd_submit
     from lib.ask_api import available as llm_avail
     from apply.act.helpers import _load_profile
-    from apply.act.suggest import llm_field_key_mapping
+    from apply.common.fill_runner import llm_field_key_mapping
 
     def _stage():
         from lib.db import get_conn

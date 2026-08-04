@@ -122,7 +122,7 @@ class GapFillValidationGate(unittest.TestCase):
         ]
         profile = {}
         with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
-             patch("apply.act.suggest.llm_field_key_mapping",
+             patch("apply.common.fill_runner.llm_field_key_mapping",
                    return_value={"Place you call home": "https://evil.example",
                                  "Nation": "Canada"}), \
              patch("lib.db.get_job", return_value={}):
@@ -135,7 +135,7 @@ class GapFillValidationGate(unittest.TestCase):
         fields = [{"label": "GitHub", "tag": "INPUT", "type": "url"}]
         profile = {"github": "https://github.com/shervinemp"}
         with patch.dict("os.environ", {"JI_LLM_MODE": "on"}), \
-             patch("apply.act.suggest.llm_field_key_mapping",
+             patch("apply.common.fill_runner.llm_field_key_mapping",
                    return_value={"GitHub": "https://github.com/shervinemp"}), \
              patch("lib.db.get_job", return_value={}):
             ans = _gap_fill_into_answers(fields, profile, {}, "j", None)
