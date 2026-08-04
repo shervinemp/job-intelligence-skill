@@ -97,38 +97,7 @@ proof of intent.
 
 ## Tailoring
 
-Data/build separation: the LLM writes a `resume.json` data file (no code). A shared builder (`lib/build_resume.py`) reads the JSON and produces PDFs. The JSON is easy to review for quality issues (pandering, hallucination, title creep) without parsing code.
-
-Two backends via `JI_TAILOR` env var:
-
-- **`JI_TAILOR=agent`** (default): Prompt printed to stdout. Write `resume.json` in [JSON Resume](https://jsonresume.org/) format (standard — LLMs already know it). Build and admit:
-  ```
-  python -m lib.build_resume results/<jid>/resume.json results/<jid>   # validate + PDFs
-  tailor.py admit <jid>                # grounding gate + advance stage
-  ```
-  The LLM reads the generated resume.json and PDFs to judge quality before admitting.
-- **`JI_TAILOR=gem`**: Uses Gemini Web gem. Gem generates `resume.json`, builder runs inline. Run `admit <jid>` to confirm + advance stage.
-
-Both routes converge on `admit` — gem route auto-builds PDFs, agent route requires manual build step. `admit` advances DB stage to "tailored" (CV ready). Apply pipeline advances to "applied" (form submitted).
-
-**Cover letter** is stored in the `coverLetter` field of the JSON Resume (custom extension). The builder automatically generates a separate Cover Letter PDF if this field is present. The cover letter text is plain text (no markdown), maximum 3 paragraphs, no logistics (salary, availability dates).
-
-Prompt does not include default resume — fill in CV content from candidate profile + job requirements.
-
-## Quality Review
-
-After tailoring, optionally review generated CVs before admitting:
-
-```
-tailor.py review [--jobs N]
-```
-
-Shows the job title, URL, and cover letter from the generated PDF. Run `report.py inspect <jid>` for the full strategy.
-If the cover letter or CV needs fixes: `retry <jid> --feedback "what to fix"` — injects feedback + previous response and re-tailors immediately.
-
-The `resume.json` data file lives at `results/<jid>/resume.json`. You can read it directly to check for quality issues: does it mention the company name? Does it pander? Are there fabricated metrics? JSON is easier to audit than fpdf2 code.
-
-The builder also validates the JSON before generating PDFs — run `python -m lib.build_resume --validate <resume.json>` to check without building.
+Full guide in `tailoring.md`. The essentials: the LLM writes a `resume.json` data file (no code); `lib/build_resume.py` reads the JSON and produces PDFs; both `JI_TAILOR` routes converge on `tailor.py admit <jid>` (grounding gate + stage advance to "tailored").
 
 ## Apply pipeline
 
@@ -160,50 +129,7 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 
 ### Apply workflow — phased approach
 
-Each pipeline step has a distinct goal. Follow this mental model:
-
-```
-─── PHASE 1: RECONNAISSANCE ───
-detect → Read the page. Classify the type. Do NOT fill anything.
-          Output: TYPE: easy_apply / ats_direct / external / login_wall
-
-─── PHASE 2: FIELD INVENTORY ───
-act --fill → Catalogs every field on the page.
-                        Note fields resolved automatically (✅) vs.
-                        fields needing your input (❓).
-                        Do NOT provide --answers yet.
-                        Output: categorized DRY_RUN listing.
-
-─── PHASE 3: TARGETED FILLING ───
-act --fill --answers '{"label": "value"}' → Fill fields marked ❓.
-    • Fill ALL required fields in one shot. SPA forms wipe everything on validation error.
-    • Only fill fields you're confident about.
-    • Check every value against profile answers (rule 10).
-    • Leave salary, dates, referral source unfilled unless profile has them.
-    • The preview shows provenance (profile/answers/derived/auto_decline)
-      for every value. Check it before confirming.
-    • If unfilled remain, repeat with more --answers.
-
-─── PHASE 4: NAVIGATE & REPEAT ───
-act --next → Advance to next page.
-             If submission detected → routed to --submit.
-             If validation errors → routed back to --fill.
-
-─── PHASE 4.5: PREVIEW (MANDATORY) ───
-act --submit → Read every value in the preview against the
-               Profile answers block (rule 7).
-
-─── PHASE 5: SUBMIT (ONE-SHOT) ───
-act --submit → Pre-submit check runs automatically. Submit is clicked
-               ONCE (submit_clicked recorded first). Uncertain outcome →
-               next run INVESTIGATES, never re-clicks; only --force after
-               human confirms failure (rules 12-13).
-
-─── PHASE 6: VERIFY ───
-verify → Confirm the application was received (rule 4). Never skip
-         this step; after STATUS "uncertain" check email or the ATS
-         page for confirmation.
-```
+Phase-by-phase walkthrough in `apply-pipeline.md`. The pipeline is one-shot on submit: fill → next (repeat) → submit (preview + rules 12-13) → verify (rule 4).
 
 ### Apply tips
 
@@ -234,7 +160,7 @@ Optional parallel track after `enrich`/`tailor`. Contact discovery finds recruit
 2. **Don't fill optional fields.** Not marked required → leave it.
 3. **Don't echo PII.** Labels only, never values in output.
 4. **Always verify after `NEXT: verify`.** DB can be stale.
-5. **Inspect when stuck.** Don't retry blind.
+5. **Inspect when stuck.**
 6. **Don't collapse gates.** Dry-run → fill → preview → confirm. Each its own round-trip. See [#apply-pipeline](apply-pipeline).
 7. **Preview before submit.** Always run `act --submit` first. Read every value. Check against profile answers. Fix contradictions before proceeding.
 8. **One-shot fill for SPA forms.** Validation fail → page reloads → all values lost. Fill everything then submit once.
@@ -316,16 +242,7 @@ Notes are injected into the prompt after the job description. Clear with `"notes
 
 ## Technical notes
 
-- **JI_TAILOR**: `"agent"` (default) = SLM writes `resume.json`, `admit` confirms. `"gem"` = Gemini Web gem.
-- **Gemini.js**: `call_gemini.py` auto-detects `node_modules` (workspace root, parent chain).
-- **LinkedIn title dedup**: Cards repeat title — duplicates are detected at add time via `find_duplicate` in `lib/db/jobs.py`.
-- **Common_answers**: `--answers` exact → common_answers (exact optional, prefix required) → profile. Never pre-populate — save only user-provided values.
-- **EEO detection**: Uses decline-option content ("prefer not to answer", "decline"), not label keywords — language-agnostic, zero false positives. Saved under `common_answers.eeo` sub-key.
+Operational internals in `technical-notes.md`. Two matter at run time:
+
 - **Chrome lifecycle**: Pipeline starts its own Chrome instance on a free port (never reuses user's browser). Port persisted to `chrome-config.json` across processes. Profile lives at `~/.ji/chrome-profile/` — sessions (cookies, localStorage) persist between pipeline runs.
 - **PDF guard**: `detect` refuses to proceed if stage is `tailored` but no Resume PDF exists. Run `tailor.py undo <jid> && tailor.py --jid <jid>` to regenerate.
-- **Gems**: `categories.json` → `gems.json` → `gemini.js` resolution chain.
-- **Type normalization at boundaries**: All external data sources (profile.json, --answers JSON, common_answers) are normalized to their expected types at the load point, not at each consumer. If a value can be int or string (`"salary": 120000`), it's normalized to string once. If `common_answers` is accidentally a string instead of dict, it's coerced to `{}` at validation time. Add new normalizations to `_validate_profile` in `act.py` or the `--answers` parse block — never guard at individual access sites.
-- **Provenance tracking**: Every filled field is tagged with its source (`profile`, `answers`, `auto_decline`, `file`). The submit preview groups fields by provenance so all LLM-provided answers appear in one block for self-audit. Cross-page field values are tracked in `_field_values_history` and compared at submit time via `_reconcile_fields` — mismatches are printed before confirm.
-- **Format hints**: Unfilled fields in dry-run and fill-report display expected format hints derived from HTML type/attributes and label keywords (phone → digits only, salary → numeric, date → MM/DD/YYYY). Also shows `max N chars` and `pattern=...` from HTML attributes. Hints are informational only — the LLM decides how to use them.
-- **DIAG diagnostics**: Structured `DIAG:` lines emitted on fill failures — truncation (`DIAG: Phone | expected=+1 (343)... | actual=+1 (343) 5 | truncated | maxlength=10`), verify failure, and delta mismatch (unchanged / still empty / cleared). Machine-parseable for the LLM orchestrator to auto-correct on next iteration.
-- **Vision fallback probe**: When all DOM probe strategies return 0 fields and `ask_api.available()` is True, the probe cascade takes a screenshot and asks the vision LLM to identify form fields. Best-effort — labels are fuzzy-matched to DOM elements by text proximity. Last resort before `html_scan`.
