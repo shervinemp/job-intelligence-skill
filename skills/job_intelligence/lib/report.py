@@ -190,6 +190,32 @@ def cmd_candidates(limit=None):
 
 
 
+def cmd_pending(limit=None, stage="extracted"):
+    """List the extraction queue — every active job at a gate stage with
+    jid, title/company when known, category, and URL. The queue triage
+    view for admit/reject decisions."""
+    conn = get_conn()
+    print("STAGES:", end="")
+    for r in conn.execute("SELECT stage, COUNT(*) n FROM jobs GROUP BY stage ORDER BY n DESC").fetchall():
+        print(f"  {r['stage']}={r['n']}", end="")
+    print()
+    q = ("SELECT id, title, company, category, url, source FROM jobs "
+         "WHERE stage=? AND state='active' ORDER BY source, id")
+    rows = conn.execute(q, (stage,)).fetchall()
+    if limit:
+        rows = rows[:limit]
+    if not rows:
+        print(f"\nPENDING ({stage}): none — queue clear")
+        return
+    print(f"\nPENDING ({stage}) — {len(rows)}:")
+    for r in rows:
+        cat = r["category"] or "-"
+        title = _clean(r["title"] or "?")[:38]
+        company = _clean(r["company"] or "")[:22]
+        url = (r["url"] or "")[:52]
+        print(f"  {r['id'][:14]} [{cat:7}] {company:22} {title:38} {url}")
+
+
 def cmd_inspect(jid):
     job = get_job(jid)
     if not job:
@@ -1061,6 +1087,7 @@ def _cmd_help():
     print("    fleet              accuracy report + steering memo + rule candidates", file=sys.stderr)
     print("    widgets            unhandled widget-class backlog", file=sys.stderr)
     print("    candidates         pending tailored jobs", file=sys.stderr)
+    print("    pending [--stage]  gate-stage queue (extract triage)", file=sys.stderr)
     print(file=sys.stderr)
     print("  READINESS:", file=sys.stderr)
     print("    profile          profile/resume completeness", file=sys.stderr)
@@ -1139,6 +1166,18 @@ def main():
             print("Usage: python3 report.py audit <jid>", file=sys.stderr)
             sys.exit(1)
         cmd_audit(args[0])
+    elif cmd == "pending":
+        stage = "extracted"
+        lim = None
+        if "--stage" in args:
+            i = args.index("--stage")
+            if i + 1 < len(args):
+                stage = args[i + 1]
+        if "--limit" in args:
+            i = args.index("--limit")
+            if i + 1 < len(args):
+                lim = int(args[i + 1])
+        cmd_pending(limit=lim, stage=stage)
     elif cmd == "shadow":
         if "--classify" in args:
             cmd_shadow_classify()

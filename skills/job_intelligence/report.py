@@ -12,6 +12,8 @@ Usage:
   python3 report.py companies [query]         List/search companies
   python3 report.py events [--upcoming]       List events
   python3 report.py contacts <jid>            Contacts for a job
+  python3 report.py candidates             Tailored jobs ready to apply
+  python3 report.py pending [--stage S]    Active jobs at a gate stage (extract triage)
 """
 from lib.report import main
 

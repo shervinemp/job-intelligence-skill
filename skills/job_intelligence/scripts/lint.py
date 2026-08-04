@@ -110,11 +110,16 @@ def check_vocab():
 
 def check_dead_strings():
     fails = []
-    for root, _dirs, files in os.walk(os.path.join(SKILL, "apply")):
+    for root, _dirs, files in os.walk(SKILL):
+        if any(part in ("__pycache__", ".pytest_cache", "node_modules")
+               for part in root.split(os.sep)):
+            continue
         for f in files:
             if not f.endswith(".py"):
                 continue
             p = os.path.join(root, f)
+            if os.path.abspath(p) == os.path.abspath(__file__):
+                continue  # the rule itself is exempt
             for i, line in enumerate(open(p, encoding="utf-8"), 1):
                 code = _strip_comments(line)
                 if not code.strip():

@@ -149,6 +149,9 @@ def cmd_reject(*jids):
         c = conn.execute("UPDATE jobs SET state='rejected' WHERE id=?", (jid,))
         if c.rowcount:
             count += 1
+        else:
+            print(f"WARN: no job with id '{jid}' — full 16-hex jid required",
+                  file=sys.stderr)
     conn.commit()
     if count:
         print(f"REJECT:{count}", file=sys.stderr)

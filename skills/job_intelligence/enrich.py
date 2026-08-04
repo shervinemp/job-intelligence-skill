@@ -345,6 +345,9 @@ def cmd_reject(*jids):
             entry = state["jobs"][jid]
             advance(entry, entry.get("stage"), state="rejected", error="garbage")
             count += 1
+        else:
+            print(f"WARN: unknown jid '{jid}' — full 16-hex jid required",
+                  file=sys.stderr)
     print(f"REJECT:{count}", file=sys.stderr)
     if count:
         print(f"  NEXT: {pipeline_status()['next_step']}", file=sys.stderr)
