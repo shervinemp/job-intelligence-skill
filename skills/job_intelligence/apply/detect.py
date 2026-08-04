@@ -15,8 +15,8 @@ STATE_PATH = os.path.join(
 
 def _classify(url: str, ext_url: str = "") -> tuple[str, str]:
     """(type, external_url) from a job URL.
-    LinkedIn with an external ATS URL → external (Skyvern navigates there).
-    LinkedIn without external URL → easy_apply (needs legacy handler)."""
+    LinkedIn with an external ATS URL → external (navigate follows the redirect).
+    LinkedIn without external URL → easy_apply (modal filled via act --fill)."""
     if not url:
         return "unknown", ""
     ul = url.lower()

@@ -549,7 +549,7 @@ def cmd_submit(jid, confirm=False, force=False):
                     emit_status("incomplete", f"{empt} required field(s) need answers")
                     emit_next("act --fill", "supply answers for empty fields, then resubmit")
                     return 1
-                # No form/dialog/iframe form on the page — Skyvern can't help.
+                # No form/dialog/iframe form on the page — nothing to submit against.
                 # This catches expired jobs on any platform (LinkedIn, Workday,
                 # Ashby, etc.) where the page loaded but no form rendered.
                 from apply.common.page_state import has_any_form
@@ -566,7 +566,7 @@ def cmd_submit(jid, confirm=False, force=False):
 
                 # Keyboard-based submit — works even across cross-origin
                 # iframes since keyboard events propagate natively.
-                # Tries several strategies before falling back to Skyvern.
+                # Tries several keyboard strategies in order.
                 print("  Submit not found — trying keyboard methods", file=sys.stderr)
                 keyboard_clicked = False
                 url_before_kb = page.url or ""

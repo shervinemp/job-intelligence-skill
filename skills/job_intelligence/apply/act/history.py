@@ -6,8 +6,7 @@ education[] with institution/area/studyType). Greenhouse-style ATS forms
 render ONE empty entry row with generic labels (Company name, Title,
 Start date month/year, End date month/year, Description, School,
 Degree, Discipline). This module maps those labels to the FIRST
-work/education entry so the deterministic filler covers what previously
-needed Skyvern.
+work/education entry so the deterministic filler covers it.
 
 Gap-fill only: existing answers (--answers / profile) win via the
 setdefault merge in the caller. Never fills the "Current role" checkbox
