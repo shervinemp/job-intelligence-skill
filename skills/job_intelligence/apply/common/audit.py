@@ -55,7 +55,7 @@ def _write(jid, rec):
 
 def log_field(jid, label, value, provenance, category="generic", filled=True,
               validated=None, page=None, reason=None, selector="", method="",
-              before="", after=""):
+              before="", after="", dom_delta=""):
     _write(jid, {
         "kind": "field",
         "label": (label or "")[:80],
@@ -74,6 +74,10 @@ def log_field(jid, label, value, provenance, category="generic", filled=True,
         "method": (method or "")[:40],
         "before": (before or "")[:120],
         "after": (after or "")[:120],
+        # DOM-diff observation (observation-only, never certified):
+        # {added, removed, attrs, texts} — the minimal structural delta of
+        # the page's response to the fill.
+        "dom_delta": dom_delta,
     })
 
 

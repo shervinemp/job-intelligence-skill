@@ -193,6 +193,23 @@ def field_deterministic(page, f, ans):
             return False
 
     from apply.common.filler import fill_field
+    # DOM-diff observation (DOM_DIFF_OBSERVATION.md): for dynamic fields,
+    # capture a minimal structural delta of what the page did in response to
+    # the fill — observation ONLY, never used to certify (the read-back check
+    # in fill_field remains the certifier). Surface as dom_delta in the dossier.
+    from apply.common.dom_diff import (_is_dynamic, start_observation,
+                                       drain_summary)
+    if _is_dynamic(f):
+        _sel = f.get("_sel") or sel
+        try:
+            if start_observation(page, _sel):
+                ok, _filler_name = fill_field(page, f, ans)
+                dd = drain_summary(page)
+                if dd:
+                    f["dom_delta"] = dd
+                return ok
+        except Exception:
+            pass
     ok, _filler_name = fill_field(page, f, ans)
     return ok
 
@@ -577,7 +594,7 @@ def fill_page(page, fields, profile, answers_override=None, filled_keys=None):
                 if jid:
                     from apply.common.audit import log_field
                     log_field(jid, label, str(ans), res.provenance, filled=True,
-                              selector=sel)
+                              selector=sel, dom_delta=f.get("dom_delta") or "")
             else:
                 failed.append({**f, "_why": "fill_failed", "key": key,
                                "attempted": str(ans)[:200]})

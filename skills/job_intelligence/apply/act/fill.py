@@ -131,7 +131,7 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
 
     fields = []
     for r in filled_recs:
-        fields.append({
+        fld = {
             "label": r.get("label", ""), "answer": r.get("answer", ""),
             "outcome": "filled",
             # The epistemic truth: verified by read-back, or accepted
@@ -143,7 +143,13 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
             # value vs a profile value.
             "provenance": r.get("provenance", ""),
             "reason": "accepted_unverified" if r.get("unverified") else _T.VERIFIED,
-        })
+        }
+        # DOM-diff observation: the minimal structural delta of the page's
+        # response to this fill — evidence for the orchestrator, NEVER a
+        # certification (DOM_DIFF_OBSERVATION.md).
+        if r.get("dom_delta"):
+            fld["dom_delta"] = r["dom_delta"]
+        fields.append(fld)
     for r in failed_all:
         diag = r.get("_diag") or {}
         is_no_answer = r.get("_why") == "no_answer"
