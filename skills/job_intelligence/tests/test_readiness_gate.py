@@ -91,14 +91,26 @@ class RiskUnverifiedGate(_RiskFixture):
         ])
         self.assertEqual(_risk_unverified("aaaaaaaaaaaaaaaa"), [])
 
-    def test_dossier_missing_true_when_no_dossier(self):
-        from ji import _dossier_missing
-        self.assertTrue(_dossier_missing("aaaaaaaaaaaaaaaa"))
+    def test_drift_class_mid_pipeline_when_no_fill_evidence(self):
+        """A results dir with NO dossier and NO fill evidence = mid_pipeline
+        (normal — just not filled yet), NOT drift."""
+        from ji import _drift_class
+        self.assertEqual(_drift_class("aaaaaaaaaaaaaaaa"), "mid_pipeline")
 
-    def test_dossier_missing_false_when_dossier_exists(self):
-        from ji import _dossier_missing
+    def test_drift_class_dossier_lost_when_filled_evidence(self):
+        """A results dir with an audit log but no dossier = GENUINE drift —
+        the job was filled and its evidence is gone."""
+        from ji import _drift_class
+        d = os.path.join(self._results, "aaaaaaaaaaaaaaaa")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "apply_audit.jsonl"), "w", encoding="utf-8") as f:
+            f.write("{}\n")
+        self.assertEqual(_drift_class("aaaaaaaaaaaaaaaa"), "dossier_lost")
+
+    def test_drift_class_none_when_dossier_exists(self):
+        from ji import _drift_class
         self._dossier("aaaaaaaaaaaaaaaa", [{"label": "Country", "kind": "verified"}])
-        self.assertFalse(_dossier_missing("aaaaaaaaaaaaaaaa"))
+        self.assertIsNone(_drift_class("aaaaaaaaaaaaaaaa"))
 
 
 class DriftReporting(_RiskFixture):
@@ -134,13 +146,18 @@ class DriftReporting(_RiskFixture):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def test_status_reports_drift_for_dossierless_tailored(self):
-        """A tailored-active job with no dossier is reported as DRIFT — the
-        READY/HOLD claim for it is unverified."""
+        """A tailored-active job that was FILLED (audit log) but lost its
+        dossier is genuine drift — the READY/HOLD claim is unverified."""
         import ji
         conn = self._db()
-        self._job("aaaaaaaaaaaaaaaa", "tailored")  # no dossier
+        self._job("aaaaaaaaaaaaaaaa", "tailored")
         self._job("bbbbbbbbbbbbbbbb", "tailored")
         self._dossier("bbbbbbbbbbbbbbbb", [{"label": "Country", "kind": "verified"}])
+        # make aaaa genuinely dossier_lost: filled (audit) but no dossier
+        d = os.path.join(self._results, "aaaaaaaaaaaaaaaa")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "apply_audit.jsonl"), "w", encoding="utf-8") as f:
+            f.write("{}\n")
         with patch("lib.config.RESULTS_DIR", self._results), \
              patch.object(ji, "_T", None), \
              patch("ji._risk_unverified", return_value=[]):
@@ -151,6 +168,26 @@ class DriftReporting(_RiskFixture):
             out = buf.getvalue()
         self.assertIn("DRIFT: 1", out)
         self.assertIn("aaaaaaaaaa", out)
+        self.assertNotIn("NO-DOSSIER", out)
+
+    def test_status_mid_pipeline_not_drift(self):
+        """A tailored-active job with no dossier and no fill evidence is
+        mid-pipeline (normal), reported separately — NOT drift."""
+        import ji
+        conn = self._db()
+        self._job("aaaaaaaaaaaaaaaa", "tailored")  # no dossier, no audit
+        self._job("bbbbbbbbbbbbbbbb", "tailored")
+        self._dossier("bbbbbbbbbbbbbbbb", [{"label": "Country", "kind": "verified"}])
+        with patch("lib.config.RESULTS_DIR", self._results), \
+             patch.object(ji, "_T", None), \
+             patch("ji._risk_unverified", return_value=[]):
+            ji._imports()
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                ji.cmd_status()
+            out = buf.getvalue()
+        self.assertNotIn("DRIFT:", out)
+        self.assertIn("NO-DOSSIER (not filled yet): 1", out)
 
     def test_status_no_drift_when_all_have_dossiers(self):
         import ji

@@ -280,16 +280,53 @@ def cmd_admit(*job_ids, pdf_path=None, force=False):
                     with open(_rp, encoding="utf-8") as f:
                         _r = _json.load(f)
                     _m = ground(_r, profile=_profile)
-                    if not _m["ok"]:
+                    if _m["blocked"]:
                         print(f"GROUNDING_BLOCKED: {job_id} — "
-                              f"{len(_m['novel_claims'])} novel claim(s), "
-                              f"{len(_m['mismatches'])} mismatch(es). "
+                              f"material={len(_m['material'])} "
+                              f"figure={len(_m['figure'])} "
+                              f"mismatch={len(_m['mismatches'])}. "
                               f"Run 'tailor.py ground {job_id}' and review. "
-                              f"(--force to override)", file=sys.stderr)
+                              f"(--force after orchestrator verdict)",
+                              file=sys.stderr)
                         continue
+                    elif _m["framing"]:
+                        print(f"FRAMING_NOTE: {job_id} — {len(_m['framing'])} "
+                              f"framing claim(s) ride (advisory):", file=sys.stderr)
+                        for _fc in _m["framing"][:5]:
+                            print(f"    - {_fc}", file=sys.stderr)
                 except Exception as _ge:
                     print(f"GROUNDING_ERR: {job_id} — {_ge}", file=sys.stderr)
                     continue
+            else:
+                print(f"GROUNDING_ERR: {job_id} — no resume.json; tailor first",
+                      file=sys.stderr)
+                continue
+        else:
+            # --force = the orchestrator's conscious verdict after review.
+            # Record it so the override is auditable, not a silent escape hatch.
+            try:
+                _rp = os.path.join(RESULTS_DIR, job_id, "resume.json")
+                if os.path.exists(_rp):
+                    with open(_rp, encoding="utf-8") as f:
+                        _r = _json.load(f)
+                    _m = ground(_r, profile=_profile)
+                    import datetime as _dt
+                    with open(os.path.join(RESULTS_DIR, job_id,
+                                           "grounding_manifest.json"),
+                              "w", encoding="utf-8") as _mf:
+                        _json.dump({
+                            "verdict": "force",
+                            "at": _dt.datetime.now().isoformat(),
+                            "material": _m.get("material", []),
+                            "figure": _m.get("figure", []),
+                            "framing": _m.get("framing", []),
+                            "mismatches": _m.get("mismatches", []),
+                        }, _mf, indent=2)
+                    print(f"OVERRIDE_RECORDED: {job_id} — "
+                          f"grounding_manifest.json written", file=sys.stderr)
+            except Exception as _ge:
+                print(f"OVERRIDE_WARN: {job_id} — could not record manifest: {_ge}",
+                      file=sys.stderr)
         entry = state["jobs"][job_id]
         if entry.get("state") != "active":
             print(f"  {job_id}: admitted with state '{entry.get('state')}' -> active", file=sys.stderr)

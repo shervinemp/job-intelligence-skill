@@ -1,4 +1,4 @@
-"""F2 — new-domain approval gate (ALGORITHMS.md Part 6)."""
+"""F2 — new-domain approval gate (GUIDELINES.md Part 6)."""
 import os
 import sys
 import unittest

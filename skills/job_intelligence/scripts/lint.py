@@ -218,7 +218,7 @@ def _report_commands(path):
     # ji.py forwards unhandled commands to the engines via _REPORT_CMDS /
     # _APPLY_CMDS (SURFACE_AUDIT.md superset) — those are dispatchable too.
     if "ji.py" in path:
-        for name in ("_REPORT_CMDS", "_APPLY_CMDS"):
+        for name in ("_REPORT_CMDS", "_APPLY_CMDS", "_STAGE_CMDS"):
             m = re.search(name + r"\s*=\s*\{([^}]*)\}", src)
             if m:
                 cmds.update(re.findall(r'["\']([a-z][a-z_-]*)["\']', m.group(1)))

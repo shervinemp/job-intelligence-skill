@@ -3,8 +3,7 @@
 Each case: **scenario** (what the world looks like), **preconditions**
 (state/DB/profile/page), **trace** (the code path, file:line), **expected**
 (outcome + observable signal), **verify** (how to test / what to assert).
-Reference docs: FUNCTIONAL_FLOW.md, CURVEBALLS.md, UNRECOVERABLE.md,
-CAPTCHA_LOGIN_AUDIT.md, ADVERSARIAL2.md, FAILURE_MAP.md.
+Reference docs: UNRECOVERABLE.md (GUIDELINES.md for live state).
 
 Status legend (fill in as you test): `UNTESTED` (default) / `PASS` / `FAIL` /
 `FOUND` (bug confirmed).

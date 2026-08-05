@@ -5,7 +5,7 @@ trail: `STATUS:`/`NEXT:`/`TYPE:`/`DIAG:`/`FILLED:` on stderr, plus the
 per-job `handoff.json` dossier. A regression in WHAT IS PRINTED is invisible
 to the DB-asserting unit suite, so this file pins the contract directly.
 
-Trace invariant (TRACE_COMPARISON.md, C-O1/O2/O3): the orchestrator must
+Trace invariant (GUIDELINES.md, C-O1/O2/O3): the orchestrator must
 (a) see each decision step, (b) trust the verdict, (c) act on the NEXT command.
 These tests assert exact signal substrings + dossier fields — never
 implementation details.

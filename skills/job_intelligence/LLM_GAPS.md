@@ -1,6 +1,6 @@
 # LLM-in-the-Loop Gaps — where the orchestrator should be but isn't
 
-The inverse of ORCHESTRATOR_MAP: every place the LLM could add judgment but is
+The inverse of ORCHESTRATOR_MAP (archived): every place the LLM could add judgment but is
 currently absent, organized by the four domains. Each gap tagged against the
 contract (C1–C9) it would use, its priority, and what blocks it today.
 

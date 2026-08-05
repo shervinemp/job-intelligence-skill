@@ -366,7 +366,7 @@ def main():
     reset_p = sub.add_parser("reset", help="Reset extraction state")
     reset_p.add_argument("args", nargs="*")
     reset_p.add_argument("--confirm", action="store_true", help=argparse.SUPPRESS)
-    sub.add_parser("admit", help="Admit an extracted job")
+    admit_p = sub.add_parser("admit", help="Admit an extracted job")
     admit_p.add_argument("jids", nargs="+")
     admit_p.add_argument("--category", help="Job category (required on first admit)")
     admit_p.add_argument("--notes", help="Job notes/context")

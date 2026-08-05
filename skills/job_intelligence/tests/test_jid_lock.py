@@ -1,4 +1,4 @@
-"""F5 — cross-process per-jid lock (ALGORITHMS.md Part 6).
+"""F5 — cross-process per-jid lock (GUIDELINES.md Part 6).
 
 A live `act --submit` and a shadow worker can race on the same jid: the
 one-shot guard is per-jid state but not cross-process locked. The JidLock

@@ -59,10 +59,57 @@ name. Confusing for the orchestrator.
 3. **Keep the stage-gate CLIs** — extract/enrich/tailor stay as the engine;
    `ji` is the documented orchestrator path (SKILL.md updated).
 4. **Update lint CLI-docs check** — **DONE**: `_report_commands` now reads
-   ji's `_REPORT_CMDS`/`_APPLY_CMDS` sets so the superset is validated.
+   ji's `_REPORT_CMDS`/`_APPLY_CMDS`/`_STAGE_CMDS` sets so the superset is
+   validated.
 5. **SKILL.md** — added the "Orchestrator surface (`ji`)" section with the
    two-verify clarification.
+6. **Namespace the stage engines under `ji` (v2)** — **DONE this pass**:
+   `_STAGE_CMDS` forwards `extract`/`enrich`/`tailor`/`reach`/`linkedin`/
+   `stage_emails` through `ji <stage> <verb> ...`. This closes the last gap —
+   before, `reach.py` (10 cmds) and the three stage-gate CLIs were NOT
+   reachable via `ji`, so the "ONE surface" claim was false. It also resolves
+   the verb collision from finding #2 without merging stage semantics: `ji
+   apply undo` ≠ `ji reach undo` ≠ `ji tailor undo` (they keep their own
+   behavior; only the namespace is unified). Verified by lint CLI-docs check
+   (`_STAGE_CMDS` read as dispatchable).
 
-Result: 8 CLIs → the orchestrator interacts with **1 surface (`ji`)**; the
-others remain callable engines. Full suite: 597 tests + 138 subtests, lint
-PASS.
+## Second-pass audit (this pass) — what was still exposed, and the fix
+
+Re-audit against the current code, entry point by entry point:
+
+| Entry | Commands | Finding | Action |
+|-------|----------|---------|--------|
+| apply.py | 12 | fine, forwarded | — |
+| reach.py | 10 | was the biggest unreachable surface | `ji reach <verb>` now forwards |
+| extract.py | 6 | stage gate | `ji extract <verb>` |
+| enrich.py | 8 | stage gate | `ji enrich <verb>` |
+| tailor.py | 8 | stage gate | `ji tailor <verb>` |
+| stage_emails.py | 2 | fetch | `ji stage_emails [--days N]` |
+| linkedin.py | 4 | scraper | `ji linkedin [--url] [--count N]` |
+| ji.py | 15 | orchestrator | the ONE surface |
+| report.py | 31 | evidence/config | forwarded (`_REPORT_CMDS`) |
+
+**Findings this pass:**
+
+- **F1 (fixed): `ji` was not a true superset.** `_STAGE_CMDS` did not exist;
+  reach + the three stage gates + linkedin + stage_emails were unreachable via
+  ji, contradicting SKILL.md's "ONE surface" claim. Now fixed — every engine is
+  under ji.
+- **F2 (documented): verb collision by design.** `flag`/`undo`/`retry`/`reject`
+  mean different things per engine. Namespacing keeps them correct rather than
+  merging them into one ambiguous verb. A blind merge (finding #2's original
+  suggestion) was rejected because `cmd_admit` is stage-specific: extract gates
+  on category, enrich on description-exists, tailor on factual grounding.
+- **F3 (left as-is): `verify` double.** Kept distinct and documented (ji =
+  risk review, apply = post-submit).
+- **F4 (unchanged): stage_emails/linkedin are thin.** Both are intentionally
+  lightweight; `ji stage_emails`/`ji linkedin` forward their raw flags.
+
+**Not merged, with reason:** `lib/db/pipeline.py` is a thin compat shim over
+`jobs.py` (delegates, doesn't duplicate) — leave it. `apply/common/filler.py`
+(used by check.py) vs `fill_runner.py` (used by auto/fill) are a deliberate
+split: filler = read-back verification, fill_runner = orchestration. Both stay.
+
+Result: 8 CLIs → the orchestrator interacts with **1 surface (`ji`)**, and
+every stage verb is reachable as `ji <stage> <verb>`; the engines stay callable
+beneath. Full suite: 626 tests + 138 subtests, lint PASS.

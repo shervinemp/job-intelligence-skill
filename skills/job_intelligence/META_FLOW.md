@@ -61,7 +61,7 @@ rigid:      aliases, defaults, attr-map, countries, handover-kw, risk-kw, skip-d
 **The failure mode**: novel input isn't refused loudly — it silently falls to
 `no_match` / `unverifiable` / "wrong location" and waits for a human. There is no
 loop that converts a *repeated* miss into a *vocabulary update* (that's exactly
-the S2/S3 correction loop from ALGORITHMS.md — proposed, not yet wired).
+the S2/S3 correction loop from ALGORITHMS.md (archived) — proposed, not yet wired).
 
 ---
 

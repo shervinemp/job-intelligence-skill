@@ -158,6 +158,60 @@ class ResumeClaimGrounding(unittest.TestCase):
                 m = ground(self._resume([claim]), self._profile())
                 self.assertFalse(m["ok"], f"{claim!r} passed grounding")
 
+    def test_severity_tiers_framing_vs_figure(self):
+        """Grounding is a DETECTOR, not a judge: framing massaging rides,
+        concrete figures and material claims block. The LLM renders the
+        verdict; the gate only classifies."""
+        from lib.grounding import ground
+        framing = ground(self._resume(["Engineer — led backend development."]),
+                         self._profile())
+        # No figures/credentials invented → framing-only rides.
+        self.assertTrue(framing["ok"])
+        self.assertEqual(framing["framing"], [])
+        self.assertEqual(framing["material"], [])
+        self.assertEqual(framing["figure"], [])
+        # Same truthful resume but an inflated title → framing claim, no block.
+        prof = self._profile()
+        r = dict(self._resume(["Built the data platform."]),
+                 work=[{"company": "Acme Corp",
+                        "position": "Tech Lead",
+                        "startDate": "2021-03", "endDate": "2023-06",
+                        "highlights": ["Built the data platform."]}])
+        m = ground(r, prof)
+        self.assertTrue(m["ok"])
+        self.assertTrue(any("title" in c for c in m["framing"]))
+        # Concrete figure not in profile → blocks (needs orchestrator verdict).
+        m2 = ground(self._resume(["Served 7B inference requests/month."]),
+                    self._profile())
+        self.assertFalse(m2["ok"])
+        self.assertTrue(m2["figure"])
+
+    def test_ground_never_mutates_profile(self):
+        """The profile is semi-immutable: ground() is a read-only detector.
+        Resolving a claim never happens by editing the profile — that's a
+        resume-layer or --force decision."""
+        from lib.grounding import ground
+        prof = self._profile()
+        before = json.dumps(prof, sort_keys=True)
+        ground(self._resume(["Hold an active TS/SCI security clearance."]),
+               prof)
+        self.assertEqual(json.dumps(prof, sort_keys=True), before)
+
+    def test_objective_fact_in_profile_grounds_claim(self):
+        """A REAL objective fact (a publication, a degree) present in the
+        profile makes the claim traceable — that's the legitimate profile
+        path. Subjective framing never is."""
+        from lib.grounding import ground
+        prof = self._profile()
+        prof["publications"] = [
+            {"name": "Time-Aware Attention for Causal LLMs",
+             "publisher": "NeurIPS 2024"}]
+        m = ground(self._resume(
+            ["Published Time-Aware Attention for Causal LLMs at NeurIPS."]),
+            prof)
+        # Objective fact present → the publication credential traces.
+        self.assertFalse(any("publication" in c for c in m["material"]))
+
 
 class UntrustedFilenames(unittest.TestCase):
     """Company/title come from job postings and end up in PDF filenames."""

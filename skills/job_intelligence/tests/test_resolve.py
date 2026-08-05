@@ -362,7 +362,7 @@ class RuntimeAliasRules(unittest.TestCase):
 
 
 class S2AutoPromotionGate(unittest.TestCase):
-    """ALGORITHMS.md S2: a learned mapping must reach `active` (≥2 consistent
+    """GUIDELINES.md S2: a learned mapping must reach `active` (≥2 consistent
     confirms) before it can promote to a RUNTIME alias rule. A single answer
     or a conflicting one must never create a global rule."""
 

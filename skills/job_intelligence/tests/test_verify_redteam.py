@@ -1,4 +1,4 @@
-"""G1 — verification red-team harness (ALGORITHMS.md Part 6).
+"""G1 — verification red-team harness (GUIDELINES.md Part 6).
 
 Pins the whole verification layer against the class of bug that caused the
 Antigua incident: a wrong value being CERTIFIED as verified. Each test

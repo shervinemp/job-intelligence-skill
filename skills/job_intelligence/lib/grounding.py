@@ -13,12 +13,37 @@ visible:
   - `tailor.py admit` REFUSES to admit a job whose manifest is not clean
     (--force is the explicit human override).
 
+THE PROFILE IS SEMI-IMMUTABLE. It is the canonical store of OBJECTIVE
+facts — companies, dates, degrees, institutions, real publications. A
+missing OBJECTIVE fact that is genuinely true (a real degree, a real
+employer, a real paper) may be added so the claim becomes traceable.
+What NEVER enters the profile is SUBJECTIVE content: framing (title
+phrasing, how a project is described, keyword emphasis) resolves at the
+RESUME layer (soften it or remove it) or via a conscious --force verdict
+recorded in grounding_manifest.json. The profile is a fact store, not a
+scratchpad for persuading the gate — writing a subjective gloss into it
+to make a claim pass is backwards.
+
+The gate is a DETECTOR, not a judge. Every claim carries a severity:
+  - "material": employer, degree, institution, clearance/licence/patent/
+    publication/certification. False = misrepresentation. admit refuses.
+  - "figure": concrete numbers (7B, team size, scale). Verifiable; an
+    interviewer can pin them down. admit refuses without an orchestrator
+    verdict.
+  - "framing": title phrasing, keyword emphasis, positioning. This is
+    what tailoring is FOR — warn only, does not block.
+The orchestrator (the strong LLM) renders the verdict on material/figure
+claims; code only certifies.
+
 Manifest shape:
-  {"ok": bool, "base": "profile"|"job"|"none", "novel_claims": [...],
+  {"ok": bool, "blocked": bool, "base": "profile"|"none",
+   "novel_claims": [...], "claims": [{"severity", "text"}, ...],
+   "material": [...], "figure": [...], "framing": [...],
    "mismatches": [...], "checked": n}
 """
 import os
 import re
+import sys
 
 _NORM = re.compile(r"[^a-z0-9 ]")
 
@@ -125,15 +150,28 @@ _CREDENTIAL_PATTERNS = [
 
 def ground(resume, profile=None, job_posting_text=""):
     """Validate a tailored resume.json against the canonical profile.
-    Returns the manifest (see module docstring)."""
+    Returns the manifest (see module docstring).
+
+    Claims carry a severity so the gate is a DETECTOR, not a judge:
+      - "material": employer, degree, institution, clearance/licence/patent/
+        publication/certification. False = misrepresentation. admit refuses.
+      - "figure": concrete numbers (7B, team size, scale). Verifiable; an
+        interviewer can pin them down. admit refuses without an orchestrator
+        verdict.
+      - "framing": title phrasing, keyword emphasis, positioning. This is
+        what tailoring is FOR — warn only, does not block.
+    The orchestrator (the strong LLM) renders the verdict on material/figure
+    claims; code only certifies."""
     if profile is None:
         profile = _base_profile()
     base_work = _base_work(profile)
     base_edu = _base_education(profile)
     novel, mismatches = [], []
+    claims = []
 
     if not base_work and not base_edu:
-        return {"ok": False, "base": "none", "novel_claims": [],
+        return {"ok": False, "blocked": True, "base": "none",
+                "novel_claims": [], "claims": [],
                 "mismatches": ["no work_history/education in profile — "
                                "grounding impossible, admit blocked"],
                 "checked": 0}
@@ -146,14 +184,16 @@ def ground(resume, profile=None, job_posting_text=""):
         matches = [w for w in base_work
                    if _fuzzy(company, w.get("company", ""))]
         if not matches:
-            novel.append(f"work: company '{company}' not in profile")
+            claims.append({"severity": "material",
+                           "text": f"work: company '{company}' not in profile"})
             continue
         if title:
             titles = [w.get("position") or w.get("title") or ""
                       for w in matches]
             if not any(_fuzzy(title, t) for t in titles):
-                novel.append(f"work: title '{title}' not in profile "
-                             f"({company})")
+                claims.append({"severity": "framing",
+                               "text": f"work: title '{title}' not in profile "
+                                       f"({company})"})
         if not any(_dates_overlap(start, end, w.get("startDate"),
                                   w.get("endDate")) for w in matches):
             mismatches.append(f"work: dates {start}–{end} ({company}) don't "
@@ -166,13 +206,15 @@ def ground(resume, profile=None, job_posting_text=""):
         matches = [e for e in base_edu
                    if _fuzzy(school, e.get("institution") or e.get("school") or "")]
         if not matches:
-            novel.append(f"education: institution '{school}' not in profile")
+            claims.append({"severity": "material",
+                           "text": f"education: institution '{school}' not in profile"})
             continue
         if degree:
             areas = [(e.get("area") or "") for e in matches]
             if not any(_fuzzy(degree, a) for a in areas):
-                novel.append(f"education: '{degree}' not in profile "
-                             f"({school})")
+                claims.append({"severity": "material",
+                               "text": f"education: '{degree}' not in profile "
+                                       f"({school})"})
 
     # ── Resume BULLETS: the claims a reader actually acts on ─────────
     #
@@ -212,7 +254,9 @@ def ground(resume, profile=None, job_posting_text=""):
         for pat, what in _CREDENTIAL_PATTERNS:
             m = pat.search(low)
             if m and m.group(0) not in haystack:
-                novel.append(f"claim: {what} — '{text[:70]}' not in profile")
+                claims.append({"severity": "material",
+                               "text": f"claim: {what} — "
+                                       f"'{text[:70]}' not in profile"})
                 break
         # Bare integers, plus the scale suffixes inflation actually uses
         # ("200M users", "10x throughput", "1.5B requests").
@@ -221,8 +265,9 @@ def ground(resume, profile=None, job_posting_text=""):
             r"\b\d+(?:\.\d+)?\s*(?:k|m|b|bn|x|million|billion|thousand)\b", low)}
         for n in sorted(figures):
             if n not in haystack:
-                novel.append(f"claim: figure '{n}' not in profile — "
-                             f"'{text[:60]}'")
+                claims.append({"severity": "figure",
+                               "text": f"claim: figure '{n}' not in profile — "
+                                       f"'{text[:60]}'"})
 
     # ── Cover letter: concrete facts must appear in profile/posting ───
     cover = ""
@@ -239,10 +284,21 @@ def ground(resume, profile=None, job_posting_text=""):
         numbers = re.findall(r"\b\d{3,}\b", cover)
         for n in numbers:
             if n not in str(profile) and n not in job_posting_text:
-                novel.append(f"cover: number '{n}' not in profile or posting")
+                claims.append({"severity": "figure",
+                               "text": f"cover: number '{n}' not in profile "
+                                       f"or posting"})
 
-    return {"ok": not novel and not mismatches, "base": "profile",
-            "novel_claims": novel, "mismatches": mismatches,
+    novel = [c["text"] for c in claims]
+    material = [c for c in claims if c["severity"] == "material"]
+    figure = [c for c in claims if c["severity"] == "figure"]
+    blocked = bool(material or figure or mismatches)
+    return {"ok": not blocked, "blocked": blocked, "base": "profile",
+            "novel_claims": novel, "claims": claims,
+            "material": [c["text"] for c in material],
+            "figure": [c["text"] for c in figure],
+            "framing": [c["text"] for c in claims
+                        if c["severity"] == "framing"],
+            "mismatches": mismatches,
             "checked": len(resume.get("work", []) or [])
                        + len(resume.get("education", []) or [])}
 
@@ -263,15 +319,25 @@ def cmd_ground(jid, results_dir, job_posting_text=""):
         return 1
     m = ground(resume, job_posting_text=job_posting_text)
     print(f"GROUNDING {jid}: ok={m['ok']} base={m['base']} "
-          f"checked={m['checked']} novel={len(m['novel_claims'])} "
+          f"checked={m['checked']} material={len(m['material'])} "
+          f"figure={len(m['figure'])} framing={len(m['framing'])} "
           f"mismatch={len(m['mismatches'])}", file=sys.stderr)
-    for c in m["novel_claims"][:10]:
-        print(f"  NOVEL: {c}", file=sys.stderr)
+    for c in m["material"][:10]:
+        print(f"  MATERIAL: {c}", file=sys.stderr)
+    for c in m["figure"][:10]:
+        print(f"  FIGURE: {c}", file=sys.stderr)
+    for c in m["framing"][:10]:
+        print(f"  FRAMING: {c}", file=sys.stderr)
     for c in m["mismatches"][:10]:
         print(f"  MISMATCH: {c}", file=sys.stderr)
-    if not m["ok"]:
-        print("  ADMIT BLOCKED: novel claims must be reviewed and either "
-              "corrected in resume.json or added to profile.json — then "
-              "re-ground. (--force to override on review)", file=sys.stderr)
-        return 1
-    return 0
+    if m["ok"]:
+        print("  OK — framing-only massaging rides; admit is open.", file=sys.stderr)
+        return 0
+    print("  REVIEW REQUIRED: material/figure claims or date mismatches. "
+          "The orchestrator (LLM) renders the verdict. The profile is a "
+          "semi-immutable store of OBJECTIVE facts — a real missing fact "
+          "(degree, employer, publication) may be added; SUBJECTIVE/framing "
+          "content never goes in. Resolve claims at the resume layer "
+          "(soften/remove) or consciously override with --force (recorded in "
+          "grounding_manifest.json).", file=sys.stderr)
+    return 1
