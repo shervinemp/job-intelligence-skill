@@ -431,5 +431,39 @@ class EvalHarnessSelfTest(unittest.TestCase):
                         "eval must either SKIP or produce a scored surface")
 
 
+class JiAnswerSurface(unittest.TestCase):
+    """`ji answer` — the command that turns an orchestrator decision into the
+    `apply.py act --fill --answers` invocation. The JSON encoding + CLI parse
+    are the decision's delivery path."""
+
+    def test_answer_routes_json_to_fill(self):
+        import ji
+        with patch("ji._run", return_value=0) as run:
+            rc = ji.cmd_answer("aaaaaaaaaaaaaaaa", "City", "Toronto")
+        self.assertEqual(rc, 0)
+        args = run.call_args[0]
+        self.assertEqual(args[0], "apply.py")
+        self.assertEqual(args[2], "--fill")
+        # the label/value must be JSON-encoded into --answers
+        self.assertEqual(json.loads(args[5]), {"City": "Toronto"})
+
+    def test_main_parses_label_value_spec(self):
+        """`ji answer <jid> "label": "value"` — the label and value arrive as
+        separate argv tokens and get joined+split on the first colon."""
+        import ji
+        import sys as _sys
+        old = _sys.argv
+        _sys.argv = ["ji.py", "answer", "aaaaaaaaaaaaaaaa",
+                     '"City"', '": "Toronto, ON"']
+        try:
+            with patch.object(ji, "_run", return_value=0) as run:
+                rc = ji.main()
+        finally:
+            _sys.argv = old
+        self.assertEqual(rc, 0)
+        call = run.call_args
+        self.assertIn("Toronto, ON", json.dumps(call.args))
+
+
 if __name__ == "__main__":
     unittest.main()

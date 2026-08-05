@@ -198,5 +198,68 @@ class DBDrivenReport(_ReportFixture):
         self.assertIn("1000000000000001", data)
 
 
+class ObserveRoundTrip(_ReportFixture):
+    """`report.py observe` — the LLM observation brief: dossier + regression
+    diff in one view. It composes the two surfaces; the composition must not
+    lose either half."""
+
+    def test_observe_renders_dossier_when_one_run(self):
+        from lib.report import cmd_observe
+        jid = "aaaaaaaaaaaaaaaa"
+        self._write_dossier(jid, [
+            {"label": "Email", "answer": "a@b.com", "outcome": "filled",
+             "kind": "verified"},
+        ], summary={"filled": 1})
+        err = self._stderr(cmd_observe, jid)
+        self.assertIn(f"HANDOFF {jid}", err)
+        self.assertIn("Email", err)
+
+    def test_observe_adds_diff_when_two_runs(self):
+        """Two runs → observe shows BOTH the current dossier and the
+        regression diff — the orchestrator's full observation brief."""
+        from lib.report import cmd_observe
+        jid = "bbbbbbbbbbbbbbbb"
+        d = self._job_dir(jid)
+        # current dossier (what cmd_handoff reads)
+        with open(os.path.join(d, "handoff.json"), "w", encoding="utf-8") as f:
+            json.dump({"jid": jid, "ts": "2", "summary": {"filled": 0},
+                       "fields": [{"label": "Email", "outcome": "no_answer"}]}, f)
+        hist = os.path.join(d, "handoffs")
+        os.makedirs(hist, exist_ok=True)
+        for ts, summary, outcome in [("1", {"filled": 1}, "filled"),
+                                     ("2", {"filled": 0}, "no_answer")]:
+            with open(os.path.join(hist, f"{ts}.json"), "w", encoding="utf-8") as f:
+                json.dump({"ts": ts, "summary": summary,
+                           "fields": [{"label": "Email", "outcome": outcome}]}, f)
+        err = self._stderr(cmd_observe, jid)
+        self.assertIn("HANDOFF", err)
+        self.assertIn("DIFF", err)
+        self.assertIn("REGRESSED", err)
+
+
+class SessionTimeline(_ReportFixture):
+    """`report.py session` — the obs event timeline the orchestrator reads to
+    reconstruct what happened in a run."""
+
+    def test_session_empty_is_graceful(self):
+        from lib.report import cmd_session
+        import lib.automation.obs as obs
+        with patch("lib.automation.obs.load", return_value=[]):
+            err = self._stderr(cmd_session)
+        self.assertIn("No session events found", err)
+
+    def test_session_renders_events(self):
+        from lib.report import cmd_session
+        import lib.automation.obs as obs
+        with patch("lib.automation.obs.load", return_value=[
+                {"run_id": "r1", "ts": "1", "actor": "fill",
+                 "action": "filled_field", "jid": "x", "target": "Email",
+                 "outcome": "ok", "detail": "verified"},
+        ]):
+            err = self._stderr(cmd_session)
+        self.assertIn("filled_field", err)
+        self.assertIn("Email", err)
+
+
 if __name__ == "__main__":
     unittest.main()
