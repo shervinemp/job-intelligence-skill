@@ -67,74 +67,89 @@ def _pw_fetch(url, timeout=30):
     # Skip root URLs (no meaningful path) — they load feed pages, not job descriptions
     path = parsed.path.strip("/")
     if not path or len(path.split("/")) < 2:
-        return False, "root_url", None, None
+        return False, "root_url", None, None, ""
 
     # This URL came from an email body. Vet it BEFORE handing it to a
     # browser that carries the user's LinkedIn/ATS session cookies.
     ok, why = is_safe_url(url)
     if not ok:
         print(f"  URL_REFUSED: {why}", file=sys.stderr)
-        return False, f"unsafe_url: {why}", None, None
+        return False, f"unsafe_url: {why}", None, None, ""
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         # 4-tuple like every other exit — _retry_fetch unpacks four.
-        return False, "Playwright not installed", None, None
+        return False, "Playwright not installed", None, None, ""
     page = b = None
+    _opened_tab = False
     try:
+        # Use the HUMAN'S logged-in profile browser (connect() → port 9222) —
+        # the fetch needs the real LinkedIn session, not a separate logged-out
+        # Chromium. Root cause of past hangs: killed fetches leaked tabs, the
+        # renderer saturated, and CDP blocked. Hygiene below: clean stale job
+        # tabs first, reuse one if present, and close it before returning.
         b, ctx = connect()
-        if ctx:
-            page = ctx.new_page()
-            page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
-            page.wait_for_timeout(2000)
-            dl = time.time() + 5
-            while time.time() < dl:
-                t = (page.evaluate("() => document.body.innerText") or "").strip()
-                if len(t) > 80:
-                    break
-                time.sleep(0.5)
-            text = fetch_description(url, page)
-            if text and len(text.strip()) > 80:
-                page_title = (page.title() or "").strip()
-                raw_html = page.evaluate("() => document.documentElement.outerHTML")
-                return True, text.strip(), page_title, raw_html
-            if _detect_auth_wall(text):
-                _wtype = _classify_auth_wall(text)
-                return False, f"auth_wall:{_wtype[0] if _wtype else 'unknown'}", None, None
-            return False, f"Short text ({len(text or '')} chars)", None, None
-        else:
-            with sync_playwright() as spw:
-                ctx = spw.chromium.launch_persistent_context(BROWSER_PROFILE, headless=True, no_viewport=True)
-                page = ctx.new_page()
-                page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
-                page.wait_for_timeout(2000)
-                dl = time.time() + 5
-                while time.time() < dl:
-                    t = (page.evaluate("() => document.body.innerText") or "").strip()
-                    if len(t) > 80:
-                        break
-                    time.sleep(0.5)
-                text = fetch_description(url, page)
-                if text and len(text.strip()) > 80:
-                    page_title = (page.title() or "").strip()
-                    raw_html = page.evaluate("() => document.documentElement.outerHTML")
-                    return True, text.strip(), page_title, raw_html
-                if _detect_auth_wall(text):
-                    _wtype = _classify_auth_wall(text)
-                    return False, f"auth_wall:{_wtype[0] if _wtype else 'unknown'}", None, None
-                return False, f"Short text ({len(text or '')} chars)", None, None
-    except Exception as e:
-        return False, str(e)[:120], None, None
-    finally:
+        if not ctx:
+            return False, "Could not connect to Chrome", None, None, ""
+        # Clean up any stale job tabs leaked by earlier killed processes, so
+        # the renderer isn't saturated when we start.
         try:
-            if page:
+            for p in list(ctx.pages):
+                u = p.url or ""
+                if "jobs/view/" in u and u != url.rstrip("/"):
+                    p.close()
+        except Exception:
+            pass
+        # Reuse an existing tab on this exact URL if present (no new leak).
+        page = None
+        for p in ctx.pages:
+            if (p.url or "").rstrip("/") == url.rstrip("/"):
+                page = p
+                break
+        if page is None:
+            page = ctx.new_page()
+            _opened_tab = True
+        page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+        page.wait_for_timeout(2000)
+        # Bound the readiness wait: innerText on a huge SPA (LinkedIn's
+        # ~3MB job page) forces full layout reflow on EVERY call and can
+        # stall. textContent avoids reflow; read once, not in a tight loop.
+        dl = time.time() + 5
+        t = ""
+        while time.time() < dl:
+            t = (page.evaluate("() => document.body.textContent") or "").strip()
+            if len(t) > 80:
+                break
+            time.sleep(0.5)
+        text = fetch_description(url, page)
+        if text and len(text.strip()) > 80:
+            page_title = (page.title() or "").strip()
+            raw_html = page.evaluate("() => document.documentElement.outerHTML")
+            # LinkedIn has no JSON-LD hiringOrganization — read the company
+            # from the live page's /company/ anchor links.
+            company = ""
+            try:
+                from lib.platforms.linkedin import extract_company
+                company = extract_company(page) or ""
+            except Exception:
+                pass
+            return True, text.strip(), page_title, raw_html, company
+        if _detect_auth_wall(text):
+            _wtype = _classify_auth_wall(text)
+            return False, f"auth_wall:{_wtype[0] if _wtype else 'unknown'}", None, None, ""
+        return False, f"Short text ({len(text or '')} chars)", None, None, ""
+    except Exception as e:
+        return False, str(e)[:120], None, None, ""
+    finally:
+        # Close the tab we opened so it can't leak and saturate the renderer.
+        # Reused tabs (already existed) are left open — closing someone's tab
+        # is worse than leaving it.
+        try:
+            if _opened_tab and page:
                 page.close(run_before_unload=False)
-                time.sleep(0.3)
-        except Exception as e:
-            print(f"WARN: page.close failed ({e})", file=sys.stderr)
-        # The CDP browser handle was never released, so every description
-        # fetch leaked a Playwright connection for the life of the process.
+        except Exception:
+            pass
         try:
             if b:
                 b.close()
@@ -144,20 +159,28 @@ def _pw_fetch(url, timeout=30):
 
 def _retry_fetch(url, use_playwright):
     import random, time
+    # LOOK FIRST: log which URL is being fetched so a hang is visible, not
+    # silent (the "infinite scroll" that looked like a loop was a fetch with
+    # zero progress output — nothing said which URL or attempt).
+    print(f"  FETCH[{1 if not use_playwright else 'pw'}]: "
+          f"{(url or '')[:90]}", file=sys.stderr)
     for attempt in range(2):
+        if attempt:
+            print(f"  FETCH attempt {attempt + 1} (retrying)", file=sys.stderr)
+        company = ""
         if use_playwright:
-            ok, text, page_title, raw_html = _pw_fetch(url)
+            ok, text, page_title, raw_html, company = _pw_fetch(url)
         else:
             ok, text, page_title, raw_html = _curl_fetch(url)
         if ok:
-            return True, text, page_title, raw_html
+            return True, text, page_title, raw_html, company
         if text.startswith("auth_wall") or text == "Playwright not installed":
-            return False, text, None, None
+            return False, text, None, None, ""
         if attempt < 1:
             delay = 2 + random.random()
             print(f"  Fetch failed ({text[:40]}), retry in {delay:.1f}s...", file=sys.stderr)
             time.sleep(delay)
-    return False, text, page_title, None
+    return False, text, page_title, None, company
 
 
 def _enrich_from_ld(raw_html, entry):
@@ -170,6 +193,9 @@ def _enrich_from_ld(raw_html, entry):
     from lib.extract_structured import extract_job_postings
     jobs = extract_job_postings(raw_html)
     if not jobs:
+        # LinkedIn does NOT emit JSON-LD hiringOrganization (verified live:
+        # 0 JSON-LD blocks). Company is set from the live page by _pw_fetch
+        # (extract_company → a[href*="/company/"]), not from raw HTML regex.
         return
     if len(jobs) > 1:
         entry["multi_role"] = True
@@ -235,7 +261,7 @@ def _curl_fetch(url):
     ok, why = is_safe_url(url)
     if not ok:
         print(f"  URL_REFUSED: {why}", file=sys.stderr)
-        return False, f"unsafe_url: {why}", None, None
+        return False, f"unsafe_url: {why}", None, None, ""
     try:
         # -w %{url_effective} reports the FINAL url after redirects so we can
         # re-vet it (A4: a host that looks public on hop 1 can redirect to a
@@ -284,15 +310,17 @@ def _curl_fetch(url):
 
 def _fetch_from_url(url, use_playwright=False):
     if use_playwright:
-        ok, text, page_title, raw_html = _retry_fetch(url, use_playwright=True)
+        ok, text, page_title, raw_html, company = _retry_fetch(
+            url, use_playwright=True)
         if ok:
-            return True, text, page_title, raw_html
+            return True, text, page_title, raw_html, company
         if text == "auth_wall":
-            return False, "auth_wall", None, None
-    ok, text, page_title, raw_html = _retry_fetch(url, use_playwright=False)
+            return False, "auth_wall", None, None, ""
+    ok, text, page_title, raw_html, _company = _retry_fetch(
+        url, use_playwright=False)
     if ok:
-        return True, text, page_title, raw_html
-    return False, text or "Fetch failed", None, None
+        return True, text, page_title, raw_html, _company
+    return False, text or "Fetch failed", None, None, ""
 
 
 def save_description(jid, text):
@@ -348,8 +376,13 @@ def cmd_fetch(use_playwright=True, force=False, refresh=False, verbose=False):
     title = entry.get("title", "")
     company = entry.get("company", "")
     url = entry.get("url", "")
-    ok, result, page_title, raw_html = _fetch_from_url(url, use_playwright=use_playwright)
+    ok, result, page_title, raw_html, fetched_company = _fetch_from_url(
+        url, use_playwright=use_playwright)
     if ok:
+        # LinkedIn has no JSON-LD; company comes from the live page's
+        # /company/ link (fetched_company). Backfill when the entry lacks it.
+        if not entry.get("company") and fetched_company:
+            entry["company"] = fetched_company
         save_description(jid, result)
         conn = get_conn()
         need_title = not entry.get("title")
@@ -593,7 +626,8 @@ def cmd_retry(use_playwright=True):
         return
     fetched = 0
     for jid, entry in failed:
-        ok, result, _pt, _rh = _fetch_from_url(entry.get("url", ""), use_playwright=use_playwright)
+        ok, result, _pt, _rh, _co = _fetch_from_url(
+            entry.get("url", ""), use_playwright=use_playwright)
         if ok:
             save_description(jid, result)
             snippet = re.sub(r'\s+', ' ', result[:200].replace('\r', '')).strip()

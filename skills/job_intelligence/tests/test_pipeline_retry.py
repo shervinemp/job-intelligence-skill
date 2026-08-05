@@ -41,7 +41,7 @@ class EnrichRetry(unittest.TestCase):
 
         def fake_fetch(url, use_playwright=False):
             fetch_calls.append(url)
-            return True, f"description for {url}", "Page Title", "<html></html>"
+            return True, f"description for {url}", "Page Title", "<html></html>", "Co"
 
         with patch("enrich.load", return_value=state), \
              patch("enrich._fetch_from_url", side_effect=fake_fetch), \
