@@ -81,6 +81,8 @@ CLI_ENTRYPOINTS = {
     "extract.py": "extract",
     "enrich.py": "enrich",
     "tailor.py": "tailor",
+    "stage_emails.py": "stage_emails",
+    "linkedin.py": "linkedin",
 }
 # report.py builds its dispatch by hand (if/elif on sys.argv[1]) rather
 # than argparse, so its commands are read from the dispatcher source.

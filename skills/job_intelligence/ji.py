@@ -298,8 +298,15 @@ def cmd_shadow(limit=None, recheck=False):
 
 
 def cmd_fetch(days=None):
-    args = ["enrich.py"]
-    return _run(*args)
+    """Full ingestion pass: stage emails → extract URLs → enrich descriptions.
+    Runs stage_emails + extract + enrich in sequence (the docstring's promise —
+    previously this only ran enrich)."""
+    args = ["stage_emails.py"]
+    if days:
+        args += ["--days", str(days)]
+    _run(*args)
+    _run("extract.py", "auto")
+    return _run("enrich.py")
 
 
 def cmd_tailor(auto=False):
