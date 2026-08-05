@@ -1,8 +1,8 @@
 # Coverage baseline + handoff-testing strategy
 
 Measured 2026-08-05 with `coverage` 7.15.3 against the full suite
-(662 passed + 141 subtests — includes the handoff-contract + report-round-trip
-tests). Generated with:
+(687 passed + 141 subtests — includes the handoff-contract, report-round-trip,
+text-strategy, drift, and verify-flow tests). Generated with:
 
 ```
 coverage erase
@@ -12,9 +12,12 @@ coverage json -o <tmp>/covdata.json
 
 ## Baseline
 
-**Production coverage: 44.1%** (14,252 statements). Raised from 42.3% across
-two passes: `detect.py` 12.5% → 75.0%, `submit.py` 24.3% → 24.5%,
-`lib/report.py` 15.1% → 27.3%, `lib/automation/diff.py` → 92.9%.
+**Production coverage: 45.2%** (14,252 statements). Raised from 42.3% across
+three passes:
+- `detect.py` 12.5% → 75.0% · `submit.py` 24.3% → 24.5%
+- `lib/report.py` 15.1% → 27.3% · `lib/automation/diff.py` → 92.9%
+- `apply/strategies/text.py` 13.9% → 74.7% · `drift.py` 4.7% → 95.3% ·
+  `verify.py` 15.0% → 37.9%
 
 | Module | Coverage | Why low |
 |--------|----------|---------|
@@ -85,6 +88,15 @@ Mock vs stub split:
    `handoffs/` history + `apply_audit.jsonl`; DB-driven readers
    (stats/candidates/applied-confirm) run against a temp schema DB.
    **Added this pass (9 tests).**
+3. `test_text_strategy.py` — the text-input transforms the architecture survey
+   flagged: E.164 phone, postal space-strip, maxlength year-rescue,
+   truncation+diag, placeholder→autocomplete routing, verify-failure fallback.
+   **Added this pass (12 tests).**
+4. `test_drift.py` — the drift detector's detection logic: agree/stale/demote,
+   dry-run, probe-error resilience, jsdom-absent. **Added this pass (7 tests).**
+5. `test_verify.py` (extended) — the `_playwright_verify` 4-strategy flow:
+   success text / confirmation URL / modal-closed / Applied-button mark applied;
+   validation_error is inconclusive. **Added this pass (6 tests).**
 2. Extend to `report.py` handoff/diff/audit readers — assert they round-trip
    what the writers emit (the dossier is the truth the orchestrator reads).
 3. Live smoke (one real browser job) for the `(L)`-marked cases — these will
