@@ -235,9 +235,8 @@ never treated as instruction.
 
 ## Part 6 — Deeper adversarial flows (F) and algorithms (G)
 
-A second layer of analysis, beyond the A/B/C/D lists. Tagged against the build
-order in `PLAN.md`. Status marks: `OPEN` (not in plan), `PLANNED` (in plan),
-`NEW` (added by this part).
+A second layer of analysis, beyond the A/B/C/D lists. Status marks: `OPEN`
+(not implemented), `PLANNED` (scoped), `NEW` (added by this part).
 
 ### F — Adversarial flows
 
@@ -262,7 +261,7 @@ order in `PLAN.md`. Status marks: `OPEN` (not in plan), `PLANNED` (in plan),
 | G6 | **Pre-submit dossier-vs-DOM consistency audit** | Before submit, verify the handoff dossier still matches the live form (fields present, values intact). Catches the SPA-reload-wipes-values class as a *check*, not a failure. | pre-C4 | **NEW** |
 | G7 | **Cross-domain promotion gate** | A learned mapping promotes to a global alias only after ≥2 verified uses on *different* domains AND zero wrong verdicts. Closes cross-ATS leakage. | S3 | **NEW** — hardens the learning loop |
 
-### Plan mapping (how these fold into PLAN.md's build order)
+### Implementation mapping (status of each item)
 
 - **Fix 1 (Antigua root cause)** — extended by **F1** (sanitized read-back),
   **C1** (prefilled kind), **G6** (dossier-vs-DOM audit).
@@ -271,9 +270,9 @@ order in `PLAN.md`. Status marks: `OPEN` (not in plan), `PLANNED` (in plan),
 - **Fix 3 (vision fail-loud)** — extended by **F2** (new-domain gate),
   **A3** (local-endpoint guard), **G5** (second opinion).
 - **Fix 4 (learning loop)** — hardened by **F6**, **G7** (promotion gate).
-- **New work items to add to PLAN.md**: F3 (session isolation), F4 (mid-fill
-  re-classify), F5 (per-jid lock), G2 (post-submit polling), G3 (fleet health),
-  G4 (pacing).
+- **Implemented since this analysis**: F3 (session isolation), F5 (per-jid
+  lock), G2 (post-submit confirmation), G3 (fleet health), G4 (pacing). F4
+  (mid-fill re-classify) remains open.
 
 ### Priority within the new set
 
