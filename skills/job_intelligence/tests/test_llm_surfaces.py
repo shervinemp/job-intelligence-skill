@@ -175,5 +175,98 @@ class RoutingHierarchy(unittest.TestCase):
             self.assertFalse(llm.allow("vision"))
 
 
+class JiVerifySurface(_SurfaceFixture):
+    """`ji verify` — the sanctioned PII review the strong model approves before
+    submit. Every suspicious value must be VISIBLE (the C-O2 faithful-evidence
+    invariant at the surface layer): a value the orchestrator can't see can't
+    be vetoed."""
+
+    def test_risk_field_shows_value_and_provenance(self):
+        import ji
+        jid = "aaaaaaaaaaaaaaaa"
+        d = os.path.join(self._results, jid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "handoff.json"), "w", encoding="utf-8") as f:
+            json.dump({"jid": jid, "mode": "shadow", "fields": [
+                {"label": "Country", "answer": "Canada", "kind": "verified",
+                 "method": "combobox", "provenance": "profile",
+                 "selected_text": "Canada"},
+            ]}, f)
+        with patch.object(ji, "_T", None):  # _imports() reloads terms
+            ji._imports()
+            err = self._stderr(ji.cmd_verify, jid)
+        self.assertIn("Canada", err)
+        self.assertIn("(profile)", err)      # provenance is visible
+        self.assertIn("[read-back: Canada]", err)  # the verification evidence
+
+    def test_prefilled_value_is_visible(self):
+        """A prefilled field's KIND + VALUE must both surface — the URN-trap
+        class: a prefilled value that looks wrong must be catchable."""
+        import ji
+        jid = "bbbbbbbbbbbbbbbb"
+        d = os.path.join(self._results, jid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "handoff.json"), "w", encoding="utf-8") as f:
+            json.dump({"jid": jid, "mode": "live", "fields": [
+                {"label": "LinkedIn URL", "answer": "urn:li:member:12345",
+                 "kind": "unverified", "method": "prefilled",
+                 "prefilled_value": "urn:li:member:12345"},
+            ]}, f)
+        with patch.object(ji, "_T", None):
+            ji._imports()
+            err = self._stderr(ji.cmd_verify, jid)
+        self.assertIn("urn:li:member:12345", err)
+        self.assertIn("[prefilled:", err)    # kind surfaced
+        self.assertIn("unverified", err)     # not silently accepted
+
+    def test_all_fields_reveals_suspicious(self):
+        """--all must reveal EVERY field — the fix for the location/URN miss
+        where a suspicious field was invisible because it wasn't classified."""
+        import ji
+        jid = "cccccccccccccccc"
+        d = os.path.join(self._results, jid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "handoff.json"), "w", encoding="utf-8") as f:
+            json.dump({"jid": jid, "mode": "shadow", "fields": [
+                {"label": "City", "answer": "Toronto", "kind": "verified",
+                 "method": "fill"},
+                {"label": "Odd Field", "answer": "x", "kind": "verified",
+                 "method": "combobox"},
+            ]}, f)
+        with patch.object(ji, "_T", None):
+            ji._imports()
+            err = self._stderr(ji.cmd_verify, jid, all_fields=True)
+        self.assertIn("Odd Field", err)
+        self.assertIn("City", err)
+
+
+class JiReturnContract(unittest.TestCase):
+    """`ji` docstring contract: every command ends on exactly one line —
+    NEXT: | DECISION: | READY: | DONE:. A surface that ends silent breaks the
+    orchestrator's read loop."""
+
+    def test_ready_prints_readiness_line(self):
+        import ji
+        with patch("ji._ready_jids", return_value=["aaaaaaaaaaaaaaaa"]):
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                rc = ji.cmd_ready()
+            out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("READY:"),
+                        f"must be a one-line READY surface, got {out!r}")
+
+    def test_ready_empty_is_still_a_readiness_line(self):
+        import ji
+        with patch("ji._ready_jids", return_value=[]):
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                rc = ji.cmd_ready()
+            out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("READY:"),
+                        f"empty READY must still be a one-line surface")
+
+
 if __name__ == "__main__":
     unittest.main()
