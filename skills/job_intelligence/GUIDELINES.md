@@ -6,6 +6,15 @@ and live state. Update in-place; never lose prior learnings.
 
 Last updated: 2026-07-27 (post adaptive-probe immune system)
 
+## LOOK FIRST — the default diagnosis posture
+
+When the pipeline reports an uncertain or failed step, **look before you
+leap**: read the screenshot (`IMG:`) with vision, read the DOM dump (`HTML:`),
+run `act --inspect <jid>`. The status/dossier says WHAT failed; only the page
+says WHY (modal open? login wall? hydration race? different form?). Treat this
+as the preferred, encouraged behavior — not a fallback when stuck. The
+suggestive shorthand: **the page is the cause; the strings are only symptoms.**
+
 ## Probe cascade — the contract
 
 `apply/common/inspector.py:probe()` is the **single entry point**. The

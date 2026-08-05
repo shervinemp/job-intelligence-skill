@@ -206,7 +206,7 @@ extract.py is a **noise** filter, not a security control.
    answer values (it used to dump gender / disability / salary / sponsorship
    answers into shadow transcripts and per-job logs on disk).
 4. **Always verify after `NEXT: verify`.** DB can be stale.
-5. **Inspect when stuck.**
+5. **LOOK FIRST, always.** Any uncertain or failed step starts with the evidence, not the status string: read `IMG:` (vision) and `HTML:` (DOM dump), run `act --inspect <jid>`, then decide. The dossier tells you *what* failed — it does not tell you *why*. A status like `no_filler`/`rejected_by_form`/`submitted_uncertain` is a symptom; the screenshot + DOM are the cause. Don't pattern-match on reason strings and don't re-fill blind — look at the actual page (is the modal open? is it a login wall? a hydration race? a different form?). This is primary diagnosis, not a last resort.
 6. **Don't collapse gates.** Dry-run → fill → preview → confirm. Each its own round-trip. See [#apply-pipeline](apply-pipeline).
 7. **Preview before submit.** Always run `act --submit` first. Read every value. Check against profile answers. Fix contradictions before proceeding.
 8. **One-shot fill for SPA forms.** Validation fail → page reloads → all values lost. Fill everything then submit once.
@@ -214,7 +214,7 @@ extract.py is a **noise** filter, not a security control.
 10. **Don't contradict profile answers.** Before filling any field, check the `Profile answers:` block. If what you're about to fill contradicts a profile answer, stop and fix it.
 11. **No custom submit scripts.** Use the pipeline. No `page.evaluate` clicks, no standalone scripts.
 12. **Submit is one-shot.** The pipeline sets `submit_clicked` before clicking. If success detection is uncertain, the next run *investigates* the page (success signals, URL change, form disappearance, validation errors, vision API) — it NEVER clicks submit again. Only `--force` (manual, after human confirms failure) or `undo` clears the guard.
-13. **When uncertain, investigate hard.** The outcome cascade tries: success text → already-applied text → `_check_submit_success` → URL change → form disappearance → validation errors → vision API screenshot. If ALL methods are exhausted (outcome `uncertain`), the job is **NOT** marked applied — it stays `tailored` with `submit_clicked` set (nothing re-submits) and routes to `verify`, which certifies applied only on a real success signal. Never certify applied on "we don't know" (that was the wrong-applied false-positive class).
+13. **When uncertain, LOOK FIRST, then decide.** Before choosing a next action on an uncertain outcome, read the screenshot + DOM dump (rule 5) — the page tells you whether it's a login wall, a hydration race, a validation error, or a real submit. The outcome cascade then tries: success text → already-applied text → `_check_submit_success` → URL change → form disappearance → validation errors → vision API screenshot. If ALL methods are exhausted (outcome `uncertain`), the job is **NOT** marked applied — it stays `tailored` with `submit_clicked` set (nothing re-submits) and routes to `verify`, which certifies applied only on a real success signal. Never certify applied on "we don't know" (that was the wrong-applied false-positive class).
 14. **Validation errors = safe to retry.** If the form rejected with validation errors, `submit_clicked` is cleared — the next run can fill the missing fields and re-submit.
 15. **Never submit blind.** `--fill --submit` together is BLOCKED. Always review the fill report between fill and submit. The orchestrator reads UNFILLED fields, supplies `--answers`, then submits.
 
@@ -256,8 +256,8 @@ Platform-specific notes live in `apply/registry/*.yaml` under the `notes:` field
 | `NEXT:` | Any | Next command |
 | `QUIRKS:` | detect/fill | Platform notes from YAML — once per session |
 | `GUEST_AVAILABLE:` | detect | Guest button found — auto-clicked on fill |
-| `IMG:` | inspect | Screenshot path. Read for visual context |
-| `HTML:` | inspect | Full DOM dump path. Last-resort debug |
+| `IMG:` | inspect | Screenshot path. **READ THIS FIRST** — vision is your primary evidence |
+| `HTML:` | inspect | Full DOM dump path. Read when the screenshot alone doesn't answer — this is primary diagnosis, not a fallback |
 
 ## Output directory
 

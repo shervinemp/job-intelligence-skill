@@ -167,6 +167,23 @@ def main():
           file=sys.stderr)
     for i in issues:
         print(f"  - {i}", file=sys.stderr)
+    # LOOK FIRST: when there are issues, point the orchestrator at the live
+    # page evidence so it diagnoses by looking, not by pattern-matching the
+    # reason strings. The status says WHAT failed; the page says WHY.
+    if issues:
+        print("\n  LOOK FIRST — read the page, not the strings:",
+              file=sys.stderr)
+        # fresh inspect evidence for this jid (best-effort)
+        ss = os.path.join(RESULTS_DIR, jid, "..", "screenshots",
+                          f"inspect_{jid}.jpg")
+        if os.path.exists(ss):
+            print(f"    IMG:  {ss}  (vision — is the modal open? login wall? "
+                  f"a different form?)", file=sys.stderr)
+        print(f"    HTML: {os.path.join(RESULTS_DIR, jid, 'handoff.json')} "
+              f"(dossier — what failed)",
+              file=sys.stderr)
+        print(f"    RUN:  python3 apply.py act --inspect {jid}  "
+              f"(fresh screenshot + DOM dump)", file=sys.stderr)
     # SOFT gate: exit 0 even on issues — the orchestrator/human decides. The
     # issue list is the report.
     return 0 if ran_ok else 1
