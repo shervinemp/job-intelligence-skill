@@ -51,13 +51,15 @@ class _StageDB(unittest.TestCase):
 
 
 class RegistryCliDispatch(unittest.TestCase):
-    def _run(self, action, hash_key=None):
+    def test_unknown_action_errors(self):
+        """Fix #4: an unknown registry action must fail loudly, not silently
+        return 0 — a typo'd action must never look like success."""
         from apply.common.registry_cli import cmd_registry
-        return cmd_registry(action, hash_key)
-
-    def test_unknown_action_returns_0(self):
-        # cmd_registry has no else-branch: unknown actions fall through to 0
-        self.assertEqual(self._run("nonsense"), 0)
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = cmd_registry("nonsense")
+        self.assertEqual(rc, 1)
+        self.assertIn("unknown registry action", buf.getvalue())
 
     def test_confirm_requires_hash(self):
         from apply.common.registry_cli import cmd_registry

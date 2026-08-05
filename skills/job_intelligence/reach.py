@@ -26,7 +26,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from lib.contacts import discover_contacts
-from lib.db import get_conn, get_job, pipeline_status
+from lib.db import get_conn, get_job
 from lib.db.contacts import (
     contact_list, contact_update, attempt_list,
 )
@@ -631,43 +631,8 @@ def cmd_attempts(jid=None, contact_idx=None):
 
 
 # ---------------------------------------------------------------------------
-# Status / Retry / Undo
+# Retry / Undo
 # ---------------------------------------------------------------------------
-
-def cmd_status():
-    s = pipeline_status()
-    conn = get_conn()
-
-    total_contacts = conn.execute("SELECT COUNT(*) FROM contacts").fetchone()[0]
-    total_outreach = conn.execute("SELECT COUNT(*) FROM contacts WHERE reached_out=1").fetchone()[0]
-    pending_email = conn.execute("SELECT COUNT(*) FROM contacts WHERE email_sent=0 AND email != '' AND email IS NOT NULL").fetchone()[0]
-    pending_message = conn.execute("SELECT COUNT(*) FROM contacts WHERE message_sent=0 AND linkedin_url != '' AND linkedin_url IS NOT NULL").fetchone()[0]
-
-    print(f"Jobs: {s['jobs']} total", file=sys.stderr)
-    for stage in ["extracted", "described", "tailored", "applied"]:
-        c = s["stages"].get(stage, 0)
-        if c:
-            print(f"  {stage}: {c}", file=sys.stderr)
-
-    print(f"\nContacts: {total_contacts}", file=sys.stderr)
-    print(f"  Reached out: {total_outreach}", file=sys.stderr)
-    print(f"  Pending email: {pending_email}", file=sys.stderr)
-    print(f"  Pending LinkedIn DM: {pending_message}", file=sys.stderr)
-
-    # Summary per job
-    jids = conn.execute(
-        "SELECT j.id, j.title, j.company, COUNT(c.id) as cnt FROM jobs j "
-        "LEFT JOIN contacts c ON c.job_id=j.id "
-        "WHERE j.state='active' GROUP BY j.id HAVING cnt > 0"
-    ).fetchall()
-    if jids:
-        print(f"\nJobs with contacts:", file=sys.stderr)
-        for r in jids:
-            sent = conn.execute("SELECT COUNT(*) FROM contacts WHERE job_id=? AND reached_out=1", (r["id"],)).fetchone()[0]
-            print(f"  {r['id'][:12]} | {r['title'][:30]:30s} | {r['company'][:20]:20s} | contacts: {r['cnt']} | reached: {sent}", file=sys.stderr)
-
-    print(f"\n  next: {s['next_step']}", file=sys.stderr)
-
 
 def cmd_retry(jid):
     conn = get_conn()

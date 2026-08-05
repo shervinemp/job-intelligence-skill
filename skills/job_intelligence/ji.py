@@ -63,6 +63,12 @@ dispatch through ji and forward to report.py / apply.py:
   python3 ji.py registry
   python3 ji.py preflight
   python3 ji.py applied-confirm
+  python3 ji.py extract <verb> ...       Stage engines under ji (SURFACE_AUDIT v2):
+  python3 ji.py enrich <verb> ...          e.g. ji extract admit --category X <jid>
+  python3 ji.py tailor <verb> ...               ji enrich admit/flag/retry/undo <jid>
+  python3 ji.py reach <verb> ...               ji tailor admit/review/retry/undo <jid>
+  python3 ji.py linkedin [--url] [--count N]   ji reach discover|list|email|message|connect
+  python3 ji.py stage_emails [--days N]        ji linkedin --list | ji stage_emails
 
 Return contract: every command ends with exactly one line —
   NEXT: <command> | DECISION: <owner> <count> — <label> | READY: <jid> ... | DONE: <summary>
@@ -90,6 +96,19 @@ _REPORT_CMDS = {
 _APPLY_CMDS = {
     "act", "creds", "detect", "flag", "navigate", "preflight", "registry",
     "reject", "retry", "undo",
+}
+# Pipeline-stage engines namespaced under ji (SURFACE_AUDIT.md v2): the
+# orchestrator reaches EVERY stage through ji, and stage-specific verbs that
+# collide across engines (flag/undo/retry/reject mean different things in
+# apply vs reach vs tailor) are disambiguated by namespace instead of by a
+# single shared verb. Raw args are forwarded verbatim.
+_STAGE_CMDS = {
+    "extract": "extract.py",
+    "enrich": "enrich.py",
+    "tailor": "tailor.py",
+    "reach": "reach.py",
+    "linkedin": "linkedin.py",
+    "stage_emails": "stage_emails.py",
 }
 
 
@@ -144,6 +163,21 @@ def _risk_unverified(jid):
     return out
 
 
+def _dossier_missing(jid):
+    """Coherence check (finding #6): is the DB's tailored stage backed by a
+    dossier? The READY/HOLD decision reads risk fields from handoff.json but
+    the job stage from the jobs table — if a job is `tailored` in the DB but
+    has NO dossier (e.g. stage advanced out-of-band, or the dossier was
+    cleared), the two stores disagree and the risk-observation claim is
+    unbacked. Reporting-only: does not re-bucket, it makes the drift visible.
+    Returns True when the job is tailored-active in the DB but no handoff.json
+    exists."""
+    import os
+    from lib.config import RESULTS_DIR
+    h = os.path.join(RESULTS_DIR, str(jid), "handoff.json")
+    return not os.path.exists(h)
+
+
 def _ready_jids(limit=None):
     """Tailored active jobs whose risk fields are ALL observed."""
     global _ready_cache
@@ -188,6 +222,18 @@ def cmd_status():
     print(f"  HOLD: {len(_hold)} (unverified/needs-data risk fields)", file=sys.stderr)
     for j in _hold[:5]:
         print(f"    {j[:12]}  {', '.join(_risk_unverified(j)[:2])}", file=sys.stderr)
+    # Cross-store drift (finding #6): a tailored-active job with NO dossier has
+    # an unbacked READY/HOLD claim — its risk-observation status can't be
+    # verified. Report it, don't re-bucket (a missing dossier may be legitimate
+    # mid-pipeline). The orchestrator can re-fill to regenerate it.
+    _drift = [r["id"] for r in conn.execute(
+        "SELECT id FROM jobs WHERE stage='tailored' AND state='active'"
+    ).fetchall() if _dossier_missing(r["id"])]
+    if _drift:
+        print(f"  DRIFT: {len(_drift)} tailored job(s) with NO dossier — "
+              f"READY/HOLD unverified (re-fill to regenerate)", file=sys.stderr)
+        for j in _drift[:5]:
+            print(f"    {j[:12]}", file=sys.stderr)
     print(f"\nNEXT: ji decisions  |  ji ready  |  report.py shadow --classify",
           file=sys.stderr)
 
@@ -309,13 +355,6 @@ def cmd_fetch(days=None):
     return _run("enrich.py")
 
 
-def cmd_tailor(auto=False):
-    args = ["tailor.py"]
-    if auto:
-        args.append("--auto")
-    return _run(*args)
-
-
 def main():
     if len(sys.argv) < 2 or sys.argv[1] in ("help", "-h", "--help"):
         print(__doc__, file=sys.stderr)
@@ -389,8 +428,6 @@ def main():
         return cmd_shadow(limit=limit, recheck="--recheck" in args)
     if cmd == "fetch":
         return cmd_fetch()
-    if cmd == "tailor":
-        return cmd_tailor(auto="--auto" in args)
     if cmd == "verify-applied":
         if not args:
             print("Usage: ji verify-applied <jid>", file=sys.stderr)
@@ -403,6 +440,11 @@ def main():
     # owning engine — report.py for evidence/config/decisions, apply.py for
     # apply-pipeline actions. This makes ji a TRUE superset (SURFACE_AUDIT.md):
     # the orchestrator memorizes ji only; the engines stay callable beneath.
+    # Pipeline-stage namespace: ji <stage> <verb> ... → python <stage>.py
+    # <verb> ... Every stage engine stays callable beneath ji (SURFACE_AUDIT
+    # v2) — the orchestrator never needs to leave ji.
+    if cmd in _STAGE_CMDS:
+        return _run(_STAGE_CMDS[cmd], *args)
     if cmd in _REPORT_CMDS:
         return _run("report.py", cmd, *args)
     if cmd in _APPLY_CMDS:

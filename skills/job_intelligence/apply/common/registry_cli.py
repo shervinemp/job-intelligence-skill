@@ -45,6 +45,14 @@ def cmd_registry(action: str, hash_key=None, dry_run: bool = False):
     elif action == "drift":
         from apply.common.drift import run as _drift_run
         _drift_run(dry_run=dry_run, verbose=True)
+    else:
+        # Fail loud: an unknown registry action looks like a success if it
+        # silently returns 0 — a typo'd `apply.py registry confirmn` would
+        # quietly do nothing and the orchestrator would believe it acted.
+        print(f"ERROR: unknown registry action '{action}' "
+              f"(candidates|confirm|clear|corpus|failures|drift)",
+              file=sys.stderr)
+        return 1
     return 0
 
 

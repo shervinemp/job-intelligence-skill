@@ -9,7 +9,7 @@ from lib.contacts.discover import _build_team_keywords
 from lib.db import get_conn
 from reach import (
     cmd_discover, cmd_discover_all, cmd_list, cmd_email, cmd_message, cmd_connect,
-    cmd_status, cmd_retry, cmd_undo, cmd_update,
+    cmd_retry, cmd_undo, cmd_update,
 )
 
 
@@ -63,7 +63,7 @@ class CommandSurface(unittest.TestCase):
         import reach as _reach
         documented = {
             "discover", "list", "email", "message", "connect", "update",
-            "attempts", "status", "retry", "undo", "help",
+            "attempts", "retry", "undo", "help",
         }
         parser_src = _reach.main.__code__.co_consts
         # Cheap structural check: the module must expose a cmd_ for each.
