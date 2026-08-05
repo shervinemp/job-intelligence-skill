@@ -1,8 +1,7 @@
 # Coverage baseline + handoff-testing strategy
 
 Measured 2026-08-05 with `coverage` 7.15.3 against the full suite
-(711 passed + 141 subtests — includes handoff, round-trip, strategy, drift,
-verify, credentials, and dispatcher tests). Generated with:
+(719 passed + 141 subtests). Generated with:
 
 ```
 coverage erase
@@ -12,13 +11,14 @@ coverage json -o <tmp>/covdata.json
 
 ## Baseline
 
-**Production coverage: 46.0%** (14,252 statements). Raised from 42.3% across
-four passes:
+**Production coverage: 47.1%** (14,252 statements). Raised from 42.3% across
+five passes:
 - `detect.py` 12.5% → 75.0% · `submit.py` 24.3% → 24.5%
 - `lib/report.py` 15.1% → 27.3% · `lib/automation/diff.py` → 92.9%
 - `apply/strategies/text.py` 13.9% → 74.7% · `drift.py` 4.7% → 95.3% ·
   `verify.py` 15.0% → 37.9%
 - `lib/credentials.py` 14.4% → 32.0% · `apply/act/__init__.py` 10.5% → 78.9%
+- `apply/common/inspector.py` 18.4% → 51.5% (probe cascade via jsdom)
 
 | Module | Coverage | Why low |
 |--------|----------|---------|
@@ -105,6 +105,10 @@ Mock vs stub split:
 7. `test_handoff_contract.py` (extended) — the `act` arg dispatcher:
    malformed `--answers` fails loudly, valid overrides route to fill,
    submit/next dispatch, unknown command errors. **Added this pass (5 tests).**
+8. `test_probe_cascade.py` — the probe cascade via jsdom CorpusPage: strategy
+   selection by DOM shape, probe_all report, navigation-race retry,
+   merge-with-widgets dedup, failure-capture sidecar. **Added this pass
+   (8 tests).**
 2. Extend to `report.py` handoff/diff/audit readers — assert they round-trip
    what the writers emit (the dossier is the truth the orchestrator reads).
 3. Live smoke (one real browser job) for the `(L)`-marked cases — these will
