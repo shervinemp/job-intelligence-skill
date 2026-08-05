@@ -259,5 +259,57 @@ class SubmitHandoff(_HandoffDB):
         self.assertIn("validation", reason)
 
 
+class ActDispatcher(unittest.TestCase):
+    """apply/act/__init__.py run() — the arg dispatcher that routes act
+    subcommands. The --answers JSON parsing (orchestrator-supplied overrides)
+    is the handoff-relevant path: a malformed override must fail loudly."""
+
+    def test_bad_answers_json_emits_error(self):
+        from apply.act import run
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = run({"command": "fill", "jid": "aaaaaaaaaaaaaaaa",
+                      "--answers": "{not json", "--quick": True})
+        self.assertEqual(rc, 1)
+        self.assertIn("ERROR: invalid --answers JSON", buf.getvalue())
+
+    def test_good_answers_routes_to_fill(self):
+        from apply.act import run
+        with patch("apply.act.fill.cmd_fill", return_value=0) as cf:
+            rc = run({"command": "fill", "jid": "aaaaaaaaaaaaaaaa",
+                      "--answers": '{"email": "a@b.com"}', "--quick": True})
+        self.assertEqual(rc, 0)
+        cf.assert_called_once()
+        args = cf.call_args
+        self.assertEqual(args[0][0], "aaaaaaaaaaaaaaaa")
+        # answers is the 2nd positional arg: (jid, answers, verify=..., ...)
+        self.assertEqual(args[0][1], {"email": "a@b.com"})
+        self.assertEqual(args[1]["verify"], False)  # quick implies no verify
+
+    def test_unknown_command_errors(self):
+        from apply.act import run
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = run({"command": "nope", "jid": ""})
+        self.assertEqual(rc, 1)
+        self.assertIn("unknown act command", buf.getvalue())
+
+    def test_submit_routes_with_flags(self):
+        from apply.act import run
+        with patch("apply.act.submit.cmd_submit", return_value=0) as cs:
+            rc = run({"command": "submit", "jid": "aaaaaaaaaaaaaaaa",
+                      "--force": True})
+        self.assertEqual(rc, 0)
+        cs.assert_called_once()
+        self.assertTrue(cs.call_args[1]["force"])
+
+    def test_next_routes_to_inspect(self):
+        from apply.act import run
+        with patch("apply.act.inspect.cmd_next", return_value=0) as cn:
+            rc = run({"command": "next", "jid": "aaaaaaaaaaaaaaaa"})
+        self.assertEqual(rc, 0)
+        cn.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

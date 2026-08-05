@@ -1,8 +1,8 @@
 # Coverage baseline + handoff-testing strategy
 
 Measured 2026-08-05 with `coverage` 7.15.3 against the full suite
-(687 passed + 141 subtests — includes the handoff-contract, report-round-trip,
-text-strategy, drift, and verify-flow tests). Generated with:
+(711 passed + 141 subtests — includes handoff, round-trip, strategy, drift,
+verify, credentials, and dispatcher tests). Generated with:
 
 ```
 coverage erase
@@ -12,12 +12,13 @@ coverage json -o <tmp>/covdata.json
 
 ## Baseline
 
-**Production coverage: 45.2%** (14,252 statements). Raised from 42.3% across
-three passes:
+**Production coverage: 46.0%** (14,252 statements). Raised from 42.3% across
+four passes:
 - `detect.py` 12.5% → 75.0% · `submit.py` 24.3% → 24.5%
 - `lib/report.py` 15.1% → 27.3% · `lib/automation/diff.py` → 92.9%
 - `apply/strategies/text.py` 13.9% → 74.7% · `drift.py` 4.7% → 95.3% ·
   `verify.py` 15.0% → 37.9%
+- `lib/credentials.py` 14.4% → 32.0% · `apply/act/__init__.py` 10.5% → 78.9%
 
 | Module | Coverage | Why low |
 |--------|----------|---------|
@@ -97,6 +98,13 @@ Mock vs stub split:
 5. `test_verify.py` (extended) — the `_playwright_verify` 4-strategy flow:
    success text / confirmation URL / modal-closed / Applied-button mark applied;
    validation_error is inconclusive. **Added this pass (6 tests).**
+6. `test_credentials.py` — the pure credential logic: multi-tenant domain
+   keys, password masking, complexity scoring, platform rule resolution
+   (workday-symbol), deterministic rule extraction from page text, freeform
+   rule parsing. **Added this pass (19 tests).**
+7. `test_handoff_contract.py` (extended) — the `act` arg dispatcher:
+   malformed `--answers` fails loudly, valid overrides route to fill,
+   submit/next dispatch, unknown command errors. **Added this pass (5 tests).**
 2. Extend to `report.py` handoff/diff/audit readers — assert they round-trip
    what the writers emit (the dossier is the truth the orchestrator reads).
 3. Live smoke (one real browser job) for the `(L)`-marked cases — these will
