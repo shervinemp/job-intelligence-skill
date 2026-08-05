@@ -86,36 +86,78 @@ def _score_gap_fill():
     return ok, len(GOLDEN_GAP_FILL), results
 
 
+def _stub_models(module):
+    """Replace ask_api with a deterministic stub so the SCORING LOGIC is
+    testable when the real model is down. The stub picks the option whose
+    text matches the golden expected answer — a PERFECT model — so the
+    harness should report 100%. This proves the scoring logic works, not
+    that the real model does."""
+    import lib.automation.llm as llm
+    from unittest.mock import patch as _p
+
+    def fake_ask_text(prompt, **kw):
+        # pick_option's prompt lists "[i] <text>" lines. The golden set
+        # expects the option containing the answer phrase; the stub picks the
+        # FIRST option whose text contains the answer's first word.
+        import re
+        ans = ""
+        for line in prompt.splitlines():
+            if line.startswith("Answer:"):
+                ans = line.split(":", 1)[1].strip().lower()
+                break
+        if not ans:
+            return ("0", None)
+        for line in prompt.splitlines():
+            m = re.match(r"\[(\d+)\] (.+)", line)
+            if m and ans.split()[0] in m.group(2).lower():
+                return (m.group(1), None)
+        return ("0", None)
+
+    return _p("lib.ask_api.available", return_value=True), \
+        _p("lib.ask_api.ask_text", side_effect=fake_ask_text)
+
+
 def main():
     surface = "all"
     want_json = False
     args = sys.argv[1:]
+    stub = "--stub" in args
     if "--surface" in args:
         surface = args[args.index("--surface") + 1]
     if "--json" in args:
         want_json = True
 
+    stub_ctx = _stub_models(__import__("sys").modules[__name__]) if stub else None
+
     from lib import ask_api
-    if not ask_api.available():
+    if not ask_api.available() and not stub:
         print("SKIPPED: ask_api not available — run the eval when the local "
-              "model is up (or set JI_LLM_MODE=on).")
+              "model is up (or use --stub to test the harness itself).")
         return 0
 
     # Force escapes ON for the eval, restore after.
     prev = os.environ.get("JI_LLM_MODE")
     os.environ["JI_LLM_MODE"] = "on"
     try:
-        report = {}
-        if surface in ("all", "option_pick"):
-            ok, n, rows = _score_option_pick()
-            report["option_pick"] = {"correct": ok, "n": n,
-                                     "accuracy": round(ok / n, 3),
-                                     "rows": rows}
-        if surface in ("all", "gap_fill"):
-            ok, n, rows = _score_gap_fill()
-            report["gap_fill"] = {"correct": ok, "n": n,
-                                  "accuracy": round(ok / n, 3),
-                                  "rows": rows}
+        if stub_ctx is not None:
+            for p in stub_ctx:
+                p.start()
+        try:
+            report = {}
+            if surface in ("all", "option_pick"):
+                ok, n, rows = _score_option_pick()
+                report["option_pick"] = {"correct": ok, "n": n,
+                                         "accuracy": round(ok / n, 3),
+                                         "rows": rows}
+            if surface in ("all", "gap_fill"):
+                ok, n, rows = _score_gap_fill()
+                report["gap_fill"] = {"correct": ok, "n": n,
+                                      "accuracy": round(ok / n, 3),
+                                      "rows": rows}
+        finally:
+            if stub_ctx is not None:
+                for p in stub_ctx:
+                    p.stop()
     finally:
         if prev is None:
             os.environ.pop("JI_LLM_MODE", None)

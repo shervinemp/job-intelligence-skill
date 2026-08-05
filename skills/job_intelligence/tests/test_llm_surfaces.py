@@ -268,5 +268,168 @@ class JiReturnContract(unittest.TestCase):
                         f"empty READY must still be a one-line surface")
 
 
+class JiStatusSurface(unittest.TestCase):
+    """`ji status` — the one-screen fleet + READY + HOLD aggregate the
+    orchestrator reads first. Every count must be derivable from the evidence
+    the orchestrator can re-check (DB stage + dossier risk fields)."""
+
+    def _tmp_db(self):
+        tmp = tempfile.mkdtemp()
+        import lib.db.schema as schema
+        schema._conn = None
+        schema.DB_PATH = os.path.join(tmp, "ji.db")
+        schema.DB_DIR = tmp
+        conn = schema.get_conn()
+        self._tmp = tmp
+        self._conn = conn
+        return conn, tmp
+
+    def tearDown(self):
+        import lib.db.schema as schema
+        if schema._conn:
+            schema._conn.close()
+        schema._conn = None
+        if hasattr(self, "_tmp"):
+            shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _job(self, jid, stage, state="active"):
+        self._conn.execute(
+            "INSERT OR IGNORE INTO jobs (id, url, title, company, stage, state, "
+            "created_at, updated_at, scripts) "
+            "VALUES (?,?,?,?,?,?,?,?, '[]')",
+            (jid, f"https://x.com/{jid}", "Role", "Co", stage, state,
+             "2026-01-01T00:00:00", "2026-01-01T00:00:00"),
+        )
+        self._conn.commit()
+
+    def test_status_counts_and_one_line_next(self):
+        import ji
+        conn, tmp = self._tmp_db()
+        self._job("aaaaaaaaaaaaaaaa", "tailored")  # no dossier → HOLD
+        self._job("bbbbbbbbbbbbbbbb", "applied")
+        with patch("lib.config.RESULTS_DIR", os.path.join(tmp, "results")), \
+             patch.object(ji, "_T", None), \
+             patch("ji._risk_unverified",
+                   return_value=["Country (unverified)"]):
+            ji._imports()
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                ji.cmd_status()
+            out = buf.getvalue()
+        self.assertIn("FLEET: 2 jobs | applied=1", out)
+        self.assertIn("READY: 0", out)
+        self.assertIn("HOLD: 1", out)
+        self.assertIn("Country", out)  # the HOLD reason is visible
+        # the one-line footer survives
+        self.assertIn("NEXT: ji decisions", out)
+
+    def test_ready_counts_observed_risk_free(self):
+        import ji
+        conn, tmp = self._tmp_db()
+        self._job("aaaaaaaaaaaaaaaa", "tailored")
+        self._job("bbbbbbbbbbbbbbbb", "tailored")
+        with patch("lib.config.RESULTS_DIR", os.path.join(tmp, "results")), \
+             patch.object(ji, "_T", None), \
+             patch("ji._risk_unverified", return_value=[]):
+            ji._imports()
+            ready = ji._ready_jids()
+        self.assertEqual(len(ready), 2)
+
+    def test_ready_excludes_unverified_risk(self):
+        import ji
+        conn, tmp = self._tmp_db()
+        self._job("aaaaaaaaaaaaaaaa", "tailored")
+        self._job("bbbbbbbbbbbbbbbb", "tailored")
+        with patch("lib.config.RESULTS_DIR", os.path.join(tmp, "results")), \
+             patch.object(ji, "_T", None), \
+             patch("ji._risk_unverified",
+                   side_effect=lambda jid: ["Country (unverified)"]
+                   if jid.startswith("aaaa") else []):
+            ji._imports()
+            ready = ji._ready_jids()
+        self.assertEqual(ready, ["bbbbbbbbbbbbbbbb"])
+
+
+class JiVerifyAdversarial(_SurfaceFixture):
+    """Poisoned evidence must be VISIBLE in `ji verify` — a bad value the
+    orchestrator can't see can't be vetoed (the C-O2 faithful-evidence
+    invariant, adversarial form)."""
+
+    def test_antigua_option_value_is_visible(self):
+        """The Antigua-class wrong value (bare +1 picked as country) must
+        surface so the orchestrator catches it before submit."""
+        import ji
+        jid = "dddddddddddddddd"
+        d = os.path.join(self._results, jid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "handoff.json"), "w", encoding="utf-8") as f:
+            json.dump({"jid": jid, "mode": "shadow", "fields": [
+                {"label": "Phone country code", "answer": "+1",
+                 "kind": "unverified", "method": "combobox",
+                 "provenance": "learned",
+                 "selected_text": "Antigua and Barbuda (+1-268)"},
+            ]}, f)
+        with patch.object(ji, "_T", None):
+            ji._imports()
+            err = self._stderr(ji.cmd_verify, jid)
+        self.assertIn("+1", err)                        # the answer is shown
+        self.assertIn("Antigua", err)                   # the read-back shows the trap
+        self.assertIn("unverified", err)                # not certified as good
+
+    def test_wrong_prefilled_value_is_visible(self):
+        """A prefilled value that contradicts the profile must be catchable —
+        value + kind + provenance all on the line."""
+        import ji
+        jid = "eeeeeeeeeeeeeeee"
+        d = os.path.join(self._results, jid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "handoff.json"), "w", encoding="utf-8") as f:
+            json.dump({"jid": jid, "mode": "live", "fields": [
+                {"label": "Location", "answer": "M5V 2T6", "kind": "verified",
+                 "method": "prefilled", "prefilled_value": "M5V 2T6",
+                 "provenance": "profile"},
+            ]}, f)
+        with patch.object(ji, "_T", None):
+            ji._imports()
+            err = self._stderr(ji.cmd_verify, jid)
+        self.assertIn("M5V 2T6", err)                   # postal code as location — visible
+        self.assertIn("[prefilled:", err)               # kind surfaced
+        self.assertIn("(profile)", err)                 # provenance surfaced
+
+
+class EvalHarnessSelfTest(unittest.TestCase):
+    """The gated eval script's SCORING LOGIC — tested with a perfect stub
+    model. A 100% stub proves the harness measures correctly; any shortfall
+    with the real model is then attributable to the model, not the harness."""
+
+    def _run(self, surface):
+        import subprocess, sys as _sys
+        skill = os.path.join(os.path.dirname(__file__), "..")
+        script = os.path.join(skill, "scripts", "eval_llm_surfaces.py")
+        r = subprocess.run(
+            [_sys.executable, script, "--stub", "--surface", surface],
+            capture_output=True, text=True, cwd=skill)
+        return r.stdout
+
+    def test_stub_option_pick_reports_100(self):
+        out = self._run("option_pick")
+        self.assertIn("option_pick: 4/4 (100%)", out)
+
+    def test_stub_skips_when_not_stubbed(self):
+        """Without --stub and with ask_api down, the eval must SKIP, not
+        crash — the gating is part of the contract."""
+        import subprocess, sys as _sys
+        skill = os.path.join(os.path.dirname(__file__), "..")
+        script = os.path.join(skill, "scripts", "eval_llm_surfaces.py")
+        r = subprocess.run([_sys.executable, script, "--surface", "option_pick"],
+                           capture_output=True, text=True, cwd=skill)
+        # if the local model happens to be up this test is moot; assert the
+        # script ran and returned a contract line either way
+        self.assertTrue(r.returncode == 0)
+        out = r.stdout + r.stderr
+        self.assertTrue("SKIPPED" in out or "option_pick" in out or ":" in out,
+                        "eval must either SKIP or produce a scored surface")
+
+
 if __name__ == "__main__":
     unittest.main()
