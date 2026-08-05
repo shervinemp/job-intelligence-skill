@@ -102,7 +102,7 @@ Dismissal at fill time:
       when `confirm_modal_signals > 0` is detected. Catches popups
       that appear after typing email ("Please confirm") or before
       navigating ("Are you sure you want to leave?").
-  - Workday cookie banner: `fill.py:_handle_login_wall` clicks
+  - Workday cookie banner: `auth_flow.py:handle_login_wall` clicks
     `legalNoticeAcceptButton` before login flow.
   - `confirm_modal_signals` is a stable capability hash key — a
     platform that reliably shows mid-fill confirms hashes distinctly
@@ -125,7 +125,7 @@ hashes distinctly from one that doesn't.
   - Body text matches `\b\d{1,2}-?digit (code|verification|otp)\b`
     or `two-factor|2fa|verification code|authentication code|enter the code`
 
-The multi-password trial loop in `_handle_login_wall` checks for
+The multi-password trial loop in `auth_flow.py:handle_login_wall` checks for
 `"2fa"` BEFORE the `uncertain` branch — on 2FA detection it:
   - Saves the verified password as primary (creds were accepted)
   - Emits `STATUS: 2fa_required` + `NEXT: login` (with instructions
@@ -189,9 +189,24 @@ input paths work without it.
 - Workday `createAccountCheckbox` checked before submit
 - `enumerate()` instead of `list.index()` for password logging
 
+### CAPTCHA / credential hardening (added after the above)
+- Runtime `check_captcha` matches reCAPTCHA/hCaptcha iframes + `.g-recaptcha` /
+  `.h-captcha`, ARIA-only widgets (`[role="captcha"]`,
+  `aria-label*="captcha"`), and multilingual body text (FR/ES/DE/RU/ZH/HI) —
+  previously only Cloudflare/Turnstile was seen at runtime.
+- Auth-form CAPTCHA is a distinct `"captcha"` signal from `_login_check` /
+  `_check_account_created` — never folded into the "uncertain → assume OK"
+  path that saved/promoted creds for a login/account that never happened.
+- Post-login CAPTCHA gate in `fill.py` (mirrors the post-login 2FA gate).
+- Per-domain skip: `captcha_skip_domains` in `apply_policy.json` aborts
+  (records `captcha_required`) only for listed domains; `captcha_skip` stays
+  the global flag.
+- Plaintext credential fallback is opt-in: `JI_ALLOW_PLAINTEXT=1` (or settings
+  `allow_plaintext`) — a silent keychain→plaintext downgrade refuses to write
+  and says so; allowed writes use owner-only ACL (`0o600`).
+
 ### Open work
 - Gmail staging blocked (OAuth expired — `gmail-cli auth add`)
-- Skyvern server stale (ECONNREFUSED on 9222 — needs restart)
 - ~100 active LinkedIn Easy Apply jobs waiting on `apply.py auto`
 - 13 active jobs with external ATS URLs (Harvey/Ashby, Scribd, TRM
   Labs, Narvar/Greenhouse, Lyft/CareerPuck, Behaviour ×2,
@@ -202,6 +217,9 @@ input paths work without it.
   detected by the scanner, but the fill loop still uses
   `_try_filechooser_upload` which expects an upload button. A future
   synthetic DataTransfer event via `page.evaluate` will handle this.
+- **262-case corpus** (TEST_CORPUS.md + TEST_CORPUS_SOLUTIONS.md) is
+  catalogued with solution variants but mostly `UNTESTED`; run
+  cheapest-first (unit → fake-page → temp-DB → live) and pin any `FOUND`.
 
 ## Conventions
 

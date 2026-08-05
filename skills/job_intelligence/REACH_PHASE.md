@@ -57,7 +57,6 @@ reach.py discover <jid>           Auto-discover all contacts for a job
 reach.py list <jid>                Show discovered contacts
 reach.py email <jid> [--contact N] [--dry-run]  Send email to a contact
 reach.py message <jid> [--contact N] [--dry-run] Send LinkedIn DM
-reach.py status                    Pipeline state with contact info
 reach.py retry <jid>               Retry failed contact discovery
 reach.py connect <jid> [--contact N]  Send LinkedIn connection request
 reach.py undo <jid>                Reset contact state

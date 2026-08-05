@@ -1260,11 +1260,11 @@ Status legend (fill in as you test): `UNTESTED` (default) / `PASS` / `FAIL` /
 - **Expected**: attempt rows listed.
 - **Verify**: assert.
 
-### N-011. status shows channel state
+### N-011. status shows channel state — DEAD (no dispatch)
 - **Scenario**: `reach.py status`.
-- **Trace**: `reach.py:cmd_status`.
-- **Expected**: per-contact sent flags.
-- **Verify**: assert.
+- **Trace**: `reach.py:cmd_status` exists but NO subparser/dispatch registers it — a ghost command. The per-contact sent flags are visible via `reach.py list <jid>`.
+- **Expected**: per-contact sent flags (via `list`, not `status`).
+- **Verify**: `reach.py status` errors (unknown command); the flags surface through `reach.py list`.
 
 ### N-012. person_keys canonicalization
 - **Scenario**: URL variants of one profile.

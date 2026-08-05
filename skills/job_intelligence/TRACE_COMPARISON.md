@@ -14,7 +14,7 @@ sloppy deepening would swallow (the regression we must prevent).
 
 ## Act 1 — auth wall
 
-### Today (fill.py `_handle_login_wall`, inline in the orchestrator)
+### Before C1 (fill.py inline) / After C1 (auth_flow.py module)
 
 ```
 LOGIN_WALL: jobs.acme.com
@@ -24,19 +24,10 @@ LOGIN_WALL: jobs.acme.com
 LOGIN: promoted this password to primary for jobs.acme.com
 ```
 
-### After C1 (auth-wall module)
-
-```
-LOGIN_WALL: jobs.acme.com
-  Switched to Sign In form
-  Auto-login: me@x.com (2 password(s))
-  LOGIN: OK with password #2
-LOGIN: promoted this password to primary for jobs.acme.com
-```
-
-**Identical.** C1 carries the existing trail verbatim — it only relocates the code, not
-the signals. The orchestrator can still see *which* password won, and that promotion
-happened, which is exactly C-O1/C-O3 (step-level + causal trace).
+**Identical before and after.** C1 (implemented, commit `09c42e4`) relocated the code to
+`apply/act/auth_flow.py` — it only moved the implementation, never the signals. The
+orchestrator still sees *which* password won, and that promotion happened, which is
+exactly C-O1/C-O3 (step-level + causal trace).
 
 ### The regression a sloppy C1 must not do
 

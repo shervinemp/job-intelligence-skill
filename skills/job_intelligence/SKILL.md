@@ -5,6 +5,8 @@
 > ambiguity only), and the orchestrator (LLM-in-the-middle) is the operator,
 > verifier and debugger consuming the evidence trail. `report.py glossary`
 > prints the canonical vocabulary (generated from `apply/common/terms.py`).
+>
+> Low-level LLM probe when you need one: `lib/ask_api.py [--img <path>] --prompt <text>`.
 
 ## Read First
 
@@ -35,16 +37,21 @@ Distinguish the two `verify` verbs:
 
 ## Pipeline stages
 
+All stages are reached THROUGH `ji` (the ONE surface). The raw engines
+(`extract.py`, `enrich.py`, `tailor.py`, `reach.py`, `linkedin.py`,
+`stage_emails.py`) stay callable beneath but the orchestrator uses
+`ji <stage> <verb>`:
+
 | Stage | Gate |
 |-------|------|
-| `stage_emails.py [--days N]` | Auto |
-| `extract.py` | `admit --category <name> <jid>` / reject |
-| `linkedin.py [--url] [--count N]` | admit/reject |
-| `enrich.py` | admit/reject/flag (add `--team <name>` for team discovery) |
-| `tailor.py [--auto]` | admit/reject/undo/retry |
-| `reach.py discover/list <jid>` | Contact discovery + outreach |
-| `reach.py email/message/connect <jid>` | Send email / LinkedIn DM / connect request |
-| `apply.py detect/act/verify <jid>` | Follow apply pipeline |
+| `ji stage_emails [--days N]` | Auto |
+| `ji extract <verb>` | `admit --category <name> <jid>` / reject / reset / submit / auto |
+| `ji linkedin [--url] [--count N]` / `ji linkedin --list` | admit/reject via extract |
+| `ji enrich <verb>` | admit/reject/flag/retry/retry-skipped/undo/open (add `--team <name>` for team discovery) |
+| `ji tailor <verb>` | craft/review/admit/reject/undo/retry/relentless/reset (`--auto` for batch) |
+| `ji reach discover|list <jid>` | Contact discovery + outreach |
+| `ji reach email|message|connect <jid>` | Send email / LinkedIn DM / connect request |
+| `ji apply detect|act|verify <jid>` | Follow apply pipeline |
 
 ## Change protocol (cooked-in lessons — do NOT skip)
 
@@ -71,55 +78,27 @@ Never Copy-Item a directory by hand (the apply/apply nesting lesson).
 A sync tool that cannot detect direction is poison: hash equality is not
 proof of intent.
 
-## Commands
+## Commands (report / gmail / registry surface)
+
+Stage verbs live under Pipeline stages; apply verbs under Apply pipeline; reach
+verbs under Reach. This table is only the commands with no other home.
 
 | Command | Action |
 |---------|--------|
-| `extract.py admit --category tech/general <jid> [--notes]` | Accept w/ category |
-| `extract.py reject <jid>` | Skip |
-| `extract.py reset <jid>` | Delete + re-extract |
-| `extract.py submit <tid> '<json>'` | Manually add URLs |
-| `enrich.py admit/reject/flag <jid>` | Accept / skip / auth wall |
-| `enrich.py retry` | Retry failed |
-| `enrich.py retry-skipped` | Reset skipped → extracted |
-| `enrich.py open [<jid>]` | Open in Chrome |
-| `tailor.py [--jid <jid>] [--auto]` | Start tailoring (crafts 1; --auto = all described) |
-| `tailor.py admit <jid>` | Confirm → stage = tailored (auto-finds resume in results dir) |
-| `python -m lib.build_resume <resume.json> <out_dir>` | Validate schema + build CV/cover PDFs (`--validate` = check only) |
-| `tailor.py reject <jid>` | Skip |
-| `tailor.py undo <jid>` | Move back one stage |
-| `tailor.py review [--jobs N]` | Review tailored jobs (approve or retry --feedback) |
-| `tailor.py retry [<jid>] [--feedback "x"]` | Retry failed or re-tailor with feedback |
-| `tailor.py reset --state failed` | Reset by state |
-| `tailor.py reset --stage tailored` | Reset by stage |
-| `extract.py reset` | Wipe DB, fresh start |
-| `lib/ask_api.py [--img <path>] --prompt <text>` | Query LLM API |
 | `report.py stats` | Pipeline state + next step |
-| `reach.py discover <jid> [--team <name>]` | Discover contacts (recruiters, team members, connections) |
-| `reach.py discover --all [--limit N]` | Discover for all described/tailored jobs without contacts |
-| `reach.py list <jid>` | Show discovered contacts for a job |
-| `reach.py email <jid> --contact N [--body <text>] [--force]` | Send email via Gmail |
-| `reach.py message <jid> --contact N [--body <text>] [--force]` | Send LinkedIn DM |
-| `reach.py connect <jid> --contact N [--note <text>]` | Send LinkedIn connection request |
-| `reach.py update <jid> --contact N [--email <addr>] [--note <text>] [--set-sent email\|message]` | Backfill/edit contact fields |
-| `reach.py attempts [<jid>]` | Show outreach attempts |
-| `reach.py status` | Pipeline state with contact/outreach summary |
-| `reach.py retry <jid>` | Re-run contact discovery |
-| `reach.py undo <jid> [--confirm]` | Reset contact state (--confirm required once real outreach exists) |
 | `report.py handovers [USER\|ORCHESTRATOR\|DATA\|REVIEW]` | THE decisions inbox: every open decision, grouped by owner, with evidence + answer commands |
 | `report.py help` | The grouped surface map (decisions / evidence / fleet / readiness) |
 | `report.py widgets` | Unhandled widget-class backlog (probe-failure artifacts) |
+| `report.py candidates [--limit N]` | Tailored jobs ready to apply |
+| `report.py archive` | Archive state/registry entries for reset jobs |
 | `gmail-cli send <to> <subject> --body <text>` | Send email (low-level) |
 | `gmail-cli auth add <email> --services gmail.send` | Auth Gmail send scope |
 | `extract.py auto` | Auto-extract URLs from staged emails |
 | `apply.py registry <action>` | Probe observations: candidates / confirm / clear / corpus / failures / drift |
-| `report.py candidates [--limit N]` | Tailored jobs ready to apply |
-| `report.py archive` | Archive state/registry entries for reset jobs |
-
 
 ## Tailoring
 
-Full guide in `tailoring.md`. The essentials: the LLM writes a `resume.json` data file (no code); `lib/build_resume.py` reads the JSON and produces PDFs; both `JI_TAILOR` routes converge on `tailor.py admit <jid>` (grounding gate + stage advance to "tailored").
+Full guide in `tailoring.md`. The essentials: the LLM writes a `resume.json` data file (no code); `lib/build_resume.py` reads the JSON and produces PDFs; both `JI_TAILOR` routes converge on `tailor.py admit <jid>` (grounding gate + stage advance to "tailored"). Validate the schema without building: `python -m lib.build_resume <resume.json> <out_dir> --validate`.
 
 ## Apply pipeline
 
@@ -246,7 +225,15 @@ Platform-specific notes live in `apply/registry/*.yaml` under the `notes:` field
 ## Account & login notes
 
 - Repeat portals (e.g., 2nd Workday): guest apply works but creates new account per company. No credential reuse.
-- Pipeline cannot create accounts, remember passwords, handle 2FA. Login walls need manual intervention.
+- Auto-login (approved domains only), 2FA detection, and account creation ARE
+  automated (`apply/act/auth_flow.py`): saved creds are tried per-password
+  with promotion, 2FA surfaces as `2fa_required` for manual completion, and
+  account creation saves creds only after a verified success. A CAPTCHA on the
+  auth form or account form records `captcha_required` and NEVER saves/promotes
+  creds. Credentials are only typed into domains approved via the domain gate
+  (`report.py domains approve|deny`). Plaintext credential fallback is opt-in
+  (`JI_ALLOW_PLAINTEXT=1`). Login walls on unapproved/unknown domains still
+  need manual intervention.
 
 ## Extraction rules
 
