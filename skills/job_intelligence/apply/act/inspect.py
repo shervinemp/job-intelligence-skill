@@ -51,6 +51,14 @@ def cmd_inspect(jid):
 
 def cmd_next(jid):
     state = load_state()
+    # CURVEBALL C2: if submit was already clicked (uncertain outcome), --next
+    # must not click more buttons on a possibly-submitted page — route to the
+    # investigation path instead.
+    if state.get("submit_clicked"):
+        print(f"  GUARD: submit was already clicked for {jid} — --next refused; "
+              f"investigate the outcome instead", file=sys.stderr)
+        emit_next("act --submit", "the submit path investigates (never re-clicks)")
+        return 1
     with chrome_session(state) as (page, ctx):
         url = state.get("external_url") or state.get("url", "")
         cur = page.url or ""
@@ -59,18 +67,28 @@ def cmd_next(jid):
             time.sleep(1)
 
         nxt = _find_next_button(page)
-        if nxt and _click_action(page, nxt["text"]):
+        if not nxt:
+            emit_error("no Next/Continue button found")
+            return 1
+        _t = (nxt.get("text") or "").lower()
+        # CURVEBALL C1: a "Continue"/"Review" button on the final page can be
+        # the SUBMIT. Clicking it here bypasses the one-shot submit gate (the
+        # guard, policy check, and domain gate live in cmd_submit). Refuse to
+        # click submit-like buttons and route to the gated submit path instead.
+        _SUBMIT_LIKE = ("submit", "send", "apply now", "continue to review",
+                        "continue to submit", "review and submit")
+        if any(w in _t for w in _SUBMIT_LIKE):
+            print(f"  BUTTON_GATE: '{nxt['text']}' looks like a SUBMIT — "
+                  f"routing to the gated submit path (one-shot safety)",
+                  file=sys.stderr)
+            emit_next("submit", f"python3 apply.py act --submit {jid} — "
+                      "the gated submit path (not --next)")
+            return 1
+        if _click_action(page, nxt["text"]):
             time.sleep(2)
             emit_status("navigated", f"clicked '{nxt['text']}'")
-            # A3: a "Next"/"Continue" button on a review page may actually
-            # SUBMIT. Surface the evidence so the orchestrator can veto the
-            # next step if the clicked text is submit-like.
-            _t = (nxt.get("text") or "").lower()
-            if any(w in _t for w in ("submit", "send", "apply", "review")):
-                print(f"  BUTTON_WARN: '{nxt['text']}' may submit — verify "
-                      f"before proceeding (one-shot boundary)", file=sys.stderr)
             emit_next("fill")
             return 0
 
-        emit_error("no Next/Continue button found")
+        emit_error(f"could not click '{nxt['text']}'")
         return 1

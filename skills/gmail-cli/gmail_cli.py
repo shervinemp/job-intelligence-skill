@@ -417,6 +417,14 @@ def main():
         else:
             _die("Usage: gmail-cli auth <credentials|add|list|remove> [args]")
     elif cmd in ("send",):
+        # Transmission sandbox. reach.py refuses to send under JI_TESTS,
+        # but it shells out to THIS script — so the refusal must exist here
+        # too, or any test (or stray script) that invokes gmail-cli
+        # directly walks straight past the sandbox and mails a real human.
+        if os.environ.get("JI_TESTS"):
+            print("TEST_SANDBOX: transmission refused under the test runner "
+                  "— unset JI_TESTS to send.", file=sys.stderr)
+            raise SystemExit(3)
         if args.body:
             _cmd_email_send(args.to, args.subject, args.body, cc=args.cc, bcc=args.bcc, email=args.email, json_out=args.json_out)
         else:

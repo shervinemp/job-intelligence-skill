@@ -472,5 +472,63 @@ class CountryIso(unittest.TestCase):
         self.assertEqual(country_iso("Atlantis"), "")
 
 
+class NextButtonSubmitGate(unittest.TestCase):
+    """CURVEBALL C1/C2: `--next` must not submit the form outside the gated
+    submit path, and must not click on a page after submit_clicked."""
+
+    def _page_ctx(self):
+        """A MagicMock context manager returning (page, ctx) for chrome_session."""
+        from unittest.mock import MagicMock
+        page = MagicMock(); page.url = "https://x.com/form"
+        ctx = MagicMock(); ctx.pages = [page]
+        cm = MagicMock()
+        cm.__enter__.return_value = (page, ctx)
+        return page, cm
+
+    def test_submit_like_button_refused(self):
+        """A 'Continue to Review' button (final-step submit) must route to the
+        gated submit path, NOT be clicked by --next."""
+        from unittest.mock import patch
+        from apply.act.inspect import cmd_next
+        page, cm = self._page_ctx()
+        with patch("apply.act.inspect.load_state", return_value={"jid": "j"}), \
+             patch("apply.act.inspect.chrome_session", return_value=cm), \
+             patch("apply.act.inspect._find_next_button",
+                   return_value={"text": "Continue to Review", "score": 4}), \
+             patch("apply.act.inspect._click_action") as click, \
+             patch("apply.act.inspect.emit_next") as enext:
+            rc = cmd_next("j")
+        click.assert_not_called()
+        self.assertEqual(rc, 1)
+        enext.assert_called_once()
+
+    def test_plain_next_clicked(self):
+        from unittest.mock import patch
+        from apply.act.inspect import cmd_next
+        page, cm = self._page_ctx()
+        with patch("apply.act.inspect.load_state", return_value={"jid": "j"}), \
+             patch("apply.act.inspect.chrome_session", return_value=cm), \
+             patch("apply.act.inspect._find_next_button",
+                   return_value={"text": "Next", "score": 4}), \
+             patch("apply.act.inspect._click_action", return_value=True) as click, \
+             patch("apply.act.inspect.emit_next"):
+            rc = cmd_next("j")
+        click.assert_called_once()
+        self.assertEqual(rc, 0)
+
+    def test_submit_clicked_refuses_next(self):
+        from unittest.mock import patch
+        from apply.act.inspect import cmd_next
+        with patch("apply.act.inspect.load_state",
+                   return_value={"jid": "j", "submit_clicked": True}), \
+             patch("apply.act.inspect.chrome_session") as cs, \
+             patch("apply.act.inspect._find_next_button") as fnb, \
+             patch("apply.act.inspect.emit_next"):
+            rc = cmd_next("j")
+        cs.assert_not_called()   # never opens the page
+        fnb.assert_not_called()  # never looks for a button
+        self.assertEqual(rc, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
