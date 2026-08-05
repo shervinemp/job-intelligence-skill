@@ -179,3 +179,15 @@ relocate, not remove), and every module returns a record *at least as detailed* 
 trail it replaces (C2's dossier-grade struct, C3's attempt-id + uncertain branch). The
 three deepenings are safe iff that contract holds; C5 is dropped because its spread is
 the redundancy that keeps the guard observable-by-construction.
+
+---
+
+## Status of the deepenings (tracking)
+
+| Candidate | Status | Where |
+|-----------|--------|-------|
+| C3 outreach ledger | **DONE** (`434f865`) | `lib/outreach_ledger.py` |
+| C1 auth-flow module | **DONE** (`09c42e4`) | `apply/act/auth_flow.py` |
+| C4 learning seam | **DONE** (`...`) | `apply/common/learning.py` |
+| C2 field-fill collapse | open — gated on the evidence contract | — |
+| C5 submit gate | dropped; phantom `jobs.state` read remains a one-line fix | report.py:149 |

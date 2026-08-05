@@ -135,78 +135,19 @@ def adjudicate(fill_id, verdict, note=""):
 
 def _retract_learning_for(c, fill_id):
     """On a `wrong` verdict: invalidate the learned mapping for this fill's
-    (label, platform) and drop a runtime alias rule whose pattern matches the
-    label (B1). If the wrong value came from the PROFILE (its value equals a
-    profile answer), flag that answer as suspect (#3) — the source must be
-    corrected, not just the label store. Failure to retract is logged, never
-    fatal."""
+    (label, platform), drop a runtime alias rule whose pattern matches the
+    label, flag the profile answer as suspect if the wrong value came from the
+    profile, and reject the fill method (B1). The whole choreography lives in
+    the Learning seam (apply/common/learning.py) — the ledger no longer
+    reaches into the store APIs. Failure to retract is logged, never fatal."""
     try:
         row = c.execute(
             "SELECT label, label_norm, platform, answer FROM field_fills "
             "WHERE id=?", (fill_id,)).fetchone()
         if not row:
             return
-        label_norm = row["label_norm"]
-        # 1. Retract the learned mapping (any domain-matching entry).
-        from apply.common.resolve import _invalidate_learned
-        _invalidate_learned(label_norm)
-        # 2. Drop a runtime alias rule whose pattern matches this label.
-        from apply.common.resolve import (_load_runtime_rules,
-                                          _save_runtime_rules)
-        rules = _load_runtime_rules()
-        platform = (row["platform"] or "").lower()
-        kept = []
-        for entry in rules:
-            pat, _keys, _last, domain = entry
-            try:
-                import re
-                if re.search(pat, label_norm) and (not domain
-                                                   or domain in platform):
-                    continue  # drop the suspect rule
-            except re.error:
-                pass
-            kept.append(entry)
-        if len(kept) != len(rules):
-            _save_runtime_rules(kept)
-        # 3. Profile-source flag (#3): if the WRONG answer equals a profile
-        #    answer, the profile itself is the poison source.
-        try:
-            _flag_profile_answer(label_norm, row["answer"])
-        except Exception:
-            pass
-        # 4. Reject the per-field method preference for (host, label) — a
-        #    method that "succeeded" but filled wrong must not keep winning.
-        try:
-            from apply.common import field_methods
-            field_methods.reject_method(label_norm, platform)
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-
-def _flag_profile_answer(label_norm, answer):
-    """Record a suspect profile answer (its value was adjudicated WRONG on a
-    live fill). The orchestrator reads these via report.py profile --suspects
-    and corrects profile.json — the root fix for a wrong profile value that
-    otherwise reproduces on every job silently."""
-    import json, os
-    from lib.config import STATE_DIR
-    path = os.path.join(STATE_DIR, "profile_suspects.json")
-    data = {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        pass
-    data[label_norm] = {
-        "answer": str(answer or "")[:200],
-        "ts": __import__("time").strftime("%Y-%m-%dT%H:%M:%S"),
-        "verdict": "wrong",
-    }
-    try:
-        from lib.config import atomic_write_json
-        atomic_write_json(path, data, indent=2)
+        from apply.common.learning import retract
+        retract(row["label_norm"], row["platform"], row["answer"])
     except Exception:
         pass
 

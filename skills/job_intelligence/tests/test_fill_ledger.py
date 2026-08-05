@@ -290,5 +290,57 @@ class B2SptTripwire(_DB, unittest.TestCase):
         self.assertNotIn("small.io", tripped)
 
 
+class LearningSeam(unittest.TestCase):
+    """C4: apply/common/learning.retract() is the single causal surface for a
+    wrong verdict — it performs the FULL 4-store retraction in one call. The
+    ledger (lib/db/fills.py) must not reach into the store APIs itself."""
+
+    def test_retract_performs_all_four_steps(self):
+        from unittest.mock import patch
+        from apply.common.learning import retract
+        calls = []
+        with patch("apply.common.learning._invalidate_mapping",
+                   side_effect=lambda ln: calls.append(("mapping", ln))), \
+             patch("apply.common.learning._drop_alias_rule",
+                   side_effect=lambda ln, pl: calls.append(("rule", ln, pl))), \
+             patch("apply.common.learning._flag_profile_suspect",
+                   side_effect=lambda ln, a: calls.append(("profile", ln, a))), \
+             patch("apply.common.learning._reject_method",
+                   side_effect=lambda ln, pl: calls.append(("method", ln, pl))):
+            retract("country", "boards.acme.io", "Canada")
+        self.assertEqual(
+            calls,
+            [("mapping", "country"),
+             ("rule", "country", "boards.acme.io"),
+             ("profile", "country", "Canada"),
+             ("method", "country", "boards.acme.io")],
+            "retract must run all four steps in order")
+
+    def test_fills_no_longer_reaches_into_store_apis(self):
+        """The ledger must call the Learning seam, not the store internals."""
+        import lib.db.fills as fills
+        src = open(fills.__file__, encoding="utf-8").read()
+        self.assertNotIn("_invalidate_learned", src)
+        self.assertNotIn("_load_runtime_rules", src)
+        self.assertNotIn("_save_runtime_rules", src)
+        self.assertNotIn("reject_method", src)
+        self.assertNotIn("def _flag_profile_answer", src)
+        self.assertIn("from apply.common.learning import retract", src)
+
+    def test_flag_profile_suspect_writes_json(self):
+        import json
+        import tempfile
+        import os
+        from unittest.mock import patch
+        from apply.common.learning import _flag_profile_suspect
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "profile_suspects.json")
+        with patch("lib.config.STATE_DIR", tmp):
+            _flag_profile_suspect("country", "Canada")
+        data = json.load(open(path, encoding="utf-8"))
+        self.assertEqual(data["country"]["answer"], "Canada")
+        self.assertEqual(data["country"]["verdict"], "wrong")
+
+
 if __name__ == "__main__":
     unittest.main()
