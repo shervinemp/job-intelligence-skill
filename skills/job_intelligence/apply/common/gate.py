@@ -14,7 +14,7 @@ mode always returns "submit".
 """
 
 
-def submit_decision(mode, policy, audit_summary=None):
+def submit_decision(mode, policy, audit_summary=None, host=None):
     """Return (action, reason)."""
     audit_summary = audit_summary or {}
     if policy.get("paused"):
@@ -25,4 +25,16 @@ def submit_decision(mode, policy, audit_summary=None):
         invalid = audit_summary.get("invalid", 0)
         if invalid:
             return "hold", f"{invalid} field(s) failed validation — review before submitting"
+    # F2: new-domain approval gate — a live submit to a domain with no prior
+    # successful submission requires explicit approval. The orchestrator
+    # approves via report.py domains approve <host>. Applies only in live
+    # mode; shadow/hold already never click.
+    if host:
+        try:
+            from apply.common.domain_gate import gate as _domain_gate
+            allowed, reason = _domain_gate(host)
+            if not allowed:
+                return "blocked", reason
+        except Exception:
+            pass
     return "submit", "ok"

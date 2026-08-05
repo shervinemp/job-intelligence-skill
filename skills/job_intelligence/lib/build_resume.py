@@ -14,8 +14,30 @@ import json, os, re, sys
 from fpdf import FPDF, XPos, YPos
 
 
+# Windows refuses these as filenames regardless of extension, so a company
+# literally named "CON" (or a hostile posting choosing one) breaks the PDF
+# write rather than producing a file.
+_WIN_RESERVED = {
+    "con", "prn", "aux", "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
+# Bidi overrides let a name render reversed in a file manager
+# ("‮slp.exe" displays as "exe.pls") — a filename-spoofing trick that
+# has no legitimate use in a company slug.
+_BIDI_RE = re.compile(r"[‪-‮⁦-⁩‎‏]")
+
+
 def _clean_fn(s):
-    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", s)
+    """Filesystem-safe slug from untrusted text (company/job titles come
+    from job postings). Path separators become underscores, so '../../x'
+    cannot escape the results directory."""
+    s = _BIDI_RE.sub("", s or "")
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", s)
+    s = s.strip(" .") or "unnamed"          # trailing dots/spaces: Windows
+    if s.split(".")[0].lower() in _WIN_RESERVED:
+        s = "_" + s
+    return s
 
 _DEFAULT_STYLE = {
     "font": "Helvetica",

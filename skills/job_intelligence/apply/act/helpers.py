@@ -51,11 +51,21 @@ def _chrome():
 
 
 @contextmanager
-def chrome_session(state=None):
+def chrome_session(state=None, isolate_host=""):
     """Context manager for Chrome lifecycle: starts Chrome, yields (page, ctx),
-    closes browser on exit. Replaces 5 duplicated b,ctx=_chrome(); try;finally;close() patterns."""
+    closes browser on exit. Replaces 5 duplicated b,ctx=_chrome(); try;finally;close() patterns.
+
+    F3 session isolation: when `isolate_host` is given (the employer's ATS
+    domain), cookies belonging to OTHER hosts are stripped from the context
+    before any navigation. One shared profile persists cookies across
+    companies, so company A's session can leak into company B's apply flow
+    (and vice versa) — stripping cross-host cookies keeps each employer's
+    session scoped to its own domain.
+    """
     b, ctx = _chrome()
     try:
+        if isolate_host:
+            _isolate_session(ctx, isolate_host)
         page = _page_for(ctx, state)
         yield page, ctx
     finally:
@@ -63,6 +73,31 @@ def chrome_session(state=None):
             b.close()
         except Exception:
             pass
+
+
+def _isolate_session(ctx, host):
+    """Strip cookies for hosts OTHER than `host` (and its subdomains), so the
+    current employer's session is not contaminated by another employer's
+    cookies. Cookies for the target host itself are kept (login walls persist
+    per-employer as designed)."""
+    host = (host or "").lower().rstrip(".")
+    if not host:
+        return
+    try:
+        for cookie in ctx.cookies():
+            domain = (cookie.get("domain") or "").lower().lstrip(".")
+            if not domain:
+                continue
+            keep = (domain == host) or domain.endswith("." + host) \
+                or host.endswith("." + domain)
+            if not keep:
+                try:
+                    ctx.clear_cookies(**{k: cookie[k] for k in (
+                        "name", "domain", "path") if k in cookie})
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 def _wire_dialogs(page):

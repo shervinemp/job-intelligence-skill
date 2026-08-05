@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """apply.py — Apply pipeline: detect, navigate, hybrid fill/submit.
 
+Enforced by scripts/lint.py: every command listed here must dispatch, and
+every dispatchable command must be listed. (This block documented an
+`auto` subcommand that has no parser — the auto pipeline is reachable only
+through `shadow`, via apply/shadow_worker.py — while omitting shadow,
+mappings, creds and preflight.)
+
 Usage:
-  python3 apply.py auto [--jid <jid>] [--limit N] [--no-submit] [--quick]
-                         Run full pipeline for all tailored jobs
   python3 apply.py detect [<jid>]
   python3 apply.py navigate <jid>
   python3 apply.py act --fill <jid> [--answers '{}'] [--max-pages N]
+  python3 apply.py act --next <jid>
   python3 apply.py act --check <jid>
-  python3 apply.py act --submit <jid>
+  python3 apply.py act --submit <jid> [--force]
   python3 apply.py act --inspect <jid>
   python3 apply.py act --investigate <jid>
   python3 apply.py verify <jid>
@@ -16,6 +21,10 @@ Usage:
   python3 apply.py flag <jid>           Toggle auth wall
   python3 apply.py retry [<jid>]        Re-attempt failed
   python3 apply.py undo <jid>           Move back one stage
+  python3 apply.py preflight            Profile readiness gate before a batch
+  python3 apply.py shadow [--jid J] [--limit N] [--quick] [--recheck]
+                         Observability batch: fills + checks, never submits
+  python3 apply.py creds list|get|set|add-pw|shared-*|suggest|delete
   python3 apply.py registry candidates  List unconfirmed probe observations
   python3 apply.py registry confirm <h> Manually promote an observation
   python3 apply.py registry clear <h>   Delete an observation
@@ -43,15 +52,6 @@ except Exception:
     pass
 
 
-def _auto_jid():
-    from lib.db import get_jobs_by_stage
-    jobs = get_jobs_by_stage("tailored")
-    if not jobs:
-        print("NO_TAILORED: no jobs ready to apply", file=sys.stderr)
-        sys.exit(0)
-    return jobs[0][0]
-
-
 def main():
     import argparse
     import atexit
@@ -75,12 +75,15 @@ def main():
     act_p.add_argument("--fill", action="store_true", help="Fill the application form")
     act_p.add_argument("--next", action="store_true", help="Next page on multi-step form")
     act_p.add_argument("--submit", action="store_true", help="Submit the application (runs --check first)")
-    act_p.add_argument("--force", action="store_true", help="Force submit, skipping pre-submit check")
+    act_p.add_argument("--force", action="store_true",
+                       help="Force submit: skips the pre-submit check, the "
+                            "regression/preflight gates, AND the submit_clicked "
+                            "one-shot guard (i.e. permits a RE-CLICK). Use only "
+                            "after human confirmation that no submission landed.")
     act_p.add_argument("--inspect", action="store_true", help="Analyze the page (screenshot, fields, buttons)")
     act_p.add_argument("--check", action="store_true", help="Pre-submit validation: flag contradictions before submitting")
     act_p.add_argument("--investigate", action="store_true", help="Deep-analyze unknown platform")
     act_p.add_argument("--answers", help="JSON field->value mapping for --fill")
-    act_p.add_argument("--no-verify", action="store_true", help="Skip vision verification after fill")
     act_p.add_argument("--quick", action="store_true", help="Deterministic-only pass: no vision")
     act_p.add_argument("--max-pages", type=int, default=4, help="Max form pages to fill in one --fill run")
 
@@ -98,11 +101,6 @@ def main():
 
     undo_p = sub.add_parser("undo", help="Move back one stage")
     undo_p.add_argument("jid", help="Job ID")
-
-    map_p = sub.add_parser("mappings", help="Field→meaning mapping store (ADR-001 Phase 3)")
-    map_p.add_argument("action", choices=["list", "confirm", "clear"],
-                       help="list pending for a job / confirm (promote) them / clear them")
-    map_p.add_argument("jid", help="Job ID")
 
     creds_p = sub.add_parser("creds", help="Credential vault for ATS sites")
     creds_p.add_argument("args", nargs="+", help="list | get <domain> | set <domain> <email> <password> | delete <domain>")
@@ -130,7 +128,11 @@ def main():
 
     if args.command == "detect":
         from apply.detect import run
-        run(args.jid or _auto_jid())
+        if not args.jid:
+            print("ERROR: detect requires an explicit <jid> — auto-pick removed "
+                  "(use 'report.py candidates' to choose one)", file=sys.stderr)
+            sys.exit(1)
+        run(args.jid)
     elif args.command == "navigate":
         from apply.navigate import run
         run(args.jid)
@@ -144,10 +146,11 @@ def main():
               "check" if args.check else
               "investigate" if args.investigate else ""))
         if not cmd:
-            print("ERROR: specify --fill, --next, --submit, --inspect, or --investigate", file=sys.stderr)
+            print("ERROR: specify --fill, --next, --check, --submit, --inspect, "
+                  "or --investigate", file=sys.stderr)
             sys.exit(1)
         run({"command": cmd, "jid": args.jid, "--answers": args.answers,
-             "--no-verify": args.no_verify, "--max-pages": args.max_pages,
+             "--max-pages": args.max_pages,
              "--quick": args.quick,
              "--confirm": args.submit,
              "--force": args.force})
@@ -160,23 +163,33 @@ def main():
         from apply.common.page_helpers import clear_runtime_state
         job = get_job(args.jid)
         if job:
-            advance_job(args.jid, job.get("stage", "tailored"), state="rejected")
-            remove(args.jid)
-            clear_runtime_state(args.jid)
-            print(f"REJECTED: {args.jid}", file=sys.stderr)
+            advance_job(job["id"], job.get("stage", "tailored"), state="rejected")
+            remove(job["id"])
+            clear_runtime_state(job["id"])
+            print(f"REJECTED: {job['id']}", file=sys.stderr)
+        else:
+            # Silence here meant a typo'd jid exited 0 with no output, and
+            # the operator believed the job was rejected.
+            print(f"WARN: no job with id '{args.jid}' — nothing rejected "
+                  f"(full 16-hex jid, or an unambiguous prefix)", file=sys.stderr)
+            sys.exit(1)
     elif args.command == "flag":
         from lib.db import get_conn, get_job
         from lib.auth_walls import add, remove
         job = get_job(args.jid)
         if job:
             conn = get_conn()
-            r = conn.execute("SELECT auth_wall FROM jobs WHERE id=?", (args.jid,)).fetchone()
+            r = conn.execute("SELECT auth_wall FROM jobs WHERE id=?", (job["id"],)).fetchone()
             if r and r["auth_wall"]:
-                remove(args.jid)
-                print(f"UNFLAGGED: {args.jid}", file=sys.stderr)
+                remove(job["id"])
+                print(f"UNFLAGGED: {job['id']}", file=sys.stderr)
             else:
-                add(args.jid, job.get("url", ""), job.get("title", ""), job.get("company", ""))
-                print(f"FLAGGED: {args.jid}", file=sys.stderr)
+                add(job["id"], job.get("url", ""), job.get("title", ""), job.get("company", ""))
+                print(f"FLAGGED: {job['id']}", file=sys.stderr)
+        else:
+            print(f"WARN: no job with id '{args.jid}' — nothing flagged",
+                  file=sys.stderr)
+            sys.exit(1)
     elif args.command == "retry":
         from lib.db import get_conn, get_job, advance_job
         if args.jid:
@@ -204,36 +217,21 @@ def main():
             stage = job.get("stage", "")
             prev = {"applied": "tailored", "tailored": "described", "described": "extracted"}
             new_stage = prev.get(stage, "tailored")
-            advance_job(args.jid, new_stage, state="active", error=None)
-            remove(args.jid)
+            advance_job(job["id"], new_stage, state="active", error=None)
+            remove(job["id"])
             # Resets the runtime cache — including the submit_clicked
             # one-shot flag — so a re-run may submit again.
-            clear_runtime_state(args.jid)
-            print(f"UNDO: {args.jid} {stage} -> {new_stage}", file=sys.stderr)
-    elif args.command == "mappings":
-        from lib.config import STATE_DIR as _STATE_DIR
-        _mp = os.path.join(_STATE_DIR, "field_mappings.json")
-        if args.action == "list":
-            try:
-                with open(_mp, encoding="utf-8") as _f:
-                    _data = json.load(_f)
-            except Exception:
-                _data = {}
-            print(f"MAPPINGS: {len(_data)} learned label→value mapping(s) "
-                  f"(promoted automatically by resolve.learn_mapping)", file=sys.stderr)
-            for _k, _v in sorted(_data.items()):
-                print(f"  {_k[:60]} -> {str(_v)[:40]}", file=sys.stderr)
-            print(f"  file: {_mp}", file=sys.stderr)
-        elif args.action == "confirm":
-            print("MAPPINGS: nothing pending — learned mappings are promoted "
-                  "automatically via resolve.learn_mapping (ADR-001 successor "
-                  "of the old pending-mapping store)", file=sys.stderr)
-        elif args.action == "clear":
-            try:
-                os.remove(_mp)
-                print("MAPPINGS: cleared all learned mappings", file=sys.stderr)
-            except FileNotFoundError:
-                print("MAPPINGS: nothing to clear", file=sys.stderr)
+            clear_runtime_state(job["id"])
+            print(f"UNDO: {job['id']} {stage} -> {new_stage}", file=sys.stderr)
+            if stage == "applied":
+                print("  WARNING: this job was APPLIED. Undo clears the "
+                      "submit one-shot guard, so a later 'act --submit' "
+                      "can click submit again — only proceed if you have "
+                      "confirmed no application was received.", file=sys.stderr)
+        else:
+            print(f"WARN: no job with id '{args.jid}' — nothing undone",
+                  file=sys.stderr)
+            sys.exit(1)
     elif args.command == "creds":
         from lib.credentials import cmd_creds
         cmd_creds(args.args)

@@ -14,24 +14,76 @@ _PING_CACHE = os.path.join(os.environ.get("JI_HOME", os.path.expanduser("~/.ji")
 
 
 def _load_config():
+    """Endpoint config.
+
+    Accepts OPENAI_API_BASE as an alias for LLM_API_URL: the deployed .env
+    set OPENAI_API_BASE (a name inherited from an older integration) while
+    this module only ever read LLM_API_URL, so available() returned False
+    forever and the vision escape hatch was silently closed — every shadow
+    header printed api=DOWN and nobody read it.
+    """
+    url = (os.environ.get("LLM_API_URL")
+           or os.environ.get("OPENAI_API_BASE")
+           or "").rstrip("/")
     return {
-        "url": os.environ.get("LLM_API_URL", "").rstrip("/"),
+        "url": url,
         "model": os.environ.get("LLM_API_MODEL", ""),
     }
 
 
-def available():
-    """Check if the vision endpoint is reachable. Uses cached ping (5 min TTL).
-    Lightweight GET /v1/models — no model inference."""
+def _is_loopback(url):
+    """True if the URL's host is a loopback/local address (localhost,
+    127.x, ::1, or a bare hostname with no dot). Vision bytes (real form
+    screenshots with PII) must never leave the machine, so the vision
+    endpoint is required to be local — a misconfigured remote endpoint is
+    refused rather than silently exfiltrating screenshots (AGENTS.md red
+    line: no private data exfiltration)."""
+    from urllib.parse import urlparse
+    try:
+        host = (urlparse(url).hostname or "").lower()
+        if not host and "::1" in url:
+            # Unbracketed IPv6 loopback ("http://::1:9000/v1") parses with a
+            # None hostname — recognize the literal.
+            host = "::1"
+    except Exception:
+        return False
+    if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        return True
+    if host.startswith("127.") or host == "::":
+        return True
+    # Bare hostname (no dot, not an IP) resolves locally via the resolver.
+    if "." not in host and ":" not in host and host:
+        return True
+    return False
+
+
+def _local_guard():
+    """Refuse vision requests to a non-local endpoint. Returns the config,
+    or None when the endpoint is remote (caller must not send PII bytes)."""
     cfg = _load_config()
     if not cfg["url"]:
+        return None
+    if not _is_loopback(cfg["url"]):
+        return None
+    return cfg
+
+
+def available():
+    """Check if the vision endpoint is reachable AND vision-safe (local).
+    Uses cached ping (5 min TTL). Lightweight GET /v1/models — no inference.
+
+    C2: a remote endpoint is NOT "available" for vision — ask_bytes would
+    refuse it anyway (A3), so a cached ping must never make callers believe
+    vision works when the bytes would be refused."""
+    cfg = _local_guard()
+    if cfg is None:
         return False
     try:
         if os.path.exists(_PING_CACHE):
             mtime = os.path.getmtime(_PING_CACHE)
             if time.time() - mtime < 300:
                 return True
-    except:
+    except OSError:
         pass
     try:
         req = urllib.request.Request(f"{cfg['url']}/models", method="GET")
@@ -40,7 +92,8 @@ def available():
             with open(_PING_CACHE, "w") as f:
                 f.write("ok")
             return True
-    except:
+    except Exception:
+        # Bare `except:` here also swallowed KeyboardInterrupt/SystemExit.
         return False
 
 
@@ -80,16 +133,20 @@ def ask(image_path, prompt, temperature=0.3, max_tokens=2048):
         return None, f"reading image: {e}"
     finally:
         if rendered and tmp_img and os.path.exists(tmp_img):
-            try: os.remove(tmp_img)
-            except: pass
+            try:
+                os.remove(tmp_img)
+            except OSError:
+                pass
     return ask_bytes(image_data, prompt, temperature, max_tokens)
 
 
 def ask_bytes(image_data, prompt, temperature=0.3, max_tokens=2048):
     """Send raw image bytes + prompt to vision API. No temp files needed. Returns (reply, error)."""
-    cfg = _load_config()
-    if not cfg["url"]:
-        return None, "LLM_API_URL not set"
+    cfg = _local_guard()
+    if cfg is None:
+        return None, ("vision bytes refused: LLM_API_URL is not a local/loopback "
+                      "endpoint — screenshots must not leave the machine "
+                      "(AGENTS.md red line)")
     return _vision(image_data, prompt, temperature, max_tokens, cfg)
 
 
@@ -97,7 +154,7 @@ def ask_text(prompt, temperature=0.3, max_tokens=2048, timeout=10):
     """Send text-only prompt to LLM API (no image). Returns (reply, error)."""
     cfg = _load_config()
     if not cfg["url"]:
-        return None, "LLM_API_URL not set"
+        return None, "LLM_API_URL (or OPENAI_API_BASE) not set"
     return _text(prompt, temperature, max_tokens, cfg, timeout=timeout)
 
 
@@ -108,7 +165,7 @@ def ask_chunked(image_data, prompt, temperature=0.3, max_tokens=2048,
     Falls back to ask_bytes() if PIL is not available or image is small."""
     cfg = _load_config()
     if not cfg["url"]:
-        return None, "LLM_API_URL not set"
+        return None, "LLM_API_URL (or OPENAI_API_BASE) not set"
     dims = _jpeg_dims(image_data)
     if not dims or dims[1] <= max_chunk_height:
         return _vision(image_data, prompt, temperature, max_tokens, cfg)

@@ -1,4 +1,14 @@
-"""extract.py — Auto-extract URLs from staged emails, SLM admits/rejects."""
+"""extract.py — Auto-extract URLs from staged emails, SLM admits/rejects.
+
+Usage:
+  extract.py auto                            Extract job URLs from staged emails
+  extract.py admit --category <name> <jid>...  Acknowledge + set category
+  extract.py reject <jid> [jid...]           Skip
+  extract.py submit [<tid>] '<json>'         Manually add URLs (JSON needs 'category')
+  extract.py reset <jid> [jid...]            Delete a job, re-extract next run
+  extract.py reset --confirm                 DANGER: wipes ALL jobs and state
+  extract.py help                            Category list + usage
+"""
 
 import hashlib
 import json
@@ -49,12 +59,26 @@ _SKIP_DOMAINS = {
 
 
 def _extract_urls(content):
+    """Harvest job URLs from an email body.
+
+    _SKIP_DOMAINS is a NOISE filter (newsletters, social links) and must
+    not be mistaken for a security control. The trust boundary is
+    lib.url_safety, applied cheaply here (scheme/userinfo/literal-IP, no
+    DNS — this runs over every URL in every email) and again in full,
+    with resolution, immediately before any fetch.
+    """
+    from lib.url_safety import is_safe_url
     urls = set()
     for m in re.finditer(r'https?://[^\s<>"\')\]]+', content):
         url = m.group(0).rstrip('.,;:!?)>\'"]')
         skip = any(d in url.lower() for d in _SKIP_DOMAINS)
-        if not skip and len(url) > 20:
-            urls.add(url)
+        if skip or len(url) <= 20:
+            continue
+        ok, why = is_safe_url(url, resolve=False)
+        if not ok:
+            print(f"URL_REFUSED: {why} — {url[:80]}", file=sys.stderr)
+            continue
+        urls.add(url)
     return list(urls)
 
 
@@ -161,8 +185,9 @@ def cmd_submit(tid, jobs_json=None):
     if jobs_json is None:
         jobs_json = tid
         tid = "manual"
-    if isinstance(jobs_json, str):
-        jobs = json.loads(jobs_json)
+    # `jobs` used to be bound only inside the isinstance branch, so a
+    # non-str argument raised NameError on the next line.
+    jobs = json.loads(jobs_json) if isinstance(jobs_json, str) else jobs_json
     if not isinstance(jobs, list):
         jobs = [jobs]
     cats = _load_categories()
@@ -244,8 +269,24 @@ def cmd_reset(*jids, confirm=False):
             email_id = row["email_id"]
             conn.execute("DELETE FROM job_documents WHERE job_id=?", (jid,))
             conn.execute("DELETE FROM events WHERE job_id=?", (jid,))
+            # Attempts BEFORE contacts: they reference contacts.id, and the
+            # mass-reset branch already deletes them. Leaving them behind
+            # orphaned them (invisible to attempt_list's INNER JOIN and to
+            # the cross-job guard) while the re-extracted job got a fresh
+            # empty contact history — so an already-contacted person could
+            # be messaged again.
+            n_att = conn.execute(
+                "DELETE FROM contact_attempts WHERE contact_id IN "
+                "(SELECT id FROM contacts WHERE job_id=?)", (jid,)).rowcount
+            conn.execute(
+                "DELETE FROM company_connections WHERE contact_id IN "
+                "(SELECT id FROM contacts WHERE job_id=?)", (jid,))
             conn.execute("DELETE FROM contacts WHERE job_id=?", (jid,))
             conn.execute("DELETE FROM jobs WHERE id=?", (jid,))
+            if n_att:
+                print(f"  WARNING: discarded {n_att} outreach attempt(s) for "
+                      f"{jid} — anyone contacted via this job is no longer "
+                      f"protected by the one-shot guard.", file=sys.stderr)
             if email_id:
                 email_ids_to_remove.add(email_id)
             # Clean up files: results dir, screenshots, state/registry entries
@@ -325,8 +366,7 @@ def main():
     reset_p = sub.add_parser("reset", help="Reset extraction state")
     reset_p.add_argument("args", nargs="*")
     reset_p.add_argument("--confirm", action="store_true", help=argparse.SUPPRESS)
-    sub.add_parser("status", help="Pipeline state")
-    admit_p = sub.add_parser("admit", help="Admit an extracted job")
+    sub.add_parser("admit", help="Admit an extracted job")
     admit_p.add_argument("jids", nargs="+")
     admit_p.add_argument("--category", help="Job category (required on first admit)")
     admit_p.add_argument("--notes", help="Job notes/context")
@@ -344,8 +384,6 @@ def main():
             parser.print_help()
     elif args.command == "reset":
         cmd_reset(*args.args, confirm=getattr(args, "confirm", False))
-    elif args.command == "status":
-        cmd_status()
     elif args.command == "admit":
         cmd_admit(*args.jids, category=args.category, notes=args.notes)
     elif args.command == "reject":

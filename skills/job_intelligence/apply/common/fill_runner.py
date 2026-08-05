@@ -12,6 +12,16 @@ The strategy chain (apply/strategies/* + filler) sits behind
 field_deterministic; callers never see it.
 """
 import json
+import re
+
+
+def _host_of(page):
+    """Netloc of the current page — used to domain-scope runtime rules (A4)."""
+    try:
+        from urllib.parse import urlparse as _up
+        return (_up(page.url or "").netloc or "").lower().split(":")[0]
+    except Exception:
+        return ""
 import os
 import re
 import sys
@@ -23,6 +33,11 @@ from apply.common.page_helpers import load_state
 from apply.common.resolve import resolve, learn_mapping, _build_ephemeral
 from apply.common.validate import validate_value
 from apply.steps.probe import resolve_selector
+
+# Upper bound on fields processed in one page pass. The largest real
+# application forms (Workday multi-section) sit well under 200; anything
+# above this is a malformed or hostile DOM, not a form to fill.
+MAX_FIELDS_PER_PAGE = int(os.environ.get("JI_MAX_FIELDS", "300"))
 
 RESULTS_DIR = os.path.join(JI_HOME, "results")
 
@@ -355,6 +370,18 @@ def fill_page(page, fields, profile, answers_override=None, filled_keys=None):
     if filled_keys is None:
         filled_keys = set()
 
+    # Bound the work per page. Field count is page-controlled: a
+    # pathological or hostile DOM (thousands of inputs, or a widget that
+    # regenerates rows) otherwise burns the entire per-job wall clock and
+    # the batch records only "timeout" — a silent death with no evidence,
+    # which is exactly what ETHOS §6 forbids. Real forms are far below
+    # this; exceeding it is itself the finding.
+    if len(fields) > MAX_FIELDS_PER_PAGE:
+        print(f"  FIELD_CAP: page reported {len(fields)} fields — capping at "
+              f"{MAX_FIELDS_PER_PAGE}. This is not a normal form; inspect the "
+              f"page before trusting this run.", file=sys.stderr)
+        fields = fields[:MAX_FIELDS_PER_PAGE]
+
     filled = []
     failed = []
 
@@ -475,13 +502,39 @@ def fill_page(page, fields, profile, answers_override=None, filled_keys=None):
                       field_tag=f.get("tag", ""),
                       field_type=f.get("type", ""),
                       field_role=f.get("role", ""),
-                      ephemeral=ephemeral)
+                      ephemeral=ephemeral,
+                      domain=_host_of(page))
         ans = res.value
+        # Fix 1 completion: a "phone country code" field may be a dropdown of
+        # DIALING CODES (+1, +44) rather than country names. The resolver
+        # returns the country ("Canada"); if that isn't an offered option but
+        # the country's dialing code is, use the code. The data map lives in
+        # default_answers.json (no hardcoded values in code).
+        if ans is not None and res.provenance == "country_code":
+            opts = [str(o) for o in (f.get("options") or [])]
+            opt_l = " ".join(opts).lower()
+            if opts and str(ans).lower() not in opt_l:
+                try:
+                    from apply.common.resolve import _load_dialing_codes
+                    _code = str(_load_dialing_codes().get(str(ans).lower(), ""))
+                    if _code and _code.lower() in opt_l:
+                        ans = _code
+                except Exception:
+                    pass
         if ans is None:
             if (tag == "input" and ftype == "checkbox"
                     and os.environ.get("JI_AUTO_CONSENT") == "1"
                     and _is_consent_field(f)):
-                ans = "true"
+                # The consent checked-state value is data (default_answers.json,
+                # the auto_only entry), not a hardcoded literal — SEPARATION.md.
+                try:
+                    from apply.common.resolve import _load_default_answers
+                    _consent = next(
+                        (v for _p, v, _k, auto in _load_default_answers()
+                         if auto), "true")
+                except Exception:
+                    _consent = "true"
+                ans = _consent
             else:
                 failed.append({**f, "_why": "no_answer"})
                 continue
@@ -492,17 +545,28 @@ def fill_page(page, fields, profile, answers_override=None, filled_keys=None):
                 continue
             # Skip if the field already has the correct value (prevents
             # double-typing on autocomplete/combobox fields during sweeps).
+            # BUT: a value that was already there is PREFILLED, not verified-
+            # by-us. The form may have pre-filled a wrong default (e.g. a
+            # country from IP geolocation); we cannot certify it. Record it
+            # as prefilled so the check gate treats it as unverified.
             sel = f.get("_sel") or f.get("selector") or ""
             if sel:
                 current = page.evaluate(f"() => document.querySelector({json.dumps(sel)})?.value || ''")
                 if current and (current == ans or current in ans or ans in current):
-                    filled.append({"label": label, "key": key})
+                    f.setdefault("_diag", {})["unverified"] = True
+                    # #2: carry the PREFILLED value so the orchestrator can
+                    # veto it before submit — the value is unverified but it
+                    # IS in the form (possibly a wrong form default).
+                    filled.append({"label": label, "key": key, "answer": str(ans),
+                                   "unverified": True, "method": "prefilled",
+                                   "prefilled_value": str(current)[:200]})
                     continue
             if field_deterministic(page, f, ans):
                 _diag = f.get("_diag") or {}
                 filled.append({"label": label, "key": key, "answer": str(ans),
                                "unverified": bool(_diag.get("unverified")),
-                               "method": _diag.get("method", "deterministic")})
+                               "method": _diag.get("method", "deterministic"),
+                               "provenance": res.provenance})
                 if res.provenance == "answers_override":
                     try:
                         from urllib.parse import urlparse as _up

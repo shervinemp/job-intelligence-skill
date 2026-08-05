@@ -1,0 +1,15 @@
+{
+  "_comment": "Gender → pronoun-family mapping for pronoun-option rows (He/him, She/her, They/them checkboxes). The CHECK action value (what a matching row receives) is a separate user preference, NOT this file — see pronouns.check_value in profile or default_answers. This is language-referent data, not user data.",
+  "families": {
+    "male": "he",
+    "man": "he",
+    "female": "she",
+    "woman": "she",
+    "nonbinary": "they",
+    "non-binary": "they",
+    "genderqueer": "they",
+    "genderfluid": "they",
+    "agender": "they"
+  },
+  "check_value": "Yes"
+}

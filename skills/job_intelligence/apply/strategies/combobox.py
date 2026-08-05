@@ -93,14 +93,22 @@ def _typing_candidates(ans):
     return _mtc(ans)
 
 
-def _pick_best(options, candidates):
-    """(best_option, runner_up_score) or (None, 0)."""
+def _pick_best(options, candidates, country_words=None):
+    """(best_option, runner_up_score) or (None, 0).
+
+    country_words: when given (a bare-dialing-code answer with a known
+    country), options whose text contains a country word get a +1 boost so
+    'Canada (+1)' outranks 'Antigua & Barbuda (+1)' — the Antigua tie-break."""
     from apply.common.match import scoring_candidates as _msc
     cnorms = _msc(candidates)
     best = None
     second = 0
     for o in options:
         sc = _score_option(o.get("text", ""), cnorms)
+        if country_words:
+            t = (o.get("text") or "").lower()
+            if any(w in t for w in country_words):
+                sc += 1
         if sc > (best["score"] if best else 0):
             second = best["score"] if best else 0
             best = dict(o, score=sc)
@@ -444,15 +452,20 @@ def _verify(page, sel, ans, candidates):
     return False
 
 
-def _try_click_best(page, sel, ans, opts, candidates):
+def _try_click_best(page, sel, ans, opts, candidates, country_words=None):
     """Try options in score order (top-4), clicking and verifying each.
     Returns (True, option, verdict) on verified/accepted selection;
     (False, None, None) when nothing is confident or every click is
-    provably wrong. verdict: True verified / None accepted-unverified."""
+    provably wrong. verdict: True verified / None accepted-unverified.
+    country_words: a bare-dialing-code answer + known country → prefer the
+    option whose text contains the country (the Antigua tie-break)."""
     from apply.common.match import scoring_candidates as _msc
     cnorms = _msc(candidates)
     scored = sorted(
-        (dict(o, score=_score_option(o.get("text", ""), cnorms)) for o in opts),
+        (dict(o, score=_score_option(o.get("text", ""), cnorms)
+              + (1 if country_words and any(
+                  w in (o.get("text") or "").lower() for w in country_words)
+                 else 0)) for o in opts),
         key=lambda o: o["score"], reverse=True)
     if not scored or scored[0]["score"] < 2:
         return False, None, None
@@ -538,6 +551,16 @@ def fill(page, f, ans, time_budget=25.0):
     sel = f.get("_sel", "")
     diag = {"method": "combobox"}
     t0 = time.time()
+    # Country words from the field's location context (fill_runner sets
+    # f['_country']) — passed to the pickers so a bare dialing code prefers
+    # the option whose COUNTRY matches (the Antigua tie-break).
+    _cw = []
+    try:
+        import re as _re
+        _cw = [w for w in _re.split(r"[^a-z0-9]+",
+                str(f.get("_country") or "").lower()) if len(w) > 2]
+    except Exception:
+        pass
 
     def _over_budget():
         return time.time() - t0 > time_budget
@@ -581,6 +604,18 @@ def fill(page, f, ans, time_budget=25.0):
             diag["typeahead"] = True
 
         candidates = _typing_candidates(ans)
+        # Lazy-loaded option lists (the Antigua root cause): when the answer
+        # is a bare dialing code and a country is known, TYPE THE COUNTRY NAME
+        # first — typing "+1" filters to all +1 countries (Antigua, Canada,
+        # US) and the load only reveals those; typing "Canada" reveals the
+        # Canada option that the country boost can then select confidently.
+        if _cw and str(ans).lstrip("+").isdigit():
+            _country_cand = next((w for w in _cw if w in (
+                "canada", "usa", "united states", "united kingdom", "uk",
+                "australia", "germany", "france", "ireland", "india")),
+                None)
+            if _country_cand:
+                candidates = [_country_cand] + list(candidates)
         typed_seen = 0
         last_opts = []
         for cand in candidates[:3]:
@@ -593,12 +628,24 @@ def fill(page, f, ans, time_budget=25.0):
             typed_seen += len(opts)
             last_opts = opts
             if opts:
-                ok, picked, verdict = _try_click_best(page, sel, ans, opts, candidates)
+                ok, picked, verdict = _try_click_best(page, sel, ans, opts, candidates, country_words=_cw)
                 if ok:
                     diag["reason"] = "typed_match"
                     diag["after"] = picked["text"][:60]
                     if verdict is None:
                         diag["unverified"] = True
+                    else:
+                        # META_FLOW Loop-4 gap #3: record the verification
+                        # STRATEGY that confirmed this (host, label) — so the
+                        # reader cascade prefers it next time.
+                        try:
+                            from apply.common import field_methods as _fm
+                            from urllib.parse import urlparse as _up
+                            _h = (_up(page.url or "").netloc or "").lower()
+                            _fm.record_verify_strategy(
+                                f.get("label", ""), "combobox", _h)
+                        except Exception:
+                            pass
                     f["_diag"] = diag
                     return True
 
@@ -617,7 +664,7 @@ def fill(page, f, ans, time_budget=25.0):
         _close_menu(page)
         if _open_menu(page, sel, root_id):
             opts = _collect_with_scroll(page, sel, root_id)
-            ok, picked, verdict = _try_click_best(page, sel, ans, opts, candidates)
+            ok, picked, verdict = _try_click_best(page, sel, ans, opts, candidates, country_words=_cw)
             if ok:
                 diag["reason"] = "unfiltered_match"
                 diag["after"] = picked["text"][:60]

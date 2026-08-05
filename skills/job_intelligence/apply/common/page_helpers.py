@@ -212,7 +212,16 @@ def save_state(state):
     # truth; this marker keeps every reader from mistaking scratch for
     # authority (see terms glossary: "dossier" vs "profile").
     state["_role"] = "runtime_cache"
-    atomic_write_json(STATE_PATH, state)
+    # #7: the apply_state.json file is SHARED across jobs. A concurrent
+    # different-jid write must not clobber it — serialize the write with a
+    # short file lock (the batch's pipeline lock already excludes the batch
+    # vs manual case; this closes the manual-vs-manual race).
+    try:
+        from apply.common.jid_lock import JidLock
+        with JidLock("__apply_state__", timeout=10.0):
+            atomic_write_json(STATE_PATH, state)
+    except Exception:
+        atomic_write_json(STATE_PATH, state)
 
 
 def clear_runtime_state(jid):

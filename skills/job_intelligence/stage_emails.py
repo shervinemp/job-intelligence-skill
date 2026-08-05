@@ -90,7 +90,12 @@ def clean_html(html):
 
     html = re.sub(r'<[^>]+>', ' ', html)
     text = unescape(html)
-    text = ''.join(c for c in text if c == '\n' or (c.isascii() and c.isprintable()))
+    # Keep printable text in ANY script. The old filter required
+    # c.isascii(), which silently destroyed every accented, CJK, Cyrillic
+    # and emoji character — "Société Générale" became "Socit Gnrale", and
+    # the mangled company name then failed duplicate matching downstream.
+    # Control characters (except newline) are still dropped.
+    text = ''.join(c for c in text if c == '\n' or c.isprintable())
     text = _strip_footer(text)
     text = re.sub(r'\s+', ' ', text)
     text = text.encode('utf-8', errors='replace').decode('utf-8').strip()

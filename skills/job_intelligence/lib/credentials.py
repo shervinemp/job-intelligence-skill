@@ -39,6 +39,17 @@ import sys
 _SERVICE = "job-intelligence"
 _SHARED_KEY = "shared"  # keyring entry for shared/common passwords
 
+
+def _mask(pw, reveal=False):
+    """Secrets are masked by default. stdout from these commands ends up in
+    orchestrator transcripts and session logs — printing a password there
+    is a durable leak, so revealing one must be an explicit act."""
+    if reveal:
+        return pw
+    if not pw:
+        return ""
+    return f"{pw[0]}{'*' * max(len(pw) - 2, 1)}{pw[-1]} (len {len(pw)})"
+
 _FALLBACK_PATH = os.path.join(
     os.environ.get("JI_HOME", os.path.join(os.path.expanduser("~"), ".ji")),
     "credentials.json",
@@ -131,7 +142,12 @@ def _keyring_set(key, data):
         import keyring
         keyring.set_password(_SERVICE, key, json.dumps(data))
         return True
-    except Exception:
+    except Exception as e:
+        # A silent downgrade from OS keychain to plaintext-on-disk is a
+        # security change the user must know about.
+        print(f"WARN: OS keychain unavailable ({type(e).__name__}: "
+              f"{str(e)[:80]}) — falling back to PLAINTEXT {_FALLBACK_PATH}",
+              file=sys.stderr)
         return False
 
 
@@ -472,24 +488,22 @@ def _extract_password_hints_via_llm(page):
 def gen_password_for_platform(url, page=None, existing_pws=None):
     """Generate a fresh password for the target platform.
 
-    Tries in order:
-      1. Local LLM (ask_api) — given page rules (deterministic or LLM
-         parsed) + a sample of existing shared passwords, asks the LLM
-         to construct a new password in the *same style* while satisfying
-         the platform's requirements.
-      2. Secure generator — pure `secrets`-based password with length
-         and rule satisfaction. Ensures validity even when ask_api /
-         local LLM is unavailable.
+    Rules are resolved from the page (deterministic parser, then the gated
+    LLM rule-extractor which sees only PAGE TEXT), then a `secrets`-based
+    generator produces a password guaranteed to satisfy them.
+
+    SECURITY: an earlier version asked the LLM to mimic the *style* of the
+    user's existing passwords, which meant putting up to five real
+    plaintext passwords into a prompt and POSTing them to an HTTP
+    endpoint. That is data exfiltration of the most sensitive kind the
+    pipeline holds, for a cosmetic benefit — the secure generator already
+    satisfies every rule. The style path is gone; `existing_pws` is
+    accepted for signature compatibility and deliberately unused.
 
     Args:
         url: Platform URL (used to pre-seed hardcoded _RULES).
-        page: Optional Playwright page — used to read page text for
-              rule extraction and to give the LLM platform-specific
-              context.
-        existing_pws: List of existing password strings — the LLM (if
-              fired) uses these as *style* examples so the generated
-              password resembles the user's previous passwords while
-              fitting the new platform's rules.
+        page: Optional Playwright page — read for complexity rules only.
+        existing_pws: Ignored (see above).
 
     Returns:
         str: A password that satisfies platform complexity rules.
@@ -505,17 +519,7 @@ def gen_password_for_platform(url, page=None, existing_pws=None):
     require_upper = (hints.get("require_upper") if hints else None) or _RULES["require_upper"].get(plat, _RULES["require_upper"]["default"])
     require_lower = (hints.get("require_lower") if hints else None) or _RULES["require_lower"].get(plat, _RULES["require_lower"]["default"])
 
-    # Path 1: LLM-style generator. Uses existing patterns as examples.
-    if existing_pws:
-        new_pw = _gen_password_via_llm(
-            existing_pws, min_len, require_upper, require_lower,
-            require_digit, require_sym
-        )
-        if new_pw and _password_valid(new_pw, min_len, require_upper,
-                                       require_lower, require_digit, require_sym):
-            return new_pw
-
-    # Path 2: secure generator. Guaranteed to satisfy the rules.
+    # Secure generator — guaranteed to satisfy the resolved rules.
     alphabet = string.ascii_letters + string.digits + "!@#$%"
     while True:
         pw = "".join(secrets.choice(alphabet) for _ in range(max(min_len, 16)))
@@ -607,28 +611,9 @@ def suggest_password(freeform_rules, existing_pws=None, save=False):
                 add_shared_password(chosen)
             return chosen
 
-    # Step 2: ask the local LLM to merge/modify existing passwords.
-    if existing_pws:
-        new_pw = _gen_password_via_llm(
-            existing_pws, min_len, require_upper, require_lower,
-            require_digit, require_sym, freeform_rules=freeform_rules
-        )
-        if new_pw and _password_valid(new_pw, min_len, require_upper,
-                                       require_lower, require_digit, require_sym):
-            if save:
-                add_shared_password(new_pw)
-            return new_pw
-        # LLM returned something that doesn't satisfy rules — try to
-        # fix it by appending missing character classes.
-        if new_pw:
-            fixed = _repair_password(new_pw, min_len, require_upper,
-                                     require_lower, require_digit, require_sym)
-            if fixed:
-                if save:
-                    add_shared_password(fixed)
-                return fixed
-
-    # Step 3: secure generator — guaranteed to satisfy.
+    # Step 2: secure generator — guaranteed to satisfy.
+    # (No LLM step: generating "in the style of" the user's existing
+    # passwords required sending them off-box. See gen_password_for_platform.)
     alphabet = string.ascii_letters + string.digits + "!@#$%"
     while True:
         pw = "".join(secrets.choice(alphabet) for _ in range(max(min_len, 16)))
@@ -664,85 +649,6 @@ def _repair_password(pw, min_len, require_upper, require_lower,
     return None
 
 
-def _gen_password_via_llm(existing_pws, min_len, require_upper,
-                          require_lower, require_digit, require_sym,
-                          freeform_rules=None):
-    """Use local ask_api LLM to generate a password in the same style as
-    the existing shared passwords while satisfying new platform rules.
-
-    The model receives a small sample (3-5 shared passwords) + an
-    explicit rule specification, and is asked to emit ONE password. It
-    is instructed to merge or modify the existing password patterns to
-    produce a new password that meets the requirements — NOT to invent
-    something random.
-
-    Args:
-        existing_pws: the user's known passwords (style references)
-        min_len, require_*: parsed complexity rules
-        freeform_rules: raw text description of rules (passed to the LLM
-            verbatim when available — gives the model context the
-            regex parser may have missed)
-
-    Returns None if ask_api is unavailable or the model returns
-    something unusable (too short, fails rules, contains spaces).
-    Gated by the routing hierarchy (lib.automation.llm.allow): in
-    JI_LLM_MODE=auto this escape is OFF — the secrets-based generator is
-    the source of truth; only `on` (experiments) permits it.
-    """
-    try:
-        from lib.automation.llm import allow, set_last_status
-        if not allow("gap_fill"):
-            set_last_status("policy_off", "password-generation escape gated by JI_LLM_MODE")
-            return None
-    except Exception:
-        return None
-    try:
-        from lib import ask_api
-        if not ask_api.available():
-            return None
-    except Exception:
-        return None
-    # Take up to 5 examples, oldest/most-frequent first.
-    samples = list(existing_pws)[:5]
-    rules_list = [
-        f"min length {min_len}" if min_len else "",
-        "include an uppercase letter" if require_upper else "",
-        "include a lowercase letter" if require_lower else "",
-        "include a digit" if require_digit else "",
-        "include a special character" if require_sym else "",
-    ]
-    rules_list = [r for r in rules_list if r]
-    rules_block = "\n".join(f"  - {r}" for r in rules_list)
-    if freeform_rules:
-        rules_block += f"\n\nAdditional requirements (free text):\n{freeform_rules}"
-    prompt = (
-        "You are generating ONE single new password for the user.\n\n"
-        "Complexity rules:\n" + rules_block + "\n\n"
-        "The user already uses these passwords — do NOT reuse them as-is, "
-        "but mimic their style (capitalisation, digit placement, symbol "
-        "preference, length, word fragments). You may MERGE parts of "
-        "existing passwords, MODIFY one slightly to meet a new rule "
-        "(e.g. append a digit, swap in a symbol), or construct a new one "
-        "that matches their style.\n"
-        + "\n".join(f"  - {s}" for s in samples)
-        + "\n\nOutput exactly ONE password on a single line. "
-          "No quotes, no labels, no explanation, no trailing newline."
-    )
-    try:
-        from lib.ask_api import ask_text
-        reply, err = ask_text(prompt, max_tokens=200, temperature=0.7)
-    except Exception:
-        return None
-    if err or not reply:
-        return None
-    # Take the first non-empty alphanumeric+symbol token in the reply.
-    for ln in reply.strip().splitlines():
-        cand = ln.strip().strip("`'\"")
-        if cand and " " not in cand and 4 <= len(cand) <= 80:
-            return cand
-    return None
-
-
 def cmd_creds(args):
     if not args:
         print(__doc__, file=sys.stderr)
@@ -763,15 +669,17 @@ def cmd_creds(args):
         return
     if cmd == "get":
         if len(args) < 2:
-            print("Usage: creds get <domain>", file=sys.stderr)
+            print("Usage: creds get <domain> [--reveal]", file=sys.stderr)
             return
         c = get_creds(args[1])
         if c:
             print(f"  email: {c['email']}")
             for i, p in enumerate(c["passwords"]):
                 marker = " (primary)" if i == 0 else ""
-                print(f"  password[{i}]: {p}{marker}")
+                print(f"  password[{i}]: {_mask(p, '--reveal' in args)}{marker}")
             print(f"  total candidates: {len(c['passwords'])}")
+            if "--reveal" not in args:
+                print("  (masked — pass --reveal to print secrets)", file=sys.stderr)
         else:
             print("  (not found)", file=sys.stderr)
         return
@@ -809,7 +717,9 @@ def cmd_creds(args):
         if not pws:
             print("  (no shared passwords)", file=sys.stderr)
         for i, p in enumerate(pws):
-            print(f"  [{i}] {p}")
+            print(f"  [{i}] {_mask(p, '--reveal' in args)}")
+        if pws and "--reveal" not in args:
+            print("  (masked — pass --reveal to print secrets)", file=sys.stderr)
         return
     if cmd == "shared-add":
         # creds shared-add [password ...]

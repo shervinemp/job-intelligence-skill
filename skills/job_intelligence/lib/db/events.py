@@ -5,7 +5,8 @@ from .schema import get_conn
 
 def event_add(job_id, event_type, title, **kw):
     c = get_conn()
-    c.execute(
+    # Row id from the CURSOR — sqlite3.Connection has no .lastrowid.
+    cur = c.execute(
         """INSERT INTO events (job_id, event_type, title, description, event_at, completed)
            VALUES (?,?,?,?,?,?)""",
         (
@@ -18,7 +19,7 @@ def event_add(job_id, event_type, title, **kw):
         ),
     )
     c.commit()
-    return c.lastrowid
+    return cur.lastrowid
 
 
 def event_list(job_id=None, upcoming=False):

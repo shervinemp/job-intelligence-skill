@@ -8,6 +8,8 @@ __all__ = [
     "get_failed_jobs", "get_job", "get_jobs_by_stage",
     "job_count", "job_count_by_stage", "next_pending_job",
     "record_failure", "search_jobs",
+    # fills (the ledger: makes wrong-fill rate computable)
+    "record_fills", "sample_for_adjudication", "adjudicate", "wrongfill_stats",
     # state
     "load_snapshot", "save_snapshot",
     # stages
@@ -81,6 +83,9 @@ from .docs import (  # noqa: F401
 from .companies import company_get, company_list_jobs, company_search, company_upsert  # noqa: F401
 from .contacts import contact_add, contact_list, contact_update  # noqa: F401
 from .contacts import attempt_add, attempt_list  # noqa: F401
+from .fills import (  # noqa: F401
+    record_fills, sample_for_adjudication, adjudicate, wrongfill_stats,
+)
 from .events import event_add, event_complete, event_list  # noqa: F401
 from .settings import (  # noqa: F401
     search_threads_clear,

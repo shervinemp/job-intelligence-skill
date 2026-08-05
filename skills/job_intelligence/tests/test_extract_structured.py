@@ -33,6 +33,32 @@ class Extract(unittest.TestCase):
             '{"@type":"WebSite"},{"@type":"JobPosting","title":"Graphed"}]}'))
         self.assertTrue(any(r.get("title") == "Graphed" for r in out))
 
+    def test_prose_salary_range(self):
+        from enrich import _extract_salary_prose
+        self.assertEqual(_extract_salary_prose("Salary: $120k - $150k CAD"),
+                         "120k - 150k CAD")
+        self.assertIsNone(_extract_salary_prose("No salary mentioned"))
+
+    def test_prose_location(self):
+        from enrich import _extract_location_prose
+        self.assertEqual(
+            _extract_location_prose("Location: Toronto, Ontario, Canada"),
+            "Toronto, Ontario")
+        self.assertEqual(_extract_location_prose("City: Montreal, Quebec"),
+                         "Montreal, Quebec")
+
+    def test_auth_wall_classification(self):
+        from enrich import _classify_auth_wall
+        self.assertEqual(_classify_auth_wall("Your session has expired")[0],
+                         "session_expired")
+        self.assertEqual(_classify_auth_wall("Enter the verification code")[0],
+                         "2fa")
+        self.assertEqual(_classify_auth_wall("Create account to view")[0],
+                         "create_account")
+        self.assertEqual(_classify_auth_wall("Please sign in to continue")[0],
+                         "login")
+        self.assertIsNone(_classify_auth_wall("A normal job description"))
+
 
 if __name__ == "__main__":
     unittest.main()

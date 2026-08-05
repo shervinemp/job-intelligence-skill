@@ -137,6 +137,10 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
             # without confirmation (check arbitrates).
             "kind": _T.UNVERIFIED if r.get("unverified") else _T.VERIFIED,
             "method": r.get("method", "deterministic"),
+            # #9: why the value resolved (profile/learned/alias/default/
+            # answers_override) — lets the orchestrator see a stale-learned
+            # value vs a profile value.
+            "provenance": r.get("provenance", ""),
             "reason": "accepted_unverified" if r.get("unverified") else _T.VERIFIED,
         })
     for r in failed_all:
@@ -250,6 +254,16 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
             atomic_write_json(path, handoff)
         except Exception:
             pass
+
+    # Append to the fill ledger (ETHOS §10). Passive: records what was
+    # decided so wrong-fill rate becomes computable; never alters the
+    # fill. Failure here must not cost the dossier, which is the truth.
+    try:
+        from lib.db.fills import record_fills
+        from lib.automation.obs import current_run_id as _rid
+        record_fills(jid, handoff["fields"], run_id=_rid(), url=url)
+    except Exception as _le:
+        print(f"  LEDGER_SKIP: {_le}", file=sys.stderr)
 
     # Emit structured observations for the session log (always on).
     try:

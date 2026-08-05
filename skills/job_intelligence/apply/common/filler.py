@@ -21,6 +21,7 @@ eliminating the two-layer indirection (act → dispatch → filler → strategy)
 from abc import ABC, abstractmethod
 import json
 import os
+import re
 import time
 
 from apply.common.field_types import is_combobox as _is_combobox
@@ -28,6 +29,39 @@ from apply.common.value_reader import read_value as _read_value
 from apply.common.output import emit_diag
 from apply.steps.probe import resolve_selector
 from apply.strategies import combobox, text, select, contenteditable as ce
+
+
+def _is_safe_normalization(after, ans):
+    """True when a read-back that differs from the answer is a SAFE
+    normalization (the answer's identity is preserved) rather than a form
+    REINTERPRETATION. Digits/letters normalized, then:
+      - short numeric answers (≤5 digits, the reinterpretation risk like
+        "6"→"60") must be equal,
+      - longer digit strings (dates, IDs: "2021-03"→"2021-03-15") are safe
+        when the answer is a prefix,
+      - otherwise the answer's content must be contained (phone formatting,
+        ATS decoration)."""
+    if not after or not ans:
+        return False
+    a = re.sub(r"[^a-z0-9]", "", str(after).lower())
+    b = re.sub(r"[^a-z0-9]", "", str(ans).lower())
+    if not a or not b:
+        return False
+    if b.isdigit():
+        if len(b) <= 5:
+            return a == b
+        return a.startswith(b) or b.startswith(a) or b in a
+    return b in a
+
+
+def _is_risk(label):
+    """True for identity/legal/location/salary/relocation fields — the Fix 3
+    class that needs vision as a second observer."""
+    try:
+        from apply.common.terms import is_risk_field
+        return is_risk_field(label)
+    except Exception:
+        return False
 
 
 # ─── Frame helpers ────────────────────────────────────────────────────
@@ -79,12 +113,37 @@ def _check_delta(before, after, ans, label, field=None):
         ans = ", ".join(str(v) for v in ans)
     elif ans is not None:
         ans = str(ans)
+    # URN/opaque-id trap: a read-back like "urn:li:geo:106234700" (LinkedIn
+    # location typeahead) is the widget's internal id, NEVER the answer. It
+    # must not be certified. Fail as verify_failed so the orchestrator sees it.
+    if after and str(after).startswith("__URN__:"):
+        emit_diag(label, ans, after, "verify_failed",
+                  "read-back is an opaque widget id (urn:) — not the answer")
+        if field is not None:
+            field.setdefault("_diag", {})["unverified"] = True
+        return False, "verify_failed"
     # File inputs: browser reports C:\fakepath\filename instead of full path
     if after and ans and ans.lower().endswith((".pdf", ".doc", ".docx", ".txt", ".rtf")):
         after_lower = after.lower()
         ans_lower = ans.lower()
         if os.path.basename(ans_lower) in after_lower or after_lower in ans_lower:
             return True
+    # Bare dialing code answers are fragment-like: a "+1" must NOT be
+    # certified by containment in a longer string ("Antigua and Barbuda
+    # (+1-268)" also contains "+1"), and a generic value-change must not
+    # certify it either. Checked FIRST so the Antigua certification is
+    # impossible for ANY field type (the Antigua regression). Requires the
+    # leading "+" so a bare small integer ("6") is NOT treated as a code —
+    # that path would wrongly certify "6"→"60".
+    if ans is not None:
+        ans_clean = re.sub(r"\s+", "", str(ans))
+        if ans_clean.startswith("+") and re.fullmatch(r"\+?\d{1,3}", ans_clean):
+            after_s = (after or "").strip()
+            if after_s and (after_s == ans_clean or after_s.startswith(ans_clean)):
+                return True, ""
+            emit_diag(label, ans, after, "verify_failed",
+                      "bare dialing code matched only by containment")
+            return False, "verify_failed"
     # Radio/select: value must match ans (or be a yes/no variant), not just
     # any change. Prevents false success when the wrong option was clicked.
     _is_choice = field and (field.get("tag") in ("RADIO_GROUP", "SELECT", "DROPDOWN")
@@ -108,9 +167,33 @@ def _check_delta(before, after, ans, label, field=None):
         if after_l and after_l != before:
             emit_diag(label, ans, after, "wrong_option", "clicked option does not match answer")
             return False, "wrong_option"
+    # A changed value that is NOT the answer is only verified when it is a
+    # SAFE normalization — the answer's identity is present in the read-back
+    # (phone formatting, date expansion, ATS prepending/append). A genuinely
+    # different value ("Yes"→"No", "6"→"60", "Toronto"→"Montreal") is a form
+    # REINTERPRETATION: the pipeline's intended value did not land, so it is
+    # UNVERIFIED (risk fields block, the orchestrator reviews), never
+    # certified verified. This is the fix for the silent re-lie where any
+    # change was stamped verified.
     if after and after != before and after != ans:
-        return True, ""
+        if _is_safe_normalization(after, ans):
+            return True, ""
+        emit_diag(label, ans, after, "reinterpreted",
+                  "read-back differs from intended answer — unverified")
+        if field is not None:
+            field.setdefault("_diag", {})["unverified"] = True
+        return True, "reinterpreted"
+    # Echo detection: a match that merely CONTAINS the answer is not
+    # independent confirmation when the value did not change — the field
+    # already held the answer (prefilled/echo), so it is unverified, not
+    # verified-by-us.
     if after and ans and (after == ans or ans in after or after in ans):
+        if after == ans and after == before:
+            emit_diag(label, ans, after, "echo",
+                      "value unchanged — no independent confirmation")
+            if field is not None:
+                field.setdefault("_diag", {})["unverified"] = True
+            return True, "echo"
         return True, ""
     # Postal/zip: strip spaces from both sides before comparing
     # (text.py strips spaces from postal values; verification sees
@@ -597,8 +680,27 @@ class AutocompleteFiller(FieldFiller):
                 return False
             el.click(timeout=3000)
             time.sleep(0.3)
+            # Clear-then-verify-then-type (INPUT_AUDIT item 2): a React
+            # control may reject el.fill(""), leaving prior text (doubled or
+            # interleaved). Clear, VERIFY it's empty, then type. If the clear
+            # failed, use keyboard select-all+delete instead of el.fill.
             el.fill("")
             time.sleep(0.2)
+            _cur = ""
+            try:
+                _cur = el.evaluate("el => el.value || ''") or ""
+            except Exception:
+                pass
+            # Only a non-empty STRING means the clear failed (the mock returns
+            # a non-string); select-all+delete as the robust fallback.
+            if isinstance(_cur, str) and _cur:
+                try:
+                    el.press("Control+A")
+                    time.sleep(0.1)
+                    el.press("Delete")
+                    time.sleep(0.2)
+                except Exception:
+                    pass
             # Type character by character so React/autcomplete picks up events
             el.type(str(ans), delay=80)
             time.sleep(1.5)
@@ -617,30 +719,42 @@ class AutocompleteFiller(FieldFiller):
             if suggestion_clicked:
                 time.sleep(0.5)
                 ans_lower = str(ans).lower().strip()
-                verdict = self._selection_verdict(page, sel, ans_lower)
-                if verdict is True:
+                # INPUT_AUDIT item 3: scan ALL visible options, not just the
+                # first — click each and verify; stop at the first match.
+                # The FIRST option is already clicked (suggestion_clicked);
+                # iterate 2nd, 3rd, ... until the click fails or a match lands.
+                _matched = False
+                _idx = 0
+                while _idx < 8:
+                    if _idx > 0:
+                        _clicked = False
+                        try:
+                            _clicked = page.evaluate("""(idx) => {
+                                const sels = '[role="option"], [class*="suggestion"], [class*="dropdown-item"], [class*="list-item"], [class*="menu-item"], li[class*="option"]';
+                                const all = [...document.querySelectorAll(sels)].filter(el => el.offsetParent !== null);
+                                const target = all[idx];
+                                if (!target) return false;
+                                target.click();
+                                return true;
+                            }""", _idx)
+                        except Exception:
+                            pass
+                        if not _clicked:
+                            break
+                        time.sleep(0.4)
+                    v = self._selection_verdict(page, sel, ans_lower)
+                    if v is True:
+                        _matched = True
+                        break
+                    if v is False:
+                        _idx += 1
+                        continue  # provably wrong — try the next option
+                    # None: unverifiable — accept this click (legacy).
+                    _matched = True
+                    break
+                if _matched:
                     return True
-                if verdict is False:
-                    # First suggestion was provably wrong — try the next one.
-                    time.sleep(0.5)
-                    next_clicked = page.evaluate("""(idx) => {
-                        const sels = '[role="option"], [class*="suggestion"], [class*="dropdown-item"], [class*="list-item"], [class*="menu-item"], li[class*="option"]';
-                        const all = [...document.querySelectorAll(sels)].filter(el => el.offsetParent !== null);
-                        const target = all[idx];
-                        if (!target) return false;
-                        target.click();
-                        return true;
-                    }""", 1)
-                    if next_clicked:
-                        time.sleep(0.5)
-                        if self._selection_verdict(page, sel, ans_lower) is True:
-                            return True
-                    # Wrong option selected and no better one available —
-                    # surface as failed so the orchestrator can supply a
-                    # clean answer instead of submitting a wrong choice.
-                    return False
-                # None: unverifiable — accept the first click (legacy).
-                return True
+                return False
             # No dropdown appeared — press Tab to keep typed value without submitting
             el.press("Tab")
             time.sleep(0.5)
@@ -794,6 +908,30 @@ def _fill_one(page, field: dict, ans: str) -> tuple[bool, str]:
 
     fr = _frame_for_sel(page, sel) or page
     label = field.get("label", "")
+    _host = ""
+    try:
+        from urllib.parse import urlparse as _up
+        _host = _up(page.url or "").netloc.lower().split(":")[0]
+    except Exception:
+        pass
+
+    # Per-field method learning (META_FLOW Loop 4): try the proven filler
+    # for this (host, label) first, then fall back to the registry order.
+    from apply.common import field_methods as _fm
+    _prefer = _fm.prefer_method(label, _host)
+
+    def _ordered_fillers():
+        if _prefer:
+            for f_ in _FILLERS:
+                if f_.name == _prefer and f_.can_handle(field):
+                    yield f_
+        yield from _FILLERS
+
+    def _record(filler_name):
+        try:
+            _fm.record_method(label, filler_name, _host)
+        except Exception:
+            pass
 
     # Comboboxes and Ashby Yes/No: trust the filler's own verification.
     # Read-back via value_reader races the DOM and can wipe real selections.
@@ -808,9 +946,10 @@ def _fill_one(page, field: dict, ans: str) -> tuple[bool, str]:
         except Exception:
             pass
     if _is_combobox(field) or _is_ashby_yesno:
-        for filler in _FILLERS:
+        for filler in _ordered_fillers():
             if filler.can_handle(field):
                 if filler.fill(fr, field, ans):
+                    _record(filler.name)
                     return True, filler.name
                 # Radio/yesno rows return bare False with no evidence —
                 # record a diagnostic so the audit log explains the gap
@@ -820,13 +959,30 @@ def _fill_one(page, field: dict, ans: str) -> tuple[bool, str]:
 
     before = _read_element_value(page, sel, field=field)
 
-    for filler in _FILLERS:
+    for filler in _ordered_fillers():
         if filler.can_handle(field):
             if filler.fill(fr, field, ans):
                 aft = _read_element_value(page, sel, ans=ans, field=field)
                 ok, delta_reason = _check_delta(before, aft, ans, label, field)
                 if ok:
+                    _record(filler.name)
                     return True, filler.name
+                # Fix 3: a RISK field with an ambiguous read-back must be
+                # vision-confirmed (the second observer) before it can be
+                # certified. Vision uses ask_bytes (local-only, A3). If vision
+                # is unavailable or declines, the field stays UNVERIFIED —
+                # the risk-split gate blocks it at submit.
+                if not ok and _is_risk(label):
+                    try:
+                        from apply.common.value_reader import read_value_vision
+                        vv = read_value_vision(fr, sel, ans=ans)
+                        if vv:
+                            _record(filler.name)
+                            field.setdefault("_diag", {})["method"] = "vision"
+                            return True, filler.name
+                    except Exception:
+                        pass
+                    field.setdefault("_diag", {})["unverified"] = True
                 field["_diag"] = {"method": filler.name, "reason": delta_reason,
                                   "before": before, "after": aft}
 

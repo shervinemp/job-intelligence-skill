@@ -13,6 +13,26 @@ Before running pipeline, read these:
 - `profile.json` — common form answers
 - `categories.json` — job categories
 
+## Orchestrator surface (`ji`) — the ONE surface to memorize
+
+`ji.py` is the orchestrator's single command surface (SURFACE_AUDIT.md). Every
+action, evidence, and decision command forwards to the owning engine; the
+orchestrator does not need to memorize apply.py / report.py directly.
+
+```
+ji status            fleet + READY + HOLD + decisions, one NEXT
+ji decisions         THE inbox (owner-split)       ji answer <jid> "<label>": "<value>"
+ji verify <jid>      RISK-VALUE REVIEW (values!)    ji ready              risk-observed jobs
+ji job|diff|audit <jid>   dossier / canary / log    ji apply|submit|shadow|fetch|tailor
+ji stats|fleet|candidates|pending|profile|rules|keywords|domains|spc|adjudicate|...  (forward)
+```
+
+Distinguish the two `verify` verbs:
+- `ji verify <jid>` — **risk-value review**: shows the resolved values (the
+  sanctioned PII view) for orchestrator confirmation before submit.
+- `apply.py verify <jid>` — **post-submit check**: scans for success signals
+  after a submit.
+
 ## Pipeline stages
 
 | Stage | Gate |
@@ -29,7 +49,9 @@ Before running pipeline, read these:
 ## Change protocol (cooked-in lessons — do NOT skip)
 
 After ANY hot-path change (fill/check/submit/resolve/shadow/terms):
-1. `python scripts/lint.py` — vocabulary literals, dead strings, nested dirs, compile. Must PASS.
+1. `python scripts/lint.py` — compile, vocabulary literals, dead strings, nested
+   dirs (any dir repeating its parent's name), and **CLI docs** (a documented
+   command must dispatch; a dispatchable command must be documented). Must PASS.
 2. `python -m pytest tests -q` — full suite. Must PASS.
 3. One live shadow job (regression canary compares vs its previous run) —
    e.g. `apply.py shadow --jid <lyft>` after removing it from the log.
@@ -83,7 +105,7 @@ proof of intent.
 | `reach.py attempts [<jid>]` | Show outreach attempts |
 | `reach.py status` | Pipeline state with contact/outreach summary |
 | `reach.py retry <jid>` | Re-run contact discovery |
-| `reach.py undo <jid>` | Reset contact state for a job |
+| `reach.py undo <jid> [--confirm]` | Reset contact state (--confirm required once real outreach exists) |
 | `report.py handovers [USER\|ORCHESTRATOR\|DATA\|REVIEW]` | THE decisions inbox: every open decision, grouped by owner, with evidence + answer commands |
 | `report.py help` | The grouped surface map (decisions / evidence / fleet / readiness) |
 | `report.py widgets` | Unhandled widget-class backlog (probe-failure artifacts) |
@@ -146,19 +168,64 @@ Phase-by-phase walkthrough in `apply-pipeline.md`. The pipeline is one-shot on s
 Optional parallel track after `enrich`/`tailor`. Contact discovery finds recruiters (job page), team members (company LinkedIn people page, filtered by team keywords), and my 1st-degree connections (LinkedIn search with numeric company ID).
 
 - **Flow**: `enrich.py admit --team <name>` → `reach.py discover <jid>` (or `reach.py discover --all` after a batch) → `reach.py list <jid>` → outreach.
-- **One-shot guards**: `email_sent` / `message_sent` prevent re-sending. `--force` re-sends after human verification. `reach.py undo <jid>` resets.
-- **Uncertain sends**: if a DM send is clicked but unconfirmed, status is `uncertain` (attempt logged as `pending`) — check the LinkedIn inbox manually, then `reach.py update --set-sent message` to confirm or retry with `--force`. Never silently resend.
+- **One-shot guards**, per channel and per person:
+  - same row: `email_sent` (email), `message_sent` (message), a prior
+    `linkedin_connect` attempt (connect — connect had *no* same-row guard,
+    so a re-run after a crash sent a second invitation);
+  - cross-job/duplicate-row: `_prior_outreach` matches the **person**, on a
+    canonical LinkedIn vanity or lowercased email, so `/in/carol`,
+    `/in/carol/` and `/in/Carol?miniProfileUrn=…` are one human. Blank
+    fields identify nobody (an empty `linkedin_url` used to match every
+    other empty one, blocking strangers while missing real repeats).
+  - `--force` overrides after human verification.
+- **`reach.py undo <jid>`** deletes the attempt rows that *are* the evidence a
+  person was contacted — so it needs `--confirm` when the job has confirmed or
+  in-flight outreach, and names who loses protection. `extract.py reset <jid>`
+  now clears those attempts too (they used to be orphaned, leaving the
+  re-extracted job with an empty history and the person re-contactable).
+- **Uncertain sends**: if a DM send is clicked but unconfirmed, status is `uncertain` (attempt logged as `pending`) — check the LinkedIn inbox manually, then `reach.py update --set-sent message` to confirm (this also settles the pending attempt) or retry with `--force`. Never silently resend.
 - **Premium**: 2nd/3rd-degree contacts use the InMail composer (`.msg-inmail-credits-display`); the pipeline proceeds and reports `INMAIL_COMPOSER`. `CONNECT_REQUIRED` → run `reach.py connect`. Free accounts always see InMail only for non-connections.
 - **Contact indices**: `--contact N` matches the numbering printed by `discover`/`list` (DB order).
 - **Email suggestions** from the LLM are never sent automatically — backfill with `reach.py update --email <addr>` after human verification.
 - **Attempts**: every outreach is recorded in `contact_attempts` (status: pending/sent/failed).
 - **Verified LinkedIn selectors** (2026-07 live DOM): people cards `li.org-people-profile-card__profile-card-spacing`; DM = typeahead flow (`input.msg-connections-typeahead__search-field` → mouse-click suggestion → `div.msg-form__contenteditable` → `button.msg-form__send-btn`); compose URL recipient params do NOT work. See `lib/linkedin_messaging.py` header.
 
+## Submission policy (read before any live run)
+
+`~/.ji/apply_policy.json` decides whether `act --submit` clicks for real.
+
+| mode | effect |
+|------|--------|
+| `hold` | **DEFAULT.** Fills completely, stops before submit. |
+| `shadow` | Fills + audits, never submits (what `apply.py shadow` forces). |
+| `live` | Submits for real — must be chosen **explicitly**. |
+
+Fail-closed: a missing, unreadable, malformed, or typo'd policy resolves to
+`hold` and says so on stderr. Previously the default was `live` and a missing
+file was swallowed silently, so the most likely failure of the safety control
+opened the gate. `JI_APPLY_MODE` overrides the file; `apply.py shadow` forces
+`shadow` for its children.
+
+## Trust boundary for URLs
+
+Job URLs are harvested by regex from **email bodies**, so they are
+attacker-influenceable. `lib/url_safety.py` is the gate: http/https only, no
+embedded credentials, and the host must not resolve to loopback / private /
+link-local / reserved space (this is what keeps an emailed link away from the
+pipeline's own CDP port on 127.0.0.1:9222 and from cloud metadata endpoints).
+Unresolvable hosts are refused — we don't fetch what we can't vet. Checked
+cheaply at extract time and in full before every fetch; `curl` additionally
+pins `--proto`/`--proto-redir` and `--max-redirs`. `_SKIP_DOMAINS` in
+extract.py is a **noise** filter, not a security control.
+
 ## Orchestrator rules
 
 1. **Don't guess personal data.** Check profile + resume first. Missing → ask (critical) or skip (optional).
 2. **Don't fill optional fields.** Not marked required → leave it.
-3. **Don't echo PII.** Labels only, never values in output.
+3. **Don't echo PII.** Labels only, never values in output. The pipeline now
+   holds itself to this too: the fill report prints *answer keys*, never
+   answer values (it used to dump gender / disability / salary / sponsorship
+   answers into shadow transcripts and per-job logs on disk).
 4. **Always verify after `NEXT: verify`.** DB can be stale.
 5. **Inspect when stuck.**
 6. **Don't collapse gates.** Dry-run → fill → preview → confirm. Each its own round-trip. See [#apply-pipeline](apply-pipeline).

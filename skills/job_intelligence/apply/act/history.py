@@ -41,6 +41,43 @@ _QUESTION_RE = re.compile(
     r"please|required to|must you|should you|how (many|long)|have a|"
     r"may we|can we|in which|when did)\b")
 
+# "please" blocks attestations ("Please review the linked document",
+# "Please confirm...") but it also blocked ordinary data prompts like
+# "Please list your most recent employer" — a required employer field the
+# resume can answer. Only an explicit DATA-ENTRY verb lifts the block;
+# review/confirm/acknowledge stay blocked.
+_DATA_PROMPT_RE = re.compile(
+    r"\bplease\s+(list|enter|provide|specify|state|give|indicate|input|fill|"
+    r"tell us|share)\b")
+
+
+def entry_company(w):
+    """Employer name for a work entry.
+
+    THE canonical key is `company` — that is what lib/build_resume.py
+    writes and what its validator REQUIRES (work[i].company). Upstream
+    JSON Resume calls the same field `name`, and this module used to read
+    only that, so every company/employer field on every form came back
+    unanswered while Title/dates/School filled normally. It was the single
+    largest cause of unanswered REQUIRED fields across the fleet, and the
+    tests missed it because their fixtures used `name` too.
+
+    Both spellings are accepted: canonical first, alias second.
+    """
+    return (w.get("company") or w.get("name") or "").strip()
+
+
+def entry_summary(w):
+    """Role description. build_resume writes `highlights` (a list); JSON
+    Resume uses `summary` (a string). Accept either."""
+    s = (w.get("summary") or "").strip()
+    if s:
+        return s
+    hl = w.get("highlights") or []
+    if isinstance(hl, list):
+        return " ".join(str(h).strip() for h in hl if str(h).strip())
+    return str(hl).strip()
+
 
 def _load_entries(jid):
     """(work, education) lists from the tailored resume.json. Best-effort."""
@@ -53,7 +90,7 @@ def _load_entries(jid):
     except Exception:
         return [], []
     work = [w for w in (data.get("work") or [])
-            if (w.get("name") or "").strip() or (w.get("position") or "").strip()]
+            if entry_company(w) or (w.get("position") or "").strip()]
     edu = [e for e in (data.get("education") or [])
            if (e.get("institution") or "").strip()]
     return work, edu
@@ -99,8 +136,9 @@ def _merge_history_answers(fields, jid):
         if not norm:
             continue
         # Questions (eligibility, location, consent) must never be answered
-        # from work-history data.
-        if _QUESTION_RE.search(norm):
+        # from work-history data — unless the stem is an explicit
+        # data-entry prompt ("Please list your most recent employer").
+        if _QUESTION_RE.search(norm) and not _DATA_PROMPT_RE.search(norm):
             continue
 
         # ── Current-role checkbox (coordinates with end-date fields) ─
@@ -150,8 +188,9 @@ def _merge_history_answers(fields, jid):
                 # Next Company label advances to the next entry row.
                 work_row = min(work_seen, len(work) - 1)
                 w = work[work_row]
-                if (w.get("name") or "").strip():
-                    out[label] = w["name"]
+                company = entry_company(w)
+                if company:
+                    out[label] = company
                     work_seen += 1
                 continue
             w = work[min(work_row, len(work) - 1)]
@@ -159,8 +198,9 @@ def _merge_history_answers(fields, jid):
                 if (w.get("position") or "").strip():
                     out[label] = w["position"]
             elif _DESC_RE.search(norm):
-                if (w.get("summary") or "").strip():
-                    out[label] = w["summary"][:1000]
+                summary = entry_summary(w)
+                if summary:
+                    out[label] = summary[:1000]
             continue
 
         # ── Date parts inside work rows ────────────────────────────

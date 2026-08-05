@@ -182,6 +182,25 @@ closing a widget class means a handler + registry entry + corpus snapshot.
 - **Queue velocity** — the inbox's clear rate: USER items answered, 
   ORCHESTRATOR items closed from evidence, DATA gaps filled.
 
+**Enforcement status (be honest about which of these exist).** A metric
+named but not computed is an unfalsifiable claim, which is exactly what
+this section is supposed to prevent:
+
+| metric | instrumented? |
+|---|---|
+| Wrong-fill rate | **YES** — the adjudicated fill ledger (`lib/db/fills.py` + `report.py wrongfill`) separates `kind` (did the value land?) from `verdict` (was it right?). Reported only over adjudicated fills, with the unjudged denominator shown. `report.py adjudicate` samples riskiest-first. |
+| Batch survivability | YES — subprocess isolation, per-job budgets, atomic outcome files, `report.py shadow`. |
+| Orchestrator cycle cost | **YES** — `shadow_run.jsonl` carries per-job seconds; `report.py wrongfill`'s ROOT CAUSE CLUSTERS (D6) group failures by label×platform×method so one fix clears a class, not one job. |
+| Handover precision | **YES** — owner split (`report.py shadow --classify`) uses profile truth (`_profile_has_answer`), not keywords, to route USER vs DATA; `report.py profile --suspects` surfaces profile answers adjudicated wrong so false handovers get corrected at the source. |
+| Queue velocity | **YES** — `report.py applied --unconfirmed` + `handovers` show the open-decision set over time; `ji status` gives the current READY/HOLD split as a one-line trend. |
+
+The adjudicated ledger is the falsification instrument: `verified` still means
+"filled as intended" (never "filled correctly") — but now *correctness* is
+measured independently by adjudication, and a `wrong` verdict retracts the
+learned mapping, drops the suspect rule, flags the profile answer, and feeds
+the SPC tripwire (B1/B2). The probe router's success predicate remains
+`field_count > 0` for completion; correctness is the ledger's job.
+
 ## 11. Guardrails for the orchestrator (me)
 
 The orchestrator is an LLM with the same weaknesses; the guardrails exist to

@@ -14,6 +14,7 @@ the classifier all consume it, so they can never disagree again.
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Dict, List
 
@@ -134,6 +135,102 @@ def failed_labels(fields):
     return [f.get("label", "") for f in fields or []
             if f.get("kind") in (REJECTED_BY_FORM, INTERACTION_FAILED)
             or (f.get("kind") == NEEDS_DATA and f.get("required"))]
+
+
+# ── Risk fields ─────────────────────────────────────────────────────────
+# Fields where a WRONG value is materially harmful — identity, legal status,
+# location, salary, relocation. An unverified risk field BLOCKS submit;
+# unverified non-risk fields only flag. Single source of truth so the fill,
+# the check gate, and the dossier owner-split cannot disagree.
+_RISK_KEYWORDS = (
+    "country", "phone country", "province", "state", "city", "postal", "zip",
+    "address", "authoriz", "eligible", "visa", "sponsor", "citizen",
+    "work right", "work authorization", "legal", "salary", "compensation",
+    "relocat", "commute", "clearance", "disabilit", "gender", "ethnic",
+    "race", "veteran", "birth", "date of birth", "ssn", "social security",
+    "national id", "passport", "government",
+)
+
+
+def is_risk_field(label):
+    """True if a wrong value here is materially harmful. Used to split the
+    unverified gate: risk fields BLOCK submit, non-risk fields only flag.
+    Static list + runtime additions (terms.add_risk_keyword), so the
+    classifier is extendable without a code edit."""
+    lc = (label or "").lower()
+    if any(kw in lc for kw in _RISK_KEYWORDS):
+        return True
+    return any(kw in lc for kw in _runtime_keywords("risk"))
+
+
+_RUNTIME_KEYWORD_PATH = None
+
+
+def _keyword_path():
+    global _RUNTIME_KEYWORD_PATH
+    if _RUNTIME_KEYWORD_PATH is None:
+        try:
+            from lib.config import STATE_DIR
+            _RUNTIME_KEYWORD_PATH = os.path.join(STATE_DIR, "classifier_keywords.json")
+        except Exception:
+            _RUNTIME_KEYWORD_PATH = ""
+    return _RUNTIME_KEYWORD_PATH
+
+
+def _load_runtime_keywords():
+    """{kind: [keywords]} added at runtime — risk/handover classifier
+    extensions with no code edit (data-driven keyword learning)."""
+    try:
+        import json as _json
+        with open(_keyword_path(), encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+
+def _runtime_keywords(kind):
+    try:
+        return _load_runtime_keywords().get(kind) or []
+    except Exception:
+        return []
+
+
+def add_classifier_keyword(kind, keyword):
+    """Extend a classifier (risk/handover) with a runtime keyword. Returns
+    True on success. Invalid kind or empty keyword refused."""
+    if kind not in ("risk", "handover") or not keyword:
+        return False
+    data = _load_runtime_keywords()
+    kws = data.setdefault(kind, [])
+    kw = keyword.lower().strip()
+    if not kw:
+        return False
+    if kw not in kws:
+        kws.append(kw)
+    try:
+        from lib.config import atomic_write_json
+        import json as _json
+        atomic_write_json(_keyword_path(), data, indent=2)
+    except Exception:
+        return False
+    return True
+
+
+def list_classifier_keywords(kind=None):
+    """Runtime classifier keywords for inspection."""
+    data = _load_runtime_keywords()
+    if kind:
+        return data.get(kind, [])
+    return data
+
+
+def clear_classifier_keywords_for_test():
+    try:
+        from lib.config import atomic_write_json
+        import json as _json
+        atomic_write_json(_keyword_path(), {}, indent=2)
+    except Exception:
+        pass
 
 
 def skipped_labels(fields):

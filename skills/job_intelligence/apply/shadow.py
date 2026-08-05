@@ -308,6 +308,38 @@ def run(jids=None, limit=None, quick=False, recheck=False):
     todo = [(jid, job) for jid, job in jobs if jid not in done]
     print(f"TOTAL: {len(jobs)}, already recorded: {len(done)}, to do: {len(todo)}",
           file=sys.stderr)
+    # G4: daily pacing budget — cap the number of jobs processed per day so an
+    # autonomous burst doesn't burn the account's reputation. Cap + counter
+    # live in JI_HOME/state/pacing.json; the cap defaults to unlimited.
+    try:
+        import json as _json
+        from lib.config import STATE_DIR as _STATE_DIR
+        _pace_path = os.path.join(_STATE_DIR, "pacing.json")
+        _pace = {}
+        try:
+            with open(_pace_path, encoding="utf-8") as f:
+                _pace = _json.load(f)
+        except Exception:
+            pass
+        _today = time.strftime("%Y-%m-%d")
+        _used = _pace.get(_today, {}).get("processed", 0) if isinstance(
+            _pace.get(_today), dict) else 0
+        _cap = 0
+        try:
+            from apply.common.submit_policy import load_policy as _lp
+            _cap = int(_lp().get("daily_cap", 0) or 0)
+        except Exception:
+            _cap = 0
+        if _cap > 0 and _used >= _cap:
+            print(f"PACING (G4): daily cap {_cap} reached ({_used} processed "
+                  f"today) — stopping the batch", file=sys.stderr)
+            return 0
+        if _cap > 0 and len(todo) > (_cap - _used):
+            todo = todo[: (_cap - _used)]
+            print(f"PACING (G4): capped run to {len(todo)} (daily cap {_cap}, "
+                  f"{_used} used today)", file=sys.stderr)
+    except Exception:
+        pass
     _llmhdr = _probe_llm_availability()
     _api = "up" if _llmhdr.get("api_available") else "DOWN"
     print(f"LLM: mode={_llmhdr.get('mode')} api={_api} — "
@@ -454,6 +486,37 @@ def run(jids=None, limit=None, quick=False, recheck=False):
 
     print(f"\nDONE batch: processed {processed}, total recorded {len(_load_done())}/{len(jobs)}",
           file=sys.stderr)
+    # #8: auto-run the wrong-fill SPC trip at the end of every batch — a
+    # platform drifting past the bound is paused without waiting for someone
+    # to remember `report.py spc`.
+    try:
+        from lib.db.fills import spc_trip
+        _tripped = spc_trip(apply=True)
+        if _tripped:
+            print(f"SPC: {len(_tripped)} platform(s) over the wrong-fill "
+                  f"bound — submits paused: {', '.join(_tripped)} "
+                  f"(report.py spc to review)", file=sys.stderr)
+    except Exception:
+        pass
+    # G4: record today's processed count for the pacing budget.
+    try:
+        from lib.config import STATE_DIR as _STATE_DIR
+        import json as _json
+        _pace_path = os.path.join(_STATE_DIR, "pacing.json")
+        _pace = {}
+        try:
+            with open(_pace_path, encoding="utf-8") as f:
+                _pace = _json.load(f)
+        except Exception:
+            pass
+        _today = time.strftime("%Y-%m-%d")
+        prev = _pace.get(_today, {}) if isinstance(_pace.get(_today), dict) else {}
+        prev["processed"] = int(prev.get("processed", 0)) + processed
+        _pace[_today] = prev
+        from lib.config import atomic_write_json
+        atomic_write_json(_pace_path, _pace, indent=2)
+    except Exception:
+        pass
     return 0
 
 

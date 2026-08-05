@@ -298,5 +298,289 @@ class AttrWeakTokenGuard(unittest.TestCase):
         self.assertEqual(r.value, "john.smith@example.com")
 
 
+class RuntimeAliasRules(unittest.TestCase):
+    """The wired meta-flow loop (META_FLOW.md Loop 4): a repeated no_match
+    label can be resolved at RUNTIME via report.py rules add — no source
+    edit. Invalid rules are refused; the store is scoped and clearable."""
+
+    def setUp(self):
+        from apply.common.resolve import clear_alias_rules
+        clear_alias_rules()
+
+    def tearDown(self):
+        from apply.common.resolve import clear_alias_rules
+        clear_alias_rules()
+
+    def test_novel_label_resolves_after_runtime_rule(self):
+        from apply.common.resolve import (add_alias_rule, resolve,
+                                          _build_ephemeral)
+        profile = {"answers": {"preferred_pronouns_profile": "She/Her"},
+                   "location": "Ottawa, ON, Canada"}
+        ep = _build_ephemeral(profile)
+        r = resolve("Which pronouns should we use for you?", profile,
+                    ephemeral=ep)
+        self.assertIsNone(r.value)  # no_match before the rule
+        self.assertTrue(add_alias_rule(
+            r"\bwhich pronouns should we use\b",
+            ["preferred_pronouns_profile"]))
+        r2 = resolve("Which pronouns should we use for you?", profile,
+                     ephemeral=ep)
+        self.assertEqual(r2.value, "She/Her")
+        self.assertEqual(r2.provenance, "alias")
+
+    def test_invalid_regex_refused(self):
+        from apply.common.resolve import add_alias_rule, list_alias_rules
+        self.assertFalse(add_alias_rule("(broken", ["x"]))
+        self.assertFalse(add_alias_rule("", ["x"]))
+        self.assertFalse(add_alias_rule(r"\bvalid\b", []))
+        self.assertEqual(list_alias_rules(), [])
+
+    def test_dedupe_and_clear(self):
+        from apply.common.resolve import (add_alias_rule, list_alias_rules,
+                                          clear_alias_rules)
+        self.assertTrue(add_alias_rule(r"\bfoo bar\b", ["k1"]))
+        self.assertTrue(add_alias_rule(r"\bfoo bar\b", ["k2"]))  # dedupe
+        rules = list_alias_rules()
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(rules[0][1], ["k2"])
+        clear_alias_rules()
+        self.assertEqual(list_alias_rules(), [])
+
+    def test_runtime_rule_outranks_static_default(self):
+        """A runtime alias must beat a conservative default (Step 6)."""
+        from apply.common.resolve import (add_alias_rule, resolve,
+                                          _build_ephemeral)
+        profile = {"answers": {"consent_marketing": "Yes"},
+                   "location": "Ottawa, ON, Canada"}
+        ep = _build_ephemeral(profile)
+        # Static default would answer "No" for marketing; the runtime rule
+        # must win when the profile actually has an answer.
+        self.assertTrue(add_alias_rule(
+            r"\bstay up to date\b.*\bmarketing\b", ["consent_marketing"]))
+        r = resolve("Stay up to date on marketing?", profile, ephemeral=ep)
+        self.assertEqual(r.value, "Yes")
+
+
+class S2AutoPromotionGate(unittest.TestCase):
+    """ALGORITHMS.md S2: a learned mapping must reach `active` (≥2 consistent
+    confirms) before it can promote to a RUNTIME alias rule. A single answer
+    or a conflicting one must never create a global rule."""
+
+    def setUp(self):
+        from apply.common.resolve import clear_alias_rules, clear_learned_for_test
+        clear_alias_rules()
+        try:
+            clear_learned_for_test()
+        except AttributeError:
+            pass
+
+    def tearDown(self):
+        from apply.common.resolve import clear_alias_rules
+        clear_alias_rules()
+
+    def _mapping(self):
+        from apply.common.resolve import learn_mapping
+        learn_mapping("How did you hear about this role?", "LinkedIn",
+                      domain="job-boards.greenhouse.io")
+        learn_mapping("How did you hear about this role?", "LinkedIn",
+                      domain="boards.greenhouse.io")
+
+    def test_single_confirm_blocks_promotion(self):
+        from apply.common.resolve import (learn_mapping,
+                                          promote_learned_to_rule,
+                                          list_alias_rules)
+        learn_mapping("Preferred language", "English")
+        status, detail = promote_learned_to_rule("Preferred language")
+        self.assertEqual(status, "not_active")
+        self.assertEqual(list_alias_rules(), [])
+
+    def test_two_confirms_promote(self):
+        """Two consistent confirms reach active → promotion is allowed."""
+        self._mapping()
+        # The learned value must map to a profile answer key to promote.
+        # Without a real profile here, promotion reports conflict — which is
+        # correct: the gate is PASSED but the rule can't point at a missing key.
+        from apply.common.resolve import promote_learned_to_rule
+        status, detail = promote_learned_to_rule(
+            "How did you hear about this role?", domain="")
+        self.assertEqual(status, "promoted")
+
+    def test_conflicting_answers_never_promote(self):
+        from apply.common.resolve import (learn_mapping,
+                                          promote_learned_to_rule,
+                                          list_alias_rules)
+        learn_mapping("Preferred language", "English")
+        learn_mapping("Preferred language", "French")  # conflict → reset to 1
+        status, detail = promote_learned_to_rule("Preferred language")
+        self.assertEqual(status, "not_active")
+        self.assertEqual(list_alias_rules(), [])
+
+    def test_short_label_never_promotes(self):
+        from apply.common.resolve import (learn_mapping,
+                                          promote_learned_to_rule,
+                                          list_alias_rules)
+        # A single-confirm short label: the S2 gate blocks promotion (it is
+        # not active), and even under --force a too-short label yields no
+        # pattern. Either way, no global rule is created.
+        learn_mapping("A", "v")
+        status, detail = promote_learned_to_rule("A")
+        self.assertIn(status, ("not_active", "no_pattern"))
+        self.assertEqual(list_alias_rules(), [])
+        status2, detail2 = promote_learned_to_rule("A", force=True)
+        self.assertEqual(status2, "no_pattern")
+        self.assertEqual(list_alias_rules(), [])
+
+    def test_expired_rules_are_dropped(self):
+        """A runtime rule with a stale last_seen must be reaped (rule TTL)."""
+        from apply.common.resolve import (add_alias_rule, _load_runtime_rules,
+                                          _save_runtime_rules, _alias_rules_all,
+                                          _RULE_TTL_DAYS)
+        self.assertTrue(add_alias_rule(r"\bexpired rule pattern\b", ["k1"]))
+        # Age the rule past the TTL.
+        from datetime import datetime, timedelta
+        old = (datetime.now() - timedelta(days=_RULE_TTL_DAYS + 1)
+               ).strftime("%Y-%m-%dT%H:%M:%S")
+        rules = _load_runtime_rules()
+        for r in rules:
+            r[2] = old
+        _save_runtime_rules(rules)
+        # _alias_rules_all reaps expired rules lazily.
+        _alias_rules_all()
+        from apply.common.resolve import _load_runtime_rules as _reload
+        self.assertEqual(_reload(), [])
+
+    def test_domain_scoped_rule_does_not_fire_elsewhere(self):
+        """A4: a runtime rule learned for one host must not fire on another."""
+        from apply.common.resolve import (add_alias_rule, resolve,
+                                          _build_ephemeral, clear_alias_rules)
+        clear_alias_rules()
+        try:
+            self.assertTrue(add_alias_rule(
+                r"\bwhich office location\b", ["location"],
+                domain="boards.greenhouse.io"))
+            prof = {"location": "Ottawa, Ontario, Canada"}
+            ep = _build_ephemeral(prof)
+            # On the scoped host, the rule fires.
+            r_yes = resolve("Which office location do you prefer?",
+                            prof, ephemeral=ep, domain="boards.greenhouse.io")
+            self.assertEqual(r_yes.value, "Ottawa, Ontario, Canada")
+            # On a DIFFERENT host, the rule must NOT fire (no_match).
+            r_no = resolve("Which office location do you prefer?",
+                           prof, ephemeral=ep, domain="workday.com")
+            self.assertIsNone(r_no.value)
+        finally:
+            clear_alias_rules()
+
+    def test_global_rule_fires_everywhere(self):
+        """An empty-domain rule is global (intended for universal phrasings)."""
+        from apply.common.resolve import (add_alias_rule, resolve,
+                                          _build_ephemeral, clear_alias_rules)
+        clear_alias_rules()
+        try:
+            self.assertTrue(add_alias_rule(r"\bwhich office location\b",
+                                           ["location"]))  # no domain
+            prof = {"location": "Ottawa, Ontario, Canada"}
+            ep = _build_ephemeral(prof)
+            for host in ("a.com", "b.io", ""):
+                r = resolve("Which office location do you prefer?", prof,
+                            ephemeral=ep, domain=host)
+                self.assertEqual(r.value, "Ottawa, Ontario, Canada",
+                                 f"global rule failed on host {host!r}")
+        finally:
+            clear_alias_rules()
+
+
+    def test_postal_code_not_used_as_country(self):
+        """A1: 'Toronto, ON, M5V 2T6' must not derive country='M5V 2T6'."""
+        from apply.common.resolve import _build_ephemeral, resolve
+        prof = {"location": "Toronto, ON, M5V 2T6"}
+        ep = _build_ephemeral(prof)
+        c = ep.get("country")
+        self.assertTrue(c is None or not str(c[0]).startswith("M5V"),
+                        f"postal code leaked as country: {c!r}")
+        r = resolve("Country", prof, ephemeral=ep)
+        self.assertNotIn("M5V", str(r.value or ""))
+
+    def test_postal_suffix_stripped_from_country(self):
+        """A1: 'Quebec City, QC, Canada G1R 5J4' → country 'Canada'."""
+        from apply.common.resolve import _build_ephemeral
+        ep = _build_ephemeral({"location": "Quebec City, QC, Canada G1R 5J4"})
+        c = ep.get("country")
+        self.assertEqual(str(c[0]), "Canada")
+
+    def test_preferred_name_text_field_not_filled_with_no(self):
+        """A2: 'Preferred name' is a TEXT field — must resolve to the name,
+        never the consent default 'No'."""
+        from apply.common.resolve import resolve, _build_ephemeral
+        prof = {"first_name": "Shervin", "location": "Ottawa, Ontario, Canada"}
+        ep = _build_ephemeral(prof)
+        r = resolve("Preferred name", prof, ephemeral=ep, field_type="text")
+        self.assertEqual(r.value, "Shervin")
+
+    def test_no_answer_values_hardcoded_in_resolver(self):
+        """ETHOS: answer values live in data (default_answers.json / profile),
+        never in resolve.py source. The default mechanism must LOAD its values
+        from the data file, not hold them as source literals."""
+        from apply.common.resolve import _load_default_answers
+        src = open(os.path.join(os.path.dirname(__file__), "..",
+                                "apply", "common", "resolve.py"),
+                   encoding="utf-8").read()
+        # The old hardcoded default list shape must be gone (pattern, "No").
+        self.assertNotIn("_DEFAULT_ANSWERS = [", src)
+        # The default VALUES must come from the data file.
+        defaults = _load_default_answers()
+        self.assertTrue(defaults, "default_answers.json must load")
+        self.assertTrue(any(v == "No" for _, v, _, _ in defaults))
+
+
+class C3Harmonization(unittest.TestCase):
+    """Profile answer harmonization: duplicate keys with the same value and
+    subset meanings must resolve under either spelling (drift risk gone)."""
+
+    def test_duplicate_keys_find_same_answer(self):
+        from lib.quality import harmonize_answers
+        from apply.common.resolve import resolve, _build_ephemeral
+        prof = {"answers": {"gender": "Male", "Gender Identity": "Male"}}
+        groups = harmonize_answers(prof)
+        self.assertTrue(any(g["meaning"] == "gender" for g in groups))
+        ep = _build_ephemeral(prof)
+        r = resolve("gender", prof, ephemeral=ep)
+        self.assertEqual(r.value, "Male")
+        r2 = resolve("Gender Identity", prof, ephemeral=ep)
+        self.assertEqual(r2.value, "Male")
+
+    def test_no_false_grouping(self):
+        from lib.quality import harmonize_answers
+        prof = {"answers": {"gender": "Male", "Gender Identity": "Female"}}
+        groups = harmonize_answers(prof)
+        # Different values must NOT group.
+        self.assertFalse(any(g["meaning"] == "gender" for g in groups))
+
+
+class C2ProfileContradictions(unittest.TestCase):
+    """Profile-level contradiction detection (coherence checks form values;
+    this checks the profile itself)."""
+
+    def test_conflicting_relocation(self):
+        from lib.quality import check_profile_contradictions
+        cons = check_profile_contradictions(
+            {"answers": {"willing_to_relocate": "Yes", "relocat": "No"}})
+        self.assertTrue(any("relocation" in c for c in cons))
+
+    def test_years_vs_history(self):
+        from lib.quality import check_profile_contradictions
+        cons = check_profile_contradictions(
+            {"answers": {"years_of_experience": "10"},
+             "work_history": [{"company": "A", "startDate": "2021-01",
+                               "endDate": "2023-01"}]})
+        self.assertTrue(any("years_of_experience" in c for c in cons))
+
+    def test_consistent_profile_no_contradictions(self):
+        from lib.quality import check_profile_contradictions
+        cons = check_profile_contradictions(
+            {"answers": {"willing_to_relocate": "Yes"}, "work_history": []})
+        self.assertEqual(cons, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -322,23 +322,42 @@ def cmd_check(jid):
                     # Skip if they match (or prefix match)
                     if actual_lower == expected_lower or actual_lower.startswith(expected_lower) or expected_lower.startswith(actual_lower):
                         continue
-                    # Flag mismatch
-                    issues.append({
-                        "label": label,
-                        "expected": str(expected),
-                        "actual": actual,
-                        "severity": _T.SEV_WARN,
-                        "reason": "Filled value doesn't match expected",
-                    })
-                elif expected and not actual:
-                    if _is_react_widget(page, sel):
+                    # Flag mismatch — risk fields (identity/legal/location/
+                    # salary/relocation) BLOCK; others warn.
+                    if _T.is_risk_field(label):
                         issues.append({
                             "label": label,
                             "expected": str(expected),
-                            "actual": "(unreadable)",
-                            "severity": _T.SEV_INFO,
-                            "reason": "React-controlled field — value not readable via DOM (verify visually)",
+                            "actual": actual,
+                            "severity": _T.SEV_ERROR,
+                            "reason": "Risk field doesn't match expected value — verify before submit",
                         })
+                    else:
+                        issues.append({
+                            "label": label,
+                            "expected": str(expected),
+                            "actual": actual,
+                            "severity": _T.SEV_WARN,
+                            "reason": "Filled value doesn't match expected",
+                        })
+                elif expected and not actual:
+                    if _is_react_widget(page, sel):
+                        if _T.is_risk_field(label):
+                            issues.append({
+                                "label": label,
+                                "expected": str(expected),
+                                "actual": "(unreadable)",
+                                "severity": _T.SEV_ERROR,
+                                "reason": "Risk field not readable — verify visually before submit",
+                            })
+                        else:
+                            issues.append({
+                                "label": label,
+                                "expected": str(expected),
+                                "actual": "(unreadable)",
+                                "severity": _T.SEV_INFO,
+                                "reason": "React-controlled field — value not readable via DOM (verify visually)",
+                            })
                     else:
                         issues.append({
                             "label": label,
@@ -383,6 +402,26 @@ def cmd_check(jid):
                         "actual": finding["detail"],
                         "severity": _T.SEV_ERROR,
                         "reason": f"contradiction ({finding['rule']})",
+                    })
+            except Exception:
+                pass
+
+            # C1: mid-fill form drift — compare the re-probed field set to
+            # what the fill pass recorded. A dynamic SPA that changed its
+            # form since fill may now present a different field set; surface
+            # it rather than submitting against a stale field list.
+            try:
+                from apply.common.audit import summarize as _audit_summary
+                _aud = _audit_summary(jid)
+                _filled_count = _aud.get("fields", 0)
+                if _filled_count and abs(len(fields) - _filled_count) >= 3:
+                    issues.append({
+                        "label": "form-drift",
+                        "expected": f"{_filled_count} fields at fill time",
+                        "actual": f"{len(fields)} fields now",
+                        "severity": _T.SEV_WARN,
+                        "reason": "Form field set changed since fill — verify "
+                                  "it is the same application before submit",
                     })
             except Exception:
                 pass

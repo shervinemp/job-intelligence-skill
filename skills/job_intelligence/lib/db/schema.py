@@ -162,6 +162,39 @@ def _create_v3_tables():
             from_addr TEXT NOT NULL DEFAULT '',
             searched_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        -- The fill ledger: one immutable row per field decision.
+        --
+        -- ETHOS §10 names wrong-fill rate "the falsification instrument
+        -- for the ethos itself", but nothing computed it, and nothing
+        -- COULD: `kind=verified` means "the value I intended is present",
+        -- and the verifier re-scores with the same scorer that chose the
+        -- value, so it is tautological for semantic error. Every feedback
+        -- loop in the pipeline therefore measured completion, not
+        -- correctness.
+        --
+        -- This table is the missing denominator. `answer` (what we meant)
+        -- and `selected_text` (what the form actually shows) sit side by
+        -- side so a human or the orchestrator can rule on correctness;
+        -- `verdict` stays NULL until someone does. Nothing here feeds
+        -- back into the hot path — it only makes the claim measurable.
+        CREATE TABLE IF NOT EXISTS field_fills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            run_id TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL DEFAULT '',
+            label TEXT NOT NULL DEFAULT '',
+            label_norm TEXT NOT NULL DEFAULT '',
+            answer TEXT NOT NULL DEFAULT '',
+            selected_text TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL DEFAULT '',
+            method TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            required INTEGER NOT NULL DEFAULT 0,
+            verdict TEXT CHECK(verdict IN ('correct','wrong','unanswerable')),
+            verdict_note TEXT NOT NULL DEFAULT '',
+            adjudicated_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -220,6 +253,9 @@ def _create_v3_tables():
         "CREATE INDEX IF NOT EXISTS idx_events_job ON events(job_id)",
         "CREATE INDEX IF NOT EXISTS idx_contacts_job ON contacts(job_id)",
         "CREATE INDEX IF NOT EXISTS idx_company_name ON companies(name)",
+        "CREATE INDEX IF NOT EXISTS idx_fills_job ON field_fills(job_id)",
+        "CREATE INDEX IF NOT EXISTS idx_fills_verdict ON field_fills(verdict)",
+        "CREATE INDEX IF NOT EXISTS idx_fills_platform ON field_fills(platform, kind)",
     ]:
         try:
             c.execute(idx)

@@ -22,7 +22,9 @@ def run(args):
             except json.JSONDecodeError:
                 emit_error(f"invalid --answers JSON: {raw}")
                 return 1
-        verify = not args.get("--no-verify", False)
+        # `--quick` (deterministic-only) and `verify` (vision re-read) are
+        # unified: quick implies no vision verification after fill.
+        verify = not args.get("--quick", False)
         from apply.act.fill import cmd_fill
         return cmd_fill(jid, answers, verify=verify,
                         max_pages=args.get("--max-pages", 4),

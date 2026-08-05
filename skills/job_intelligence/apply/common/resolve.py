@@ -83,13 +83,25 @@ def _build_ephemeral(profile: dict) -> dict:
             ephemeral.setdefault("state", (parts[1], "derived"))
             ephemeral.setdefault("province", (parts[1], "derived"))
         if len(parts) >= 3 and parts[-1]:
-            ephemeral.setdefault("country", (parts[-1], "derived"))
+            country = _strip_postal(parts[-1])
+            if country:
+                ephemeral.setdefault("country", (country, "derived"))
 
     answers = profile.get("answers", {})
     if isinstance(answers, dict):
         for k, v in answers.items():
             if v:
                 ephemeral[k] = (str(v) if not isinstance(v, list) else [str(x) for x in v], "static")
+        # C3: harmonize duplicate answer keys (gender == Gender Identity,
+        # authorized_to_work == work_authorization) so either spelling finds
+        # the same value — a latent drift risk collapses.
+        try:
+            from lib.quality import alias_harmonized_answers
+            for dup_key, canonical in alias_harmonized_answers(profile).items():
+                if dup_key not in ephemeral and canonical in ephemeral:
+                    ephemeral[dup_key] = ephemeral[canonical]
+        except Exception:
+            pass
 
     # Aliases: forms ask "Website" when the profile has portfolio_url (and vice versa)
     if ephemeral.get("portfolio_url") and "website" not in ephemeral:
@@ -98,6 +110,25 @@ def _build_ephemeral(profile: dict) -> dict:
         ephemeral["portfolio_url"] = ephemeral["website"]
 
     return ephemeral
+
+
+_POSTAL_RE = re.compile(
+    # Canadian postal: A1A 1A1 · US ZIP: 12345 / 12345-6789
+    r"(?:\b[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d\b|\b\d{5}(?:-\d{4})?\b)"
+)
+
+
+def _strip_postal(s):
+    """Remove a trailing postal code from a location segment so a ZIP/ZIP-like
+    suffix is never mistaken for a country (A1: 'Toronto, ON, M5V 2T6' must
+    not yield country='M5V 2T6'). Keeps the country part when it is clean."""
+    s = (s or "").strip()
+    # A lone postal code is not a country.
+    if re.fullmatch(_POSTAL_RE.pattern, s):
+        return ""
+    # Strip a trailing postal code (possibly following a space or comma).
+    cleaned = _POSTAL_RE.sub("", s).strip(" ,")
+    return cleaned or ""
 
 
 def _find_ephemeral_value(key: str, ephemeral: dict) -> Optional[str]:
@@ -233,6 +264,7 @@ def resolve(
     field_type: str = "",
     field_role: str = "",
     ephemeral: Optional[dict] = None,
+    domain: str = "",
 ) -> Resolution:
     if answers_override is None:
         answers_override = {}
@@ -264,42 +296,53 @@ def resolve(
         if len(nk) >= 10 and (norm.startswith(nk) or nk.startswith(norm)):
             return Resolution(v, "answers_override", label, "answers_override")
 
-    # Step 1.5a: phone country code — extract from phone before generic matching
+    # Step 1.5a: phone country code — a "Phone country code" field is a
+    # COUNTRY dropdown (Canada, Antigua and Barbuda, ...), not a dialing-code
+    # box. Returning the bare "+1" prefix made the combobox matcher pick the
+    # first option whose text contains "+1" (e.g. Antigua & Barbuda, +1-268)
+    # instead of Canada — the Antigua regression. Resolve to the COUNTRY
+    # (ephemeral.country / profile location), which the picker can then match.
+    # When no country is known, return no_match (→ needs_data for the
+    # orchestrator) rather than guessing a dialing code that could certify a
+    # wrong country.
     if "country code" in norm and "phone" in norm:
-        phone_val = _find_ephemeral_value("phone", ephemeral)
-        if phone_val:
-            m = re.match(r'\+?(\d{1,3})', phone_val)
-            return Resolution(("+" + m.group(1)) if m else "+1", "phone", label, "country_code")
+        country_val = _find_ephemeral_value("country", ephemeral)
+        if country_val:
+            return Resolution(str(country_val), "country", label, "country_code")
+        return Resolution(None, None, label, "no_match")
 
     # Step 1.5: HTML autocomplete attribute (standardized semantics, free)
     ac_key = _autocomplete_key(autocomplete)
     if ac_key:
+        # tel-country-code normalizes to "phone"; but the RAW attribute is a
+        # country picker — return the country, never a bare +N dialing code
+        # (see step 1.5a — bare codes certify wrong countries).
+        raw_ac = (autocomplete or "").lower()
+        if raw_ac == "tel-country-code":
+            country_val = _find_ephemeral_value("country", ephemeral)
+            if country_val:
+                return Resolution(str(country_val), "country", label, "autocomplete")
+            return Resolution(None, None, label, "no_match")
         val = _find_ephemeral_value(ac_key, ephemeral)
         if val:
-            if ac_key == "tel-country-code":
-                import re as _re
-                m = _re.match(r'\+?(\d{1,3})', val)
-                val = ("+" + m.group(1)) if m else "+1"
             return Resolution(val, ac_key, label, "autocomplete")
 
     # Step 1.7: pronoun option rows ("He/him" checkboxes) derived from
-    # gender. CHECK-positive only: the matching pronoun gets "Yes",
-    # non-matching ones get no answer — the row starts unchecked, so
-    # checking only the match achieves the exact desired state without
-    # risking an uncheck on a user-chosen pronoun.
+    # gender. CHECK-positive only: the matching pronoun gets the check value
+    # (data: pronouns.json), non-matching ones get no answer — the row starts
+    # unchecked, so checking only the match achieves the exact desired state
+    # without risking an uncheck on a user-chosen pronoun.
     if re.fullmatch(r"he him|she her|they them|xe xem|ze hir|ze zir|ey em",
                     norm):
         g = str(_find_ephemeral_value("gender", ephemeral)
                 or _find_ephemeral_value("Gender Identity", ephemeral)
                 or "").lower()
-        gmap = {"male": "he", "man": "he", "female": "she", "woman": "she",
-                "nonbinary": "they", "non-binary": "they", "genderqueer": "they",
-                "genderfluid": "they", "agender": "they"}
+        _gmap, _check_val = _load_pronoun_data()
         if g:
             first = g.split()[0].rstrip(",")
-            fam = gmap.get(first)
+            fam = _gmap.get(first)
             if fam and norm.startswith(fam + " "):
-                return Resolution("Yes", "pronoun", label, "pronoun")
+                return Resolution(_check_val, "pronoun", label, "pronoun")
         return Resolution(None, None, label, "no_match")
 
     # Step 1.6: name/id attribute semantics — ATS vendors use consistent
@@ -424,22 +467,35 @@ def resolve(
     # that has a value. This handles cases like authorized_to_work="Yes" vs
     # work_authorization="Yes, I am legally authorized..." where both are
     # valid but the short answer is preferred for Yes/No radio questions.
-    for pattern, candidates in _ALIAS_RULES:
+    for pattern, candidates in _alias_rules_all(host=domain):
         if not re.search(pattern, norm):
             continue
         for ck in candidates:
             v = _find_ephemeral_value(ck, ephemeral)
             if v is not None and str(v) != "":
+                _touch_rule(pattern)
                 return Resolution(v, ck, label, "alias")
 
-    # Step 6: conservative form defaults for common questions where "No"
-    # is the universally safe answer (marketing, alerts, current-employee,
-    # preferred-name toggle). NOT a user assumption — a privacy-conservative
-    # form default. The orchestrator can always override via --answers
-    # (which takes priority).
-    for pattern, default in _DEFAULT_ANSWERS:
-        if re.search(pattern, norm):
-            return Resolution(default, "default", label, "default")
+    # Step 6: conservative form defaults — privacy-safe answers used ONLY
+    # when no profile answer exists and the widget is a boolean/consent
+    # control. The VALUES live in data (default_answers.json), never in code
+    # (ETHOS: no hardcoded answers). The orchestrator can always override via
+    # --answers (which takes priority).
+    #
+    # A2 gate: a "No" default must only apply to boolean/consent widgets. A
+    # "Preferred name" TEXT field is a real answer ("Preferred name" got "No"
+    # before), so defaults are skipped for text-like fields.
+    _default_ok = True
+    if _fty in ("text", "textarea", "email", "tel", "url", "number",
+                "search") or _ft in ("TEXTAREA",) or _role == "textbox":
+        _default_ok = False
+    if _default_ok:
+        for pattern, default, kinds, auto_only in _load_default_answers():
+            if auto_only:
+                continue  # consumed only by the fill consent path
+            if re.search(pattern, norm):
+                if not kinds or _fty in kinds or _role in kinds:
+                    return Resolution(default, "default", label, "default")
 
     return Resolution(None, None, label, "no_match")
 
@@ -479,15 +535,76 @@ _ALIAS_RULES = [
 ]
 
 
-# Conservative form defaults — NOT user assumptions. "No" is the safe answer
-# for marketing consent, job alerts, current-employee, and preferred-name
-# toggle questions. The orchestrator can always override via --answers.
-_DEFAULT_ANSWERS = [
-    (r"\b(stay up to date|marketing|newsletter|promotional|email updates|communications from)\b", "No"),
-    (r"\b(receive alerts|job alerts|similar jobs|email me|notify me)\b", "No"),
-    (r"\bcurrent\b.*\b(employee|staff|team member)\b", "No"),
-    (r"\bpreferred name\b", "No"),
-]
+# ─── Conservative defaults from DATA (not code) ────────────────────────
+# Answer VALUES never live in code (ETHOS). The default set ships in
+# default_answers.json (mirrors categories.json as a data file) and is
+# loaded at runtime; each entry is {pattern, value, kinds} where kinds
+# limits which widget types the default may apply to.
+_DEFAULT_ANSWERS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "default_answers.json")
+_default_answers_cache = None
+
+
+def _load_default_answers():
+    """[(pattern, value, kinds, auto_only)] from default_answers.json.
+    auto_only entries are consumed by fill_runner's consent path, never by
+    the Step 6 default loop."""
+    global _default_answers_cache
+    if _default_answers_cache is None:
+        try:
+            with open(_DEFAULT_ANSWERS_PATH, encoding="utf-8") as f:
+                raw = json.load(f)
+            out = []
+            for item in raw.get("defaults", []):
+                pat = item.get("pattern", "")
+                val = item.get("value", "")
+                kinds = item.get("kinds") or []
+                meta = item.get("meta") or ""
+                if pat and val:
+                    try:
+                        re.compile(pat)
+                    except re.error:
+                        continue
+                    out.append((pat, val, list(kinds),
+                                meta == "auto_only"))
+            _default_answers_cache = out
+        except Exception:
+            _default_answers_cache = []
+    return _default_answers_cache
+
+
+_PRONOUNS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "pronouns.json")
+_pronoun_cache = None
+
+
+def _load_pronoun_data():
+    """(gender→family map, check_value) from pronouns.json — language-referent
+    data, not user data (SEPARATION.md Layer 1)."""
+    global _pronoun_cache
+    if _pronoun_cache is None:
+        try:
+            with open(_PRONOUNS_PATH, encoding="utf-8") as f:
+                raw = json.load(f)
+            _pronoun_cache = (raw.get("families") or {},
+                              str(raw.get("check_value", "Yes")))
+        except Exception:
+            _pronoun_cache = ({}, "Yes")
+    return _pronoun_cache
+
+
+def _load_dialing_codes():
+    """{country-norm: dialing code} from default_answers.json (Fix 1
+    completion) — data, not code (no hardcoded answers)."""
+    try:
+        with open(_DEFAULT_ANSWERS_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+        d = raw.get("dialing-codes") or {}
+        return {str(k).lower(): str(v) for k, v in d.items() if v}
+    except Exception:
+        return {}
 
 
 # ─── Learned label→value mappings (lean successor of mappings.py) ─────
@@ -559,6 +676,135 @@ def _invalidate_learned(norm_label):
         _learned_cache = m
 
 
+# ─── Runtime alias rules ──────────────────────────────────────────────
+# The static _ALIAS_RULES above are source-edited; these are the runtime
+# store the orchestrator/operator adds to WITHOUT a deploy (the "wired"
+# version of report.py fleet's rule candidates). Same shape: (regex, [keys]).
+_RUNTIME_RULES_PATH = os.path.join(STATE_DIR, "alias_rules.json")
+_runtime_rules_cache = None
+# Expiry: a rule that has never matched in this window is dropped — a stale
+# runtime rule (like a stale learned mapping) must not persist forever.
+_RULE_TTL_DAYS = 180
+
+
+def _load_runtime_rules():
+    """[[pattern, [candidate keys], last_seen_ts, domain]] added at runtime."""
+    global _runtime_rules_cache
+    if _runtime_rules_cache is None:
+        try:
+            with open(_RUNTIME_RULES_PATH, encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            raw = []
+        rules = []
+        for item in raw or []:
+            if isinstance(item, dict):
+                pat = item.get("pattern", "")
+                keys = item.get("keys") or []
+                last = item.get("last_seen") or ""
+                domain = item.get("domain") or ""
+            else:
+                continue
+            if pat and isinstance(keys, list) and keys:
+                rules.append([pat, keys, last, domain])
+        _runtime_rules_cache = rules
+    return _runtime_rules_cache
+
+
+def _save_runtime_rules(rules):
+    global _runtime_rules_cache
+    _runtime_rules_cache = rules
+    try:
+        from lib.config import atomic_write_json
+        atomic_write_json(_RUNTIME_RULES_PATH, [
+            {"pattern": p, "keys": k, "last_seen": last, "domain": dom}
+            for p, k, last, dom in rules], indent=2)
+    except Exception:
+        pass
+
+
+def _host_matches(rule_domain, host):
+    """A rule applies when its domain is empty (global) or matches the host
+    (A4: a rule learned for one platform must not fire on another)."""
+    if not rule_domain:
+        return True
+    host = (host or "").lower().rstrip(".")
+    rule_domain = rule_domain.lower().rstrip(".")
+    if not host:
+        return False
+    return rule_domain == host or host.endswith("." + rule_domain) \
+        or rule_domain.endswith("." + host)
+
+
+def _alias_rules_all(host=""):
+    """Static + runtime rules, with runtime expiry + last-seen + domain
+    scoping. Runtime rules checked first so a confirmed orchestrator answer
+    (no deploy needed) outranks the source defaults."""
+    rules = _load_runtime_rules()
+    if not rules:
+        return _ALIAS_RULES
+    kept, expired = [], []
+    for entry in rules:
+        pat, keys, last, domain = entry
+        if last and _is_expired(last, _RULE_TTL_DAYS):
+            expired.append(pat)
+            continue
+        if not _host_matches(domain, host):
+            continue
+        kept.append(entry)
+    if expired:
+        _save_runtime_rules([e for e in rules if e[0] not in expired])
+    return [(p, k) for p, k, _, _ in kept] + _ALIAS_RULES
+
+
+def _is_expired(ts, ttl_days):
+    try:
+        from datetime import datetime
+        age = (datetime.now() - datetime.fromisoformat(ts)).days
+        return age > ttl_days
+    except Exception:
+        return False
+
+
+def _touch_rule(pattern):
+    """Mark a runtime rule as recently matched (updates last_seen)."""
+    for entry in _load_runtime_rules():
+        if entry[0] == pattern:
+            entry[2] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            _save_runtime_rules(_load_runtime_rules())
+            return
+
+
+def add_alias_rule(pattern, keys, dedupe=True, domain=""):
+    """Add a runtime alias rule (pattern → candidate keys). Returns True on
+    success. Dedupes by identical pattern by default. Invalid regex or empty
+    keys are refused. `domain` scopes the rule to one host (A4); empty =
+    global."""
+    if not pattern or not keys:
+        return False
+    try:
+        re.compile(pattern)
+    except re.error:
+        return False
+    rules = _load_runtime_rules()
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    if dedupe:
+        rules = [r for r in rules if r[0] != pattern]
+    rules.append([pattern, list(keys), now, domain or ""])
+    _save_runtime_rules(rules)
+    return True
+
+
+def list_alias_rules():
+    """Runtime rules for inspection (report.py surface)."""
+    return [(p, k) for p, k, _, _ in _load_runtime_rules()]
+
+
+def clear_alias_rules():
+    """Drop all runtime rules (operator escape hatch)."""
+    _save_runtime_rules([])
+
+
 def learn_mapping(label: str, value, domain: str = ""):
     """Persist a confirmed label→value mapping — after N consistent
     confirmations (pending → active), with provenance for rollback and a
@@ -588,3 +834,86 @@ def learn_mapping(label: str, value, domain: str = ""):
         m[norm] = {"value": value, "state": "pending", "count": 1,
                    "ts": now, "domain": domain, "last_jid": ""}
     _save_learned()
+
+
+def _norm_pattern(label):
+    """A fleet-style content-word pattern from a label — the runtime-rule
+    pattern used when promoting a learned mapping to a rule."""
+    words = [w for w in re.split(r"[^a-z0-9]+", _i18n_norm(label))
+             if len(w) > 2][:4]
+    if len(words) < 2:
+        return ""
+    return r"\b" + r"\b.*\b".join(re.escape(w) for w in words) + r"\b"
+
+
+def promote_learned_to_rule(label, domain="", force=False):
+    """S2 auto-promotion gate: promote a LEARNED mapping to a RUNTIME alias
+    rule — but only when it has reached `active` (≥2 consistent confirms,
+    the S2 correction-buffer threshold). A single-or-conflicting answer must
+    never create a global rule. `force` bypasses the gate for explicit
+    operator confirmation.
+
+    Returns ("promoted"|"not_active"|"no_pattern"|"conflict", detail)."""
+    if not label:
+        return "no_pattern", "empty label"
+    norm = _i18n_norm(label)
+    if not norm:
+        return "no_pattern", "unnormalizable label"
+    e = _load_learned().get(norm)
+    if not isinstance(e, dict):
+        return "no_pattern", "no learned mapping for label"
+    if not force and e.get("state") != "active":
+        return ("not_active",
+                f"mapping has {e.get('count', 0)}/{_MIN_CONFIRMS} confirms "
+                f"(state={e.get('state', '?')}) — S2 gate blocks promotion")
+    pat = _norm_pattern(label)
+    if not pat:
+        return "no_pattern", "label too short for a content-word pattern"
+    # The runtime rule maps the pattern to the PROFILE answer key that
+    # produced the learned value — find the key whose value matches. Scoped
+    # to the learned mapping's domain (#5): never a global rule from one
+    # platform's answer.
+    key = _find_key_for_value(str(e.get("value", "")), _load_profile_flat())
+    if not key:
+        return "conflict", "learned value not present in profile — cannot map to an answer key"
+    add_alias_rule(pat, [key], domain=e.get("domain", ""))
+    return "promoted", f"{pat[:60]} -> {key} (domain={e.get('domain','')})"
+
+
+def _load_profile_flat():
+    """Profile answers flattened to {key: str} — the space a runtime rule's
+    candidate keys must live in."""
+    flat = {}
+    try:
+        from lib.config import PROFILE_PATH
+        import json as _json
+        with open(PROFILE_PATH, encoding="utf-8") as f:
+            p = _json.load(f)
+        flat.update({k: str(v) for k, v in (p.get("answers") or {}).items() if v})
+        for k in ("first_name", "last_name", "email", "phone", "location"):
+            if p.get(k):
+                flat[k] = str(p[k])
+    except Exception:
+        pass
+    return flat
+
+
+def _find_key_for_value(value, flat):
+    """First profile key whose value equals `value` (case-insensitive)."""
+    vl = value.lower()
+    for k, v in flat.items():
+        if v.lower() == vl:
+            return k
+    return None
+
+
+def clear_learned_for_test():
+    """Test-only: wipe the learned-mapping store so promotion-gate tests
+    start clean. Never called by the pipeline."""
+    global _learned_cache
+    _learned_cache = {}
+    try:
+        from lib.config import atomic_write_json
+        atomic_write_json(_LEARNED_PATH, {}, indent=2)
+    except Exception:
+        pass

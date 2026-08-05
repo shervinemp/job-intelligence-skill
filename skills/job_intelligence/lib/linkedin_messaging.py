@@ -512,13 +512,16 @@ def send_connect_request(ctx, profile_url, note=""):
             textarea.first.fill(note)
             page.wait_for_timeout(500)
 
-        # Send — with note: "Send invitation"; without: "Send without a note"
-        for sel in [
-            'button[aria-label="Send invitation"]',
-            'button[aria-label="Send without a note"]',
-            'button[aria-label="Send now"]',
-            'button[aria-label="Done"]',
-        ]:
+        # Send. When a note was requested, "Send without a note" is NOT an
+        # acceptable fallback — silently dropping the note sends a
+        # different (colder, generic) invitation than the caller asked
+        # for, and a connection request cannot be taken back and redone.
+        selectors = ['button[aria-label="Send invitation"]',
+                     'button[aria-label="Send now"]',
+                     'button[aria-label="Done"]']
+        if not note:
+            selectors.insert(1, 'button[aria-label="Send without a note"]')
+        for sel in selectors:
             try:
                 btn = page.locator(sel).first
                 if btn.is_visible(timeout=2000) and btn.is_enabled():

@@ -224,6 +224,13 @@ def record_failure(profile: Optional[dict], url: str) -> dict:
             record["winning_widgets"] = {}
             record["candidate_strategies"] = []  # prior winners are suspect after drift
             record["fail_count"] = 0  # fresh slate — next cycle starts clean
+            # B3: a full demotion means the platform may have been redesigned —
+            # per-field fill-method preferences for this host are suspect too.
+            try:
+                from apply.common import field_methods
+                field_methods.clear_host(url)
+            except Exception:
+                pass
             print(f"OBS_DRIFT: profile={h[:8]} demoted after "
                   f"{DRIFT_FULL_DEMOTE_THRESHOLD} cascade failures — "
                   "platform may have been redesigned", file=sys.stderr)

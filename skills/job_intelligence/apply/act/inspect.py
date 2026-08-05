@@ -62,6 +62,13 @@ def cmd_next(jid):
         if nxt and _click_action(page, nxt["text"]):
             time.sleep(2)
             emit_status("navigated", f"clicked '{nxt['text']}'")
+            # A3: a "Next"/"Continue" button on a review page may actually
+            # SUBMIT. Surface the evidence so the orchestrator can veto the
+            # next step if the clicked text is submit-like.
+            _t = (nxt.get("text") or "").lower()
+            if any(w in _t for w in ("submit", "send", "apply", "review")):
+                print(f"  BUTTON_WARN: '{nxt['text']}' may submit — verify "
+                      f"before proceeding (one-shot boundary)", file=sys.stderr)
             emit_next("fill")
             return 0
 

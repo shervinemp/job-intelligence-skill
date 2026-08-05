@@ -31,7 +31,10 @@ class FieldValueReader(ABC):
 
 class StandardReader(FieldValueReader):
     """Read el.value — works for all standard INPUT/SELECT/TEXTAREA fields.
-    Radio inputs are handled by RadioReader instead (el.value is 'on' for all)."""
+    Radio inputs are handled by RadioReader instead (el.value is 'on' for all).
+
+    F1: only a VISIBLE element is read — a hidden/offscreen node (poisoned
+    DOM text an attacker can place) must never certify a value."""
     name = "standard"
 
     def read(self, page, sel, ans=None):
@@ -39,12 +42,24 @@ class StandardReader(FieldValueReader):
             return (page.evaluate(f"""() => {{
                 const el = document.querySelector({json.dumps(sel)});
                 if (!el) return null;
-                if (el.tagName === 'SELECT') return el.options[el.selectedIndex]?.text || el.value || null;
+                // F1: skip hidden/offscreen — a poisoned hidden element
+                // must not certify the read-back.
+                if (el.offsetParent === null && el.getClientRects().length === 0) return null;
+                if (el.getAttribute('hidden') !== null) return null;
+                const cs = getComputedStyle(el);
+                if (cs.display === 'none' || cs.visibility === 'hidden') return null;
+                if (el.tagName === 'SELECT') return (el.options[el.selectedIndex] ? (el.options[el.selectedIndex].textContent || el.options[el.selectedIndex].text || '').trim() : '') || el.value || null;
                 if (el.type === 'checkbox') return el.checked ? '__checked__' : '';
                 if (el.type === 'radio') return null;
                 if (el.tagName === 'BUTTON') return el.textContent?.trim() || null;
                 if (el.tagName === 'DIV' || el.isContentEditable) return el.textContent?.trim() || null;
-                return el.value || null;
+                const v = el.value || null;
+                // URN/opaque-id trap (LinkedIn location typeahead): the widget
+                // stores 'urn:li:geo:...' as el.value while the visible text
+                // is the real answer. An opaque ID is NEVER the answer — return
+                // it as-is and let the caller refuse to certify it.
+                if (v && /^urn:/i.test(v)) return '__URN__:' + v;
+                return v;
             }}""") or "").strip() or None
         except Exception:
             return None
@@ -111,6 +126,9 @@ class AriaComboboxReader(FieldValueReader):
                 const lb = document.getElementById(owns);
                 if (!lb) return null;
                 for (const o of lb.querySelectorAll('[role="option"]')) {{
+                    // F1: skip hidden/offscreen options.
+                    if (o.offsetParent === null && o.getClientRects().length === 0) continue;
+                    if (o.getAttribute('hidden') !== null) continue;
                     if (o.getAttribute('aria-selected') === 'true') return o.textContent?.trim() || null;
                 }}
                 return null;
@@ -155,7 +173,11 @@ class ReactSelectReader(FieldValueReader):
 class FuzzyComboboxReader(FieldValueReader):
     """Fallback: fuzzy-match listbox options against expected answer.
     Used by platforms (e.g. Greenhouse) that don't set aria-selected on selection.
-    Only fires when ans is provided and no other reader found the value."""
+    Only fires when ans is provided and no other reader found the value.
+
+    Bare dialing codes are handled specially: a "+1" answer must match the
+    option whose COUNTRY is Canada — never the first option whose text merely
+    contains "+1" (Antigua & Barbuda is also +1-268 and can sort first)."""
     name = "fuzzy_combobox"
 
     def read(self, page, sel, ans=None):
@@ -171,9 +193,24 @@ class FuzzyComboboxReader(FieldValueReader):
                 if (!lb) return null;
                 const a = {json.dumps(ans)};
                 const aL = a.toLowerCase();
-                for (const o of lb.querySelectorAll('[role="option"]')) {{
+                const isDial = /^\\\\+\\\\d{{1,3}}$/.test(aL.trim());
+                const opts = Array.from(lb.querySelectorAll('[role="option"]'));
+                for (const o of opts) {{
+                    // F1: skip hidden/offscreen options — poisoned hidden
+                    // text must never certify a selection.
+                    if (o.offsetParent === null && o.getClientRects().length === 0) continue;
+                    if (o.getAttribute('hidden') !== null) continue;
                     const t = (o.textContent || '').trim();
-                    if (t.toLowerCase().includes(aL) || aL.includes(t.toLowerCase())) return t;
+                    if (!t) continue;
+                    const tL = t.toLowerCase();
+                    if (isDial) {{
+                        // Dialing code answers: require an EXACT option text
+                        // equal to the code (some pickers show bare "+1"),
+                        // else defer to a country-name match handled outside.
+                        if (tL === aL) return t;
+                        continue;
+                    }}
+                    if (tL.includes(aL) || aL.includes(tL)) return t;
                 }}
                 return null;
             }}""") or "").strip() or None

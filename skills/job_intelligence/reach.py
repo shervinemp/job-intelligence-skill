@@ -9,9 +9,13 @@ Usage:
   reach.py connect <jid> [--contact N] [--note <text>]
   reach.py update <jid> [--contact N] [--email <addr>] [--note <text>] [--set-sent email|message]
   reach.py attempts [<jid>]                 Show outreach attempts
-  reach.py status                            Pipeline state with contact info
   reach.py retry <jid>                       Retry failed contact discovery
-  reach.py undo <jid>                        Reset contact state
+  reach.py undo <jid> [--confirm]            Reset contact state (--confirm when already contacted)
+
+One-shot: email/message are guarded by their own sent flags, connect by a
+prior-invitation check, and ALL channels by a cross-job person guard that
+matches on canonical LinkedIn vanity / email. --force overrides; undo
+discards the evidence and needs --confirm.
 """
 
 import json
@@ -37,27 +41,75 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 GMAIL_CLI = os.path.join(SKILL_DIR, "..", "gmail-cli", "gmail_cli.py")
 
 
+def _sandbox_refused():
+    """True (and explains) when the transmission sandbox forbids sending."""
+    if os.environ.get("JI_TESTS"):
+        print("TEST_SANDBOX: transmission refused under the test runner — "
+              "remove JI_TESTS from the environment to send.", file=sys.stderr)
+        return True
+    return False
+
+
+def person_keys(contact):
+    """Canonical identity keys for a person: {('li', vanity), ('em', addr)}.
+
+    Identity must survive cosmetic variation — a trailing slash, a
+    ?miniProfileUrn= tracking param, http vs https, www, or case would
+    otherwise let the same human be contacted twice. EMPTY values never
+    produce a key: an absent linkedin_url is not an identity, and treating
+    it as one made every URL-less contact match every other URL-less
+    contact (a guard that blocked strangers while missing real repeats).
+    """
+    keys = set()
+    url = (contact.get("linkedin_url") or "").strip()
+    if url:
+        from urllib.parse import urlparse
+        path = urlparse(url).path if "//" in url else url
+        # /in/<vanity>/... -> vanity; anything else -> the cleaned path
+        parts = [p for p in path.strip("/").split("/") if p]
+        if parts:
+            vanity = parts[1] if (parts[0].lower() == "in" and len(parts) > 1) else parts[-1]
+            vanity = vanity.split("?")[0].strip().lower()
+            if vanity:
+                keys.add(("li", vanity))
+    email = (contact.get("email") or "").strip().lower()
+    if email:
+        keys.add(("em", email))
+    return keys
+
+
 def _prior_outreach(conn, contact):
     """Any sent/pending outreach to the SAME PERSON on any OTHER contact row.
 
     One-shot guards are per contact row, so the same person discovered on
     two jobs (or twice within a job) gets two rows and nothing blocks the
-    second message — that repeat would give away the automation. Matches
-    on linkedin_url or email, and counts both flag-based sends and
-    attempts (covers the 'uncertain' path, which never sets reached_out).
-    The current row itself is excluded so a connect -> DM funnel on one
-    row keeps working."""
-    url = (contact.get("linkedin_url") or "").strip()
-    email = (contact.get("email") or "").strip()
-    if not url and not email:
+    second message — that repeat would give away the automation. Counts
+    both flag-based sends and attempts (covers the 'uncertain' path, which
+    never sets reached_out). The current row itself is excluded so a
+    connect -> DM funnel on one row keeps working.
+
+    Identity is compared on canonical keys (see person_keys), not raw
+    string equality, so URL variants of one profile still collapse to one
+    person and blank fields identify nobody.
+    """
+    mine = person_keys(contact)
+    if not mine:
         return None
-    q = ("SELECT c.job_id, c.name, a.channel, a.status, a.created_at "
-         "FROM contacts c LEFT JOIN contact_attempts a ON a.contact_id = c.id "
-         "WHERE c.id != ? "
-         "AND (c.linkedin_url = ? OR (c.email != '' AND c.email IS NOT NULL AND c.email = ?)) "
-         "AND (c.reached_out = 1 OR a.status IN ('sent', 'pending')) "
-         "ORDER BY a.created_at DESC LIMIT 1")
-    return conn.execute(q, (contact["id"], url, email)).fetchone()
+    rows = conn.execute(
+        "SELECT c.id, c.job_id, c.name, c.linkedin_url, c.email, "
+        "       a.channel, a.status, a.created_at "
+        "FROM contacts c LEFT JOIN contact_attempts a ON a.contact_id = c.id "
+        "WHERE c.id != ? "
+        "AND ((c.linkedin_url IS NOT NULL AND c.linkedin_url != '') "
+        "     OR (c.email IS NOT NULL AND c.email != '')) "
+        "AND (c.reached_out = 1 OR a.status IN ('sent', 'pending')) "
+        "ORDER BY a.created_at DESC",
+        (contact["id"],),
+    ).fetchall()
+    for r in rows:
+        if mine & person_keys(dict(r)):
+            return r
+    return None
 
 
 def _block_if_prior(conn, contact, force):
@@ -185,6 +237,20 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
         print(f"Already emailed {name}. Use --force to re-send.", file=sys.stderr)
         return
 
+    # Symmetric with cmd_message: an unconfirmed previous send must not be
+    # silently repeated on this channel either.
+    if not force:
+        pending = conn.execute(
+            "SELECT 1 FROM contact_attempts WHERE contact_id=? AND channel='email' "
+            "AND status='pending' LIMIT 1", (contact["id"],),
+        ).fetchone()
+        if pending:
+            print(f"UNCERTAIN_SEND: {name} has an unconfirmed previous email — "
+                  f"check the Sent folder, then "
+                  f"reach.py update {jid} --contact {contact_idx} --set-sent email, "
+                  f"or re-send with --force.", file=sys.stderr)
+            return
+
     if _block_if_prior(conn, contact, force):
         return
 
@@ -220,9 +286,7 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
         print(f"NEXT: reach.py email {jid} --contact {contact_idx}  (remove --dry-run to send)", file=sys.stderr)
         return
 
-    if os.environ.get("JI_TESTS"):
-        print(f"TEST_SANDBOX: transmission refused under the test runner — "
-              f"remove JI_TESTS from the environment to send.", file=sys.stderr)
+    if _sandbox_refused():
         return
 
     # Send via gmail-cli
@@ -344,15 +408,16 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
         print(f"NEXT: reach.py message {jid} --contact {contact_idx}  (remove --dry-run to send)", file=sys.stderr)
         return
 
+    # Sandbox FIRST: refuse before launching a browser, not after. (The
+    # library-level refusal in lib.linkedin_messaging stays as the
+    # backstop — this is the cheap outer gate.)
+    if _sandbox_refused():
+        return
+
     from lib.chrome_manager import connect
     b, ctx = connect(timeout=30)
     if not ctx:
         print("ERROR: Could not connect to Chrome.", file=sys.stderr)
-        return
-
-    if os.environ.get("JI_TESTS"):
-        print(f"TEST_SANDBOX: transmission refused under the test runner — "
-              f"remove JI_TESTS from the environment to send.", file=sys.stderr)
         return
 
     try:
@@ -373,8 +438,13 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
                         body=body_text, error=result.get("detail", ""))
             print(f"MESSAGE_UNCERTAIN: send clicked for {name} but not confirmed", file=sys.stderr)
             print(f"  {result.get('detail', '')}", file=sys.stderr)
-            print(f"  NEXT: check LinkedIn inbox manually. If sent: reach.py update {jid} --contact {contact_idx} --note 'confirmed sent'", file=sys.stderr)
-            print(f"  NEXT: if not sent: reach.py message {jid} --contact {contact_idx} --force", file=sys.stderr)
+            # --set-sent is the ONLY hint that actually settles the guard;
+            # --note leaves message_sent=0 and the pending attempt in place.
+            print(f"  NEXT: check the LinkedIn inbox. If it WAS sent: "
+                  f"reach.py update {jid} --contact {contact_idx} --set-sent message",
+                  file=sys.stderr)
+            print(f"  NEXT: if it was NOT sent: reach.py message {jid} "
+                  f"--contact {contact_idx} --force", file=sys.stderr)
         elif result["status"] == "connect_required":
             attempt_add(contact["id"], "linkedin_message", status="failed",
                         body=body_text, error="connect_required")
@@ -418,6 +488,25 @@ def cmd_connect(jid, contact_idx=1, note=None, force=False):
         print(f"No LinkedIn URL for {name}.", file=sys.stderr)
         return
 
+    # SAME-ROW one-shot. email/message are guarded by their own flags;
+    # connect had no equivalent, so a re-run (e.g. after a crash, or when
+    # the first outcome was uncertain) sent a SECOND invitation to a
+    # person who already had one pending. Scoped to the connect channel so
+    # the deliberate connect -> DM funnel on one row still works.
+    if not force:
+        prior_connect = conn.execute(
+            "SELECT status FROM contact_attempts "
+            "WHERE contact_id=? AND channel='linkedin_connect' "
+            "AND status IN ('sent','pending') LIMIT 1",
+            (contact["id"],),
+        ).fetchone()
+        if prior_connect:
+            print(f"ALREADY_CONNECTED_REQUEST: {name} already has a "
+                  f"{prior_connect['status']} connection request — one-shot "
+                  f"guard. Check LinkedIn 'Sent invitations', then use "
+                  f"--force only if it truly never arrived.", file=sys.stderr)
+            return
+
     if _block_if_prior(conn, contact, force):
         return
 
@@ -427,15 +516,13 @@ def cmd_connect(jid, contact_idx=1, note=None, force=False):
     if not note:
         note = f"Hi {name}, I'm exploring opportunities at {company} and would love to connect!"
 
+    if _sandbox_refused():
+        return
+
     from lib.chrome_manager import connect as chrome_connect
     b, ctx = chrome_connect(timeout=30)
     if not ctx:
         print("ERROR: Could not connect to Chrome.", file=sys.stderr)
-        return
-
-    if os.environ.get("JI_TESTS"):
-        print(f"TEST_SANDBOX: transmission refused under the test runner — "
-              f"remove JI_TESTS from the environment to send.", file=sys.stderr)
         return
 
     try:
@@ -493,6 +580,23 @@ def cmd_update(jid, contact_idx=1, email=None, note=None, set_sent=None):
         return
 
     contact_update(contact["id"], **updates)
+
+    # --set-sent is the human confirming an UNCERTAIN send. Settle the
+    # pending attempt too, otherwise the row keeps a 'pending' attempt
+    # forever and every cross-job guard reads it as outreach-in-flight.
+    if set_sent:
+        channel = "email" if set_sent == "email" else "linkedin_message"
+        conn = get_conn()
+        cur = conn.execute(
+            "UPDATE contact_attempts SET status='sent', "
+            "sent_at=COALESCE(sent_at, datetime('now')) "
+            "WHERE contact_id=? AND channel=? AND status='pending'",
+            (contact["id"], channel),
+        )
+        conn.commit()
+        if cur.rowcount:
+            print(f"  settled {cur.rowcount} pending {channel} attempt(s)", file=sys.stderr)
+
     print(f"UPDATED: contact {contact_idx} ({contact.get('name','')})", file=sys.stderr)
     for k, v in updates.items():
         print(f"  {k}: {v}", file=sys.stderr)
@@ -560,14 +664,44 @@ def cmd_retry(jid):
     cmd_discover(jid)
 
 
-def cmd_undo(jid):
+def cmd_undo(jid, confirm=False):
+    """Reset contact state for a job.
+
+    DESTRUCTIVE for one-shot integrity: the attempt rows deleted here are
+    the evidence that a person was already contacted. Once gone, the same
+    human discovered on another job is no longer blocked by the cross-job
+    guard and CAN be messaged a second time. So a job with confirmed sends
+    requires --confirm, and the people at risk are named first.
+    """
     conn = get_conn()
+    at_risk = conn.execute(
+        "SELECT DISTINCT c.name, c.linkedin_url, c.email FROM contacts c "
+        "JOIN contact_attempts a ON a.contact_id = c.id "
+        "WHERE c.job_id=? AND a.status IN ('sent','pending')",
+        (jid,),
+    ).fetchall()
+    if at_risk and not confirm:
+        print(f"REFUSED: {len(at_risk)} contact(s) on {jid} have confirmed or "
+              f"in-flight outreach. Deleting their attempts removes the only "
+              f"record that they were already contacted — the cross-job "
+              f"one-shot guard would then allow a REPEAT message:",
+              file=sys.stderr)
+        for r in at_risk:
+            print(f"  - {r['name']} ({r['linkedin_url'] or r['email'] or '?'})",
+                  file=sys.stderr)
+        print(f"  Re-run with --confirm if you really want this.", file=sys.stderr)
+        return
+
     conn.execute("UPDATE contacts SET email_sent=0, message_sent=0, reached_out=0 WHERE job_id=?", (jid,))
     conn.execute("DELETE FROM contact_attempts WHERE contact_id IN "
                  "(SELECT id FROM contacts WHERE job_id=?)", (jid,))
     conn.execute("UPDATE jobs SET outreach_attempted=0 WHERE id=?", (jid,))
     conn.commit()
     print(f"Undone: contact state + attempts reset for {jid}", file=sys.stderr)
+    if at_risk:
+        print(f"  WARNING: discarded outreach history for {len(at_risk)} "
+              f"already-contacted person(s) — they are no longer protected "
+              f"by the one-shot guard.", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -634,13 +768,15 @@ def main():
     attempts_p = sub.add_parser("attempts", help="Show outreach attempts")
     attempts_p.add_argument("jid", nargs="?", help="Job ID (optional filter)")
 
-    sub.add_parser("status", help="Pipeline state with contact info")
 
     retry_p = sub.add_parser("retry", help="Retry contact discovery for a job")
     retry_p.add_argument("jid", help="Job ID")
 
     undo_p = sub.add_parser("undo", help="Reset contact state for a job")
     undo_p.add_argument("jid", help="Job ID")
+    undo_p.add_argument("--confirm", action="store_true",
+                        help="Required when the job has confirmed/in-flight "
+                             "outreach (deleting it disarms the one-shot guard)")
 
     sub.add_parser("help", help="This message")
 
@@ -668,12 +804,10 @@ def main():
         cmd_update(args.jid, contact_idx=args.contact, email=args.email, note=args.note, set_sent=args.set_sent)
     elif args.command == "attempts":
         cmd_attempts(jid=args.jid)
-    elif args.command == "status":
-        cmd_status()
     elif args.command == "retry":
         cmd_retry(args.jid)
     elif args.command == "undo":
-        cmd_undo(args.jid)
+        cmd_undo(args.jid, confirm=args.confirm)
     elif args.command == "help":
         cmd_help()
     else:

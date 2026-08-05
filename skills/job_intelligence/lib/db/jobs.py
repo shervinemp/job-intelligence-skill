@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import sys
 from datetime import datetime
 
 from .schema import _JOBS_COLS, get_conn
@@ -92,7 +93,14 @@ def _sql_norm_col(col):
     """SQLite expression that normalizes whitespace like _whitespace_normalize.
        Replaces tabs, newlines, carriage returns with space, collapses multiple,
        then strips."""
-    return f"LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE({col}, CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' '), '  ', ' ')))"
+    # The '  '->' ' collapse is applied repeatedly: SQLite's REPLACE is a
+    # single non-overlapping pass, so one application turns 'a   b' into
+    # 'a  b' (not 'a b') and the comparison against Python's fully
+    # collapsed re.sub(r'\s+') would silently miss the match.
+    inner = f"REPLACE(REPLACE(REPLACE({col}, CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ')"
+    for _ in range(4):
+        inner = f"REPLACE({inner}, '  ', ' ')"
+    return f"LOWER(TRIM({inner}))"
 
 
 _ABBREV = {
@@ -114,6 +122,25 @@ def _expand_abbrev(text):
     words = _whitespace_normalize(text).lower().split()
     expanded = [_ABBREV.get(w, w) for w in words]
     return " ".join(expanded)
+
+
+# Tokens that MAKE two roles different even when everything else matches.
+# "Senior Software Engineer" vs "Software Engineer" at the same company are
+# two distinct postings a candidate may want both of; collapsing them
+# silently discards a real opportunity.
+_DISTINGUISHING_TOKENS = {
+    "senior", "staff", "principal", "lead", "head", "director", "manager",
+    "junior", "intern", "internship", "co-op", "coop", "associate",
+    "apprentice", "graduate", "contract", "temporary", "part-time",
+    "i", "ii", "iii", "iv", "v", "1", "2", "3",
+}
+
+
+def _seniority_conflict(a, b):
+    """True when the two titles disagree on a distinguishing token."""
+    at = set(_expand_abbrev(a).split()) & _DISTINGUISHING_TOKENS
+    bt = set(_expand_abbrev(b).split()) & _DISTINGUISHING_TOKENS
+    return at != bt
 
 
 def _token_overlap(a, b, threshold=0.6):
@@ -170,9 +197,25 @@ def find_duplicate(jid, title, company, conn=None):
         f"AND {sn_c} = ?",
         (jid, norm_company),
     ).fetchall()
+    # Fuzzy phase is deliberately CONSERVATIVE: a false positive here
+    # silently discards a real posting (add_job returns None and the
+    # caller has nothing to report), which is strictly worse than
+    # carrying a duplicate the operator can reject in one command.
+    # 0.6 collapsed "Senior Software Engineer" into "Software Engineer";
+    # 0.85 + a seniority veto keeps genuinely distinct roles apart.
+    # B1: 0.70–0.85 with no seniority conflict is the AMBIGUOUS gray band —
+    # not a confident duplicate, not clearly distinct. Return it tagged so
+    # the caller surfaces a decision instead of silently accepting a real
+    # duplicate OR silently dropping a real role.
     for r in rows:
-        if _token_overlap(title, r["title"]) >= 0.6:
+        if _seniority_conflict(title, r["title"]):
+            continue
+        ov = _token_overlap(title, r["title"])
+        if ov >= 0.85:
             return {"id": r["id"], "stage": r["stage"]}
+        if 0.70 <= ov < 0.85:
+            return {"id": r["id"], "stage": r["stage"], "ambiguous": True,
+                    "overlap": round(ov, 2)}
     return None
 
 
@@ -207,7 +250,24 @@ def add_job(job_data, skip_known=False):
     if title and company:
         dup = find_duplicate(jid, title, company, conn)
         if dup:
-            return None
+            if dup.get("ambiguous"):
+                # B1: gray-band — not confident enough to skip, but close
+                # enough to flag. Insert the job and surface the decision so
+                # a human/orchestrator resolves same-role-vs-distinct.
+                print(f"DUPLICATE_AMBIGUOUS: {title[:50]} @ {company[:30]} "
+                      f"— close to {dup['id']} (overlap={dup.get('overlap')}); "
+                      f"review: extract.py reject {jid} if same role",
+                      file=sys.stderr)
+            else:
+                # SAY SO. `None` is also the return for "no url", and callers
+                # collapse both into `if jid:` — so a dedup decision used to
+                # discard a posting with no trace anywhere. A dropped job the
+                # operator never hears about is indistinguishable from a job
+                # that was never in the email.
+                print(f"DUPLICATE_SKIPPED: {title[:50]} @ {company[:30]} "
+                      f"— matches existing job {dup['id']} (stage={dup['stage']}); "
+                      f"url={url[:80]}", file=sys.stderr)
+                return None
 
     _insert_job(jid,
         email_id=job_data.get("email_id", ""),
@@ -243,7 +303,16 @@ def add_job(job_data, skip_known=False):
 
 
 def record_failure(jid, reason, detail=""):
-    """Record a structured failure reason for a job."""
+    """Record a structured failure reason for a job.
+
+    NOTE: currently has no callers. The probe router's own
+    `record_failure` (apply/common/observations.py) is a different
+    2-argument function — the name collision is why this one looked used.
+    Kept because `advance(..., state='failed')` + an event is the correct
+    shape for structured failure recording and the failure paths in
+    enrich/tailor should route through it rather than writing `error`
+    strings directly.
+    """
     from .events import event_add
     from .pipeline import advance  # circular (pipeline→jobs) — keep lazy
     job = get_job(jid)
@@ -293,14 +362,31 @@ def get_job(jid):
     """Fetch a job by id — accepts the full 16-hex id OR the 12-char
     prefix that logs/transcripts display (identity must survive
     truncation; see terms.trunc: display-only truncation is never an
-    identity boundary)."""
+    identity boundary).
+
+    The prefix path is deliberately strict:
+      * only hex prefixes resolve. '%' and '_' are LIKE WILDCARDS, so an
+        unescaped prefix let `get_job('%')` return an arbitrary job;
+      * an AMBIGUOUS prefix resolves to nothing rather than to whichever
+        row SQLite happened to return first. Silently picking one of two
+        jobs is how the wrong application gets submitted.
+    """
     conn = get_conn()
     r = conn.execute(f"SELECT {_JOBS_COLS} FROM jobs WHERE id=?", (jid,)).fetchone()
-    if r is None and len(str(jid)) < 16:
-        r = conn.execute(
-            f"SELECT {_JOBS_COLS} FROM jobs WHERE id LIKE ?",
-            (str(jid) + "%",)
-        ).fetchone()
+    if r is None:
+        s = str(jid)
+        if not s or len(s) >= 16 or not all(c in "0123456789abcdef" for c in s.lower()):
+            return None
+        rows = conn.execute(
+            f"SELECT {_JOBS_COLS} FROM jobs WHERE id LIKE ? ESCAPE '\\' LIMIT 2",
+            (s + "%",)
+        ).fetchall()
+        if len(rows) != 1:
+            if len(rows) > 1:
+                print(f"AMBIGUOUS_JID: '{s}' matches multiple jobs — "
+                      f"use the full 16-hex id", file=sys.stderr)
+            return None
+        r = rows[0]
     return _row_to_job(r) if r else None
 
 

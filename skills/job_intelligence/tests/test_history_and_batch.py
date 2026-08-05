@@ -14,10 +14,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 RESUME = {
     "work": [
-        {"name": "Acme Corp", "position": "Senior Engineer",
+        {"company": "Acme Corp", "position": "Senior Engineer",
          "startDate": "2021-03-01", "endDate": "2023-06-15",
-         "summary": "Built the data platform."},
-        {"name": "Beta Inc", "position": "Engineer",
+         "highlights": ["Built the data platform."]},
+        {"company": "Beta Inc", "position": "Engineer",
          "startDate": "2019-01-01"},
     ],
     "education": [
@@ -70,7 +70,7 @@ class HistoryMerge(unittest.TestCase):
         os.makedirs(os.path.join(tmp, jid2), exist_ok=True)
         with open(os.path.join(tmp, jid2, "resume.json"), "w",
                   encoding="utf-8") as f:
-            json.dump({"work": [{"name": "Current Co", "position": "Engineer",
+            json.dump({"work": [{"company": "Current Co", "position": "Engineer",
                                  "startDate": "2022-05-01"}],
                        "education": []}, f)
         with patch("apply.act.history.RESULTS_DIR", tmp):
@@ -136,7 +136,7 @@ class HistoryMerge(unittest.TestCase):
         os.makedirs(os.path.join(tmp, jid2), exist_ok=True)
         with open(os.path.join(tmp, jid2, "resume.json"), "w",
                   encoding="utf-8") as f:
-            json.dump({"work": [{"name": "Current Co", "position": "Engineer",
+            json.dump({"work": [{"company": "Current Co", "position": "Engineer",
                                  "startDate": "2022-05-01"}],
                        "education": []}, f)
         with patch("apply.act.history.RESULTS_DIR", tmp):
@@ -260,9 +260,14 @@ class FillTelemetry(unittest.TestCase):
         ok, reason = _check_delta("x", "x", "y", "Field")
         self.assertFalse(ok)
         self.assertEqual(reason, "unchanged")
-        ok, reason = _check_delta("a", "b", "c", "Field")
+        # A changed value that differs from the answer is a REINTERPRETATION,
+        # not a silent verification (fix #1) — it must be marked unverified.
+        field = {}
+        ok, reason = _check_delta("a", "b", "c", "Field", field=field)
         self.assertTrue(ok)
-        self.assertEqual(reason, "")
+        self.assertEqual(reason, "reinterpreted")
+        self.assertTrue(field.get("_diag", {}).get("unverified"),
+                        "a read-back that differs from the answer is unverified")
 
     def test_fill_field_stashes_diag_on_rejection(self):
         """A value the ATS silently rejects must leave _diag on the field."""

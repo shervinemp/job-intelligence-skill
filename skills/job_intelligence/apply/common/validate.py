@@ -68,4 +68,12 @@ def validate_value(field, value):
     if ftype == "url" or label.endswith(" url") or label in ("url", "website"):
         return (True, "url") if _URL.match(val) else (False, "not a url")
 
+    # A6: salary on a numeric field must be a number, not a "120k-150k CAD"
+    # range string. The ATS asks for a number; a range would be rejected or
+    # silently accepted as a wrong value.
+    if "salary" in label and ftype in ("text", ""):
+        if not re.match(r"^\d[\d,]*$", val.replace(",", "")):
+            return False, "salary must be numeric"
+        return True, "salary"
+
     return True, "text"

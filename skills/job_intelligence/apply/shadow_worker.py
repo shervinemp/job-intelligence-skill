@@ -68,7 +68,14 @@ def main():
         elif results[_T.K_RES_STOPPED]:
             detail = str(results[_T.K_RES_STOPPED][0][1])[:120]
             if detail.startswith("submit returned 0"):
-                outcome, detail = _T.OUTCOME_HELD_SHADOW, "fill+check OK, submit held (shadow)"
+                # rc==0 in shadow means: the pre-submit check PASSED and
+                # the policy then suppressed the click. It must never be
+                # asserted without the check actually having run — see the
+                # gate ordering in act/submit.py. The remaining unknown is
+                # unanswered OPTIONAL fields, which check does not fail on,
+                # so the wording stays narrow.
+                outcome = _T.OUTCOME_HELD_SHADOW
+                detail = "check passed, submit held (shadow)"
             else:
                 outcome, detail = _T.OUTCOME_STOPPED, detail
         else:

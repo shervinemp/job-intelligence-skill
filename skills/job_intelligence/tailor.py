@@ -11,6 +11,12 @@ Usage:
   tailor.py reset <jid>               Reset job to extracted (first stage)
   tailor.py reset --all               Mass reset
   tailor.py reset --state <state>     Reset by state (failed, skipped)
+  tailor.py ground <jid>              Factual-grounding manifest: every
+                                      tailored claim must trace to
+                                      profile.json (admit is blocked until
+                                      clean; --force after human review)
+  tailor.py review [--jobs N]         Review tailored jobs (approve, or
+                                      retry --feedback)
 """
 
 import hashlib, json, os, re, sys

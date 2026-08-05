@@ -28,31 +28,58 @@ def _norm(s):
 
 
 def _fuzzy(a, b):
-    """Containment-based similarity for entity names (company/title)."""
+    """Word-boundary containment similarity for entity names (company/title).
+
+    C4: raw-substring containment is too loose — "AT" matches "Atlantic", a
+    2-char name matches a longer unrelated one. Only a WHOLE-WORD containment
+    (or full equality) counts, so "Acme" matches "Acme Corp" (same company)
+    but not "Acme Corp" vs "SomeAcmeSuffix" (different entity)."""
     a, b = _norm(a), _norm(b)
     if not a or not b:
         return False
     if a == b:
         return True
-    if len(a) >= 4 and (a in b or b in a):
-        return True
+    if len(a) >= 4 and len(b) >= 4:
+        # Word-boundary containment in either direction.
+        if re.search(r"\b" + re.escape(a) + r"\b", b):
+            return True
+        if re.search(r"\b" + re.escape(b) + r"\b", a):
+            return True
     return False
 
 
+def _y(v):
+    """Year (int) from ISO ('2021-03'), month-year ('March 2021'), or bare
+    year — or None when unparseable. C3: an unparseable date must NOT count
+    as overlapping; it becomes a suspicious gap, not a silent pass."""
+    s = str(v or "").strip()
+    m = re.match(r"(\d{4})", s)
+    if m:
+        return int(m.group(1))
+    m = re.match(r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|"
+                 r"may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|"
+                 r"oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[ ,]+(\d{4})", s, re.I)
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def _dates_overlap(a_start, a_end, b_start, b_end):
-    """Year-level overlap of two date ranges (None = open)."""
-    def _y(v):
-        m = re.match(r"(\d{4})", str(v or ""))
-        return int(m.group(1)) if m else None
+    """Year-level overlap of two date ranges (None = open).
+
+    C3: ranges whose dates are UNPARSEABLE do not overlap — they are a
+    grounding gap (the claim's dates can't be traced), not a silent pass."""
     as_, ae, bs, be = _y(a_start), _y(a_end), _y(b_start), _y(b_end)
-    if as_ is None and bs is None:
-        return True
+    # If either side's dates are entirely unparseable, we cannot confirm
+    # overlap — fail toward review.
+    if as_ is None and bs is None and ae is None and be is None:
+        return False
     if as_ is None:
         as_ = bs
     if bs is None:
         bs = as_
     if as_ is None:
-        return True
+        return False
     lo = max(as_, bs)
     hi = min(ae or 9999, be or 9999)
     return lo <= hi
@@ -74,6 +101,26 @@ def _base_work(profile):
 
 def _base_education(profile):
     return profile.get("education") or []
+
+
+# Claim categories where a fabrication is materially harmful rather than
+# merely embarrassing: legal status, credentials, and verifiable record.
+_CREDENTIAL_PATTERNS = [
+    (re.compile(r"\b(ts/sci|top secret|security clearance|clearance level|"
+                r"public trust|nato secret)\b"), "security clearance"),
+    (re.compile(r"\b(pmp|cissp|cpa|cfa|pe licen|professional engineer|"
+                r"aws certified|azure certified|gcp certified|"
+                r"certified kubernetes|comptia|itil)\b"), "certification"),
+    (re.compile(r"\b(patent(s|ed)?\s+(no\.|number|granted|pending|filed)|"
+                r"us\s?patent)\b"), "patent"),
+    (re.compile(r"\b(neurips|icml|iclr|cvpr|siggraph|nature|science journal|"
+                r"peer[- ]reviewed|published \d+ paper)\b"), "publication"),
+    (re.compile(r"\b(phd|ph\.d|doctorate|mba|jd|md)\b"), "degree"),
+    (re.compile(r"\b(licensed|registered nurse|bar admission|admitted to the bar)\b"),
+     "licence"),
+    (re.compile(r"\bteam of \d+|\bmanaged \d+ (engineer|people|report)"),
+     "team size"),
+]
 
 
 def ground(resume, profile=None, job_posting_text=""):
@@ -126,6 +173,56 @@ def ground(resume, profile=None, job_posting_text=""):
             if not any(_fuzzy(degree, a) for a in areas):
                 novel.append(f"education: '{degree}' not in profile "
                              f"({school})")
+
+    # ── Resume BULLETS: the claims a reader actually acts on ─────────
+    #
+    # Company/title/date grounding above proves the JOBS are real. It says
+    # nothing about what the bullets assert, and the bullets are where a
+    # tailoring LLM confabulates — it is handed an untrusted job
+    # description ("we need someone with a clearance who led 40+
+    # engineers") and asked to make the resume fit. Before this check, a
+    # resume claiming an active TS/SCI clearance, a 45-person team and 12
+    # NeurIPS papers passed the gate cleanly because the employer was
+    # real. Falsely asserting a clearance or a licence on an application
+    # is not a formatting bug.
+    #
+    # Conservative by construction: only HIGH-RISK claim categories and
+    # concrete numbers are flagged, and a flag means "human reviews it"
+    # (--force exists), not "discard".
+    claim_text = []
+    for item in resume.get("work", []) or []:
+        claim_text.extend(str(h) for h in (item.get("highlights") or []))
+        if item.get("summary"):
+            claim_text.append(str(item["summary"]))
+    for item in resume.get("projects", []) or []:
+        claim_text.extend(str(h) for h in (item.get("highlights") or []))
+        if item.get("description"):
+            claim_text.append(str(item["description"]))
+    if (resume.get("basics") or {}).get("summary"):
+        claim_text.append(str(resume["basics"]["summary"]))
+
+    # Grounded against the PROFILE ONLY — deliberately not the posting.
+    # The posting is untrusted text written by someone else; letting it
+    # satisfy a claim means a job ad that says "TS/SCI required" would
+    # launder a fabricated clearance onto the resume. A claim about the
+    # candidate can only be justified by the candidate's own record.
+    haystack = str(profile).lower()
+    for text in claim_text:
+        low = text.lower()
+        for pat, what in _CREDENTIAL_PATTERNS:
+            m = pat.search(low)
+            if m and m.group(0) not in haystack:
+                novel.append(f"claim: {what} — '{text[:70]}' not in profile")
+                break
+        # Bare integers, plus the scale suffixes inflation actually uses
+        # ("200M users", "10x throughput", "1.5B requests").
+        figures = set(re.findall(r"\b\d{3,}\b", low))
+        figures |= {m.group(0) for m in re.finditer(
+            r"\b\d+(?:\.\d+)?\s*(?:k|m|b|bn|x|million|billion|thousand)\b", low)}
+        for n in sorted(figures):
+            if n not in haystack:
+                novel.append(f"claim: figure '{n}' not in profile — "
+                             f"'{text[:60]}'")
 
     # ── Cover letter: concrete facts must appear in profile/posting ───
     cover = ""

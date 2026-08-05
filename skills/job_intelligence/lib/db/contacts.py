@@ -5,7 +5,10 @@ from .schema import get_conn
 
 def contact_add(job_id, name, **kw):
     c = get_conn()
-    c.execute(
+    # NOTE: the row id must come from the CURSOR — sqlite3.Connection has no
+    # .lastrowid. Reading it off the connection raised AttributeError on every
+    # call, after the INSERT had already committed.
+    cur = c.execute(
         """INSERT INTO contacts (job_id, company_id, name, role, email, linkedin_url, notes, reached_out,
            source, confidence, message_sent, email_sent, last_contacted_at, profile_picture_url,
            headline, connection_degree)
@@ -30,7 +33,7 @@ def contact_add(job_id, name, **kw):
         ),
     )
     c.commit()
-    return c.lastrowid
+    return cur.lastrowid
 
 
 def contact_list(job_id=None):
@@ -67,7 +70,8 @@ def attempt_add(contact_id, channel, status="pending", **kw):
     sent_at = kw.get("sent_at")
     if sent_at is None and status == "sent":
         sent_at = datetime.now().isoformat()
-    c.execute(
+    # Row id from the CURSOR — see contact_add.
+    cur = c.execute(
         """INSERT INTO contact_attempts (contact_id, channel, direction, subject, body, status, message_id, error, sent_at)
            VALUES (?,?,?,?,?,?,?,?,?)""",
         (
@@ -83,7 +87,7 @@ def attempt_add(contact_id, channel, status="pending", **kw):
         ),
     )
     c.commit()
-    return c.lastrowid
+    return cur.lastrowid
 
 
 def attempt_list(contact_id=None, job_id=None, status=None, limit=50):

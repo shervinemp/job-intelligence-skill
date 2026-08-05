@@ -1,0 +1,42 @@
+{
+  "_comment": "Conservative form defaults — privacy-safe answers used ONLY when no profile answer exists and the widget is a boolean/consent control (see resolve.py Step 6). Answer VALUES live here in data, never in code (ETHOS: no hardcoded answers). Each entry: {pattern, value, kinds}. kinds limits the field types the default may apply to.",
+  "defaults": [
+    {"pattern": "stay up to date|marketing|newsletter|promotional|email updates|communications from", "value": "No", "kinds": ["checkbox", "radio", "select"]},
+    {"pattern": "receive alerts|job alerts|similar jobs|email me|notify me", "value": "No", "kinds": ["checkbox", "radio", "select"]},
+    {"pattern": "current.*(employee|staff|team member)", "value": "No", "kinds": ["checkbox", "radio", "select"]},
+    {"pattern": "consent", "value": "true", "kinds": ["checkbox"], "meta": "auto_only", "note": "the checked-state value a consent checkbox receives when JI_AUTO_CONSENT=1 (consumed by fill_runner, not Step 6)"}
+  ],
+  "dialing-codes": {
+    "canada": "+1",
+    "united states": "+1",
+    "usa": "+1",
+    "united kingdom": "+44",
+    "uk": "+44",
+    "england": "+44",
+    "australia": "+61",
+    "new zealand": "+64",
+    "germany": "+49",
+    "france": "+33",
+    "netherlands": "+31",
+    "belgium": "+32",
+    "switzerland": "+41",
+    "austria": "+43",
+    "italy": "+39",
+    "spain": "+34",
+    "portugal": "+351",
+    "ireland": "+353",
+    "sweden": "+46",
+    "norway": "+47",
+    "denmark": "+45",
+    "finland": "+358",
+    "poland": "+48",
+    "czech republic": "+420",
+    "india": "+91",
+    "brazil": "+55",
+    "mexico": "+52",
+    "japan": "+81",
+    "south korea": "+82",
+    "singapore": "+65",
+    "israel": "+972"
+  }
+}

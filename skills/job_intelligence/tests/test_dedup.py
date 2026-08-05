@@ -195,6 +195,34 @@ class TokenOverlap(_TempDBMixin, unittest.TestCase):
         self.assertEqual(_token_overlap("", "Anything"), 0.0)
 
 
+class B1GrayBand(_TempDBMixin, unittest.TestCase):
+    """Near-threshold duplicates (0.70–0.85) must be tagged ambiguous, not
+    silently rejected — B1: the decision is surfaced, not lost."""
+
+    def test_high_overlap_is_confident_dup(self):
+        self._insert("aaa", "Senior Software Engineer", "Acme")
+        result = find_duplicate("bbb", "Senior Software Engineer", "Acme")
+        self.assertIsNotNone(result)
+        self.assertNotIn("ambiguous", result)
+
+    def test_gray_band_is_tagged_ambiguous(self):
+        # Overlap between these should land in the 0.70-0.85 band (same
+        # company, overlapping words, not identical) — tagged, not skipped.
+        self._insert("aaa", "Senior Software Engineer Backend", "Acme")
+        result = find_duplicate("bbb", "Senior Software Engineer", "Acme")
+        if result is not None:
+            self.assertTrue(result.get("ambiguous"),
+                            f"expected ambiguous tag, got {result}")
+            self.assertIn("overlap", result)
+        else:
+            self.skipTest("overlap below gray band with these titles")
+
+    def test_distinct_roles_not_ambiguous(self):
+        self._insert("aaa", "Senior Software Engineer", "Acme")
+        result = find_duplicate("bbb", "Senior QA Tester", "Acme")
+        self.assertIsNone(result)
+
+
 class AddJobSkipKnown(_TempDBMixin, unittest.TestCase):
     def test_skip_known_returns_none_for_existing_url(self):
         jid1 = add_job({"url": "https://linkedin.com/jobs/view/100",

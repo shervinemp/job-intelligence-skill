@@ -190,26 +190,96 @@ def cmd_submit(jid, confirm=False, force=False):
     from apply.common.gate import submit_decision
     pol = load_policy()
     mode = resolve_mode()
-    action, reason = submit_decision(mode, pol)
+    _db_job = db_row
+    _host = ""
+    try:
+        from urllib.parse import urlparse as _up
+        _host = (_up(_db_job.get("url") or _db_job.get("external_url") or "")
+                 .netloc or "").lower()
+    except Exception:
+        pass
+    action, reason = submit_decision(mode, pol, host=_host)
     if action == _T.STATUS_BLOCKED:
         emit_status(_T.STATUS_BLOCKED, reason)
         emit_next("none", "kill-switch active — resume via apply_policy.json")
         return 1
-    if action == _T.STATUS_HOLD:
-        emit_status(_T.STATUS_HOLD, reason)
-        emit_next("none", "review form in browser, then run submit with policy=live")
-        return 0
 
-    # GATE: run check before submit unless --force
+    # F5 per-jid cross-process lock: a live submit and a shadow worker can
+    # race on the same jid (the one-shot guard is per-jid state, not
+    # cross-process locked). Serialize the guard-check + gate + click + outcome
+    # for this jid. Released in the finally below (and by stale-owner reaping).
+    from apply.common.jid_lock import JidLock
+    _jidlock = JidLock(jid)
+    _jidlock.acquire()
+    # GATE: run check BEFORE the hold branch.
+    #
+    # The check used to sit below the hold return, so in shadow/hold mode
+    # it never ran at all — yet the batch labelled those jobs
+    # "fill+check OK, submit held (shadow)". That string was synthesised
+    # purely from "submit returned 0", which in hold mode means only "the
+    # policy said hold". 23 of 53 jobs reported ready had a REQUIRED field
+    # with no answer. Shadow exists to PRODUCE evidence (ETHOS §7 step 2);
+    # skipping the one validation step and then claiming it passed is the
+    # opposite of that.
+    check_rc = 0
     if not force:
         from apply.act.check import cmd_check
         print("  Pre-submit check...", file=sys.stderr)
         check_rc = cmd_check(jid)
+
+    if action == _T.STATUS_HOLD:
         if check_rc != 0:
-            print("  CHECK FAILED — submit blocked. Use --force to override.", file=sys.stderr)
-            emit_status(_T.STATUS_CHECK_FAILED, "run 'apply act --check' and fix errors first")
-            emit_next("check", "fix errors then resubmit (or --force to override)")
+            emit_status(_T.STATUS_CHECK_FAILED,
+                        f"{mode} mode — submit suppressed, AND the pre-submit "
+                        f"check failed")
+            emit_next("check", "fix the check errors before this job is ready")
             return 1
+        emit_status(_T.STATUS_HOLD, reason)
+        emit_next("none", "review form in browser, then run submit with policy=live")
+        return 0
+
+    if check_rc != 0:
+        print("  CHECK FAILED — submit blocked. Use --force to override.", file=sys.stderr)
+        emit_status(_T.STATUS_CHECK_FAILED, "run 'apply act --check' and fix errors first")
+        emit_next("check", "fix errors then resubmit (or --force to override)")
+        return 1
+
+    # B2: same posting, two jids — the same posting can enter the pipeline via
+    # email AND LinkedIn, producing two jids that each reach submit. The one-shot
+    # guard is per-jid, so a duplicate submission would be possible. Refuse the
+    # submit if another ACTIVE job carries the same posting URL (or the same
+    # external apply URL) and is not already applied. --force overrides after
+    # human verification.
+    if not force:
+        try:
+            from lib.db import get_conn as _dedup_conn
+            _c = _dedup_conn()
+            _row = _c.execute(
+                "SELECT url, external_url FROM jobs WHERE id=?", (jid,)).fetchone()
+            _url = _row["url"] if _row else ""
+            _ext = _row["external_url"] if _row else ""
+            _probe = None
+            if _url:
+                _probe = _c.execute(
+                    "SELECT id, stage FROM jobs WHERE url=? AND id != ? "
+                    "AND state='active' AND stage != 'applied' LIMIT 1",
+                    (_url, jid)).fetchone()
+            if not _probe and _ext:
+                _probe = _c.execute(
+                    "SELECT id, stage FROM jobs WHERE external_url=? AND id != ? "
+                    "AND state='active' AND stage != 'applied' LIMIT 1",
+                    (_ext, jid)).fetchone()
+            if _probe:
+                print(f"  SAME-POSTING GATE: another active job {_probe['id']} "
+                      f"(stage={_probe['stage']}) carries this posting URL — "
+                      f"refusing duplicate submit (--force to override)",
+                      file=sys.stderr)
+                emit_status(_T.STATUS_BLOCKED,
+                            "same posting already active under another jid")
+                emit_next("none", "--force only after confirming they differ")
+                return 1
+        except Exception:
+            pass
 
     # GATE: regression canary — if the latest dossier REGRESSED fields
     # that a previous run filled, the current state is suspect and the
@@ -263,8 +333,14 @@ def cmd_submit(jid, confirm=False, force=False):
 
     browser_session_id = state.get("browser_session_id", "")
 
+    # F3 session isolation: strip cookies of OTHER employers before the
+    # one-shot action that transmits PII, so company A's session cannot
+    # leak into company B's page (and vice versa).
+    from apply.act.helpers import _host as _url_host
+    _isolate = _url_host(url)
+
     try:
-        with chrome_session(state) as (page, ctx):
+        with chrome_session(state, isolate_host=_isolate) as (page, ctx):
             cur = page.url or ""
             if not cur or "about:blank" in cur or "chrome-error" in cur:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -276,16 +352,30 @@ def cmd_submit(jid, confirm=False, force=False):
                 save_state(state)
                 return 1
 
-            # Pre-flight: check for already-applied signals on any ATS
+            # Pre-flight: check for already-applied signals on any ATS.
+            # A6: only believe "already applied" when we're on the TARGET
+            # posting's URL — a redirect to a different page (home, search,
+            # another listing) could show "already applied" for a DIFFERENT
+            # job. Cross-check the current URL against the target before
+            # marking applied.
             from apply.common.signals import has_already_applied_text
             from apply.common.page_helpers import page_text as _pt
             try:
                 _ptxt = _pt(page) or ""
-                if has_already_applied_text(_ptxt):
+                _cur = (page.url or "").lower()
+                _tgt = (url or "").lower()
+                _on_target = bool(_cur and _tgt and
+                                  (_cur.split("?")[0].rstrip("/")
+                                   == _tgt.split("?")[0].rstrip("/")))
+                if has_already_applied_text(_ptxt) and _on_target:
                     mark_applied(jid)
                     emit_status("already applied")
                     emit_next("verify")
                     return 0
+                elif has_already_applied_text(_ptxt) and not _on_target:
+                    print(f"  WARN: 'already applied' text on a page that is "
+                          f"NOT the target posting ({_cur[:80]}) — NOT "
+                          f"marking applied", file=sys.stderr)
             except Exception:
                 pass
 
@@ -518,7 +608,14 @@ def cmd_submit(jid, confirm=False, force=False):
                     state["submit_clicked"] = False  # form rejected - safe to retry
                     save_state(state)
                     emit_status("validation_error", f"{len(errors)} field(s) need fixing")
-                    emit_next("act --fill", "fix validation errors then resubmit")
+                    # A1: the validation errors are EVIDENCE, surfaced outward
+                    # to the orchestrator (S2 dossier + S5 outcome evidence),
+                    # not consumed locally. The orchestrator reads them in
+                    # tandem with the fill dossier and answers the fix via
+                    # --answers; ask_api is not invoked for this text.
+                    emit_next("act --fill",
+                              "validation errors are in the dossier — answer "
+                              "them with --answers, then re-fill")
                     return 1
 
                 if outcome == "session_expired":
@@ -622,3 +719,9 @@ def cmd_submit(jid, confirm=False, force=False):
     except Exception as e:
         emit_error(f"submit failed: {e}")
         return 1
+    finally:
+        # Release the per-jid lock on every exit path (success, guard, error).
+        try:
+            _jidlock.release()
+        except Exception:
+            pass
