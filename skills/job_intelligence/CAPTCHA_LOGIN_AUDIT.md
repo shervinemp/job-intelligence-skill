@@ -46,19 +46,22 @@ promote a password. Pinned by `LoginWallCaptcha` (5 tests).
 
 ## Remaining open (honest)
 
-- **CAPTCHA on post-login pages**: `handle_captcha` is called at fill start and
-  on multi-page navigation, but not *inside* the login transition. A captcha that
-  appears only *after* a successful login (on the next step) is caught on the
-  next `handle_captcha` call, not immediately — acceptable, but not instant.
-- **hCaptcha/ARIA-only CAPTCHAs without iframes or known classes**: a captcha
-  rendered entirely as custom DOM with no `challenge`/`captcha`/`recaptcha`
-  markers and non-English body text is invisible to `check_captcha`. The English
-  text keywords are the only text path. Low likelihood, but a real blind spot.
-- **`captcha_skip` policy is all-or-nothing**: skipping is per-step (record
-  `captcha_required`, abort step), which is correct, but there is no
-  per-domain captcha allow-list. Minor.
+- **hCaptcha/ARIA-only CAPTCHAs**: a CAPTCHA rendered as custom DOM with no
+  recognizable class is now caught via `[role="captcha"]` and
+  `aria-label*="captcha"` matching, plus multilingual body-text keywords
+  (FR/ES/DE/RU/ZH/HI) — not exhaustive, but the widest net the detector
+  currently casts. Residual blind spot: fully opaque ARIA-less widgets.
+- **Per-domain CAPTCHA allow-list**: now supported — `captcha_skip_domains`
+  in apply_policy.json skips (records captcha_required) only for listed
+  domains, so one known-broken ATS no longer stalls every batch while other
+  domains still wait for the human. Default: no domains listed.
 
 ## Test coverage added
 - `LoginWallCaptcha`: login captcha → `captcha_required` (no cred save/promote);
   uncertain-then-captcha not assumed OK; `_login_check` / `_check_account_created`
   surface `"captcha"`; runtime detector sees reCAPTCHA widgets.
+- `CaptchaDetectionExtra`: ARIA-role CAPTCHA detected; FR/RU captcha text
+  detected; per-domain skip list honored (listed domain skips, unlisted waits);
+  policy default has empty domain list.
+- `PlaintextFallbackGate`: plaintext fallback refused by default; allowed via
+  env; refused write leaves no file; allowed write persists.

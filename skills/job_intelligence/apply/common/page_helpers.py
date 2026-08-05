@@ -118,13 +118,17 @@ def check_captcha(page):
         # hCaptcha uses iframe[src*="hcaptcha"] + .h-captcha. The probe-time
         # detector (capabilities.py) already matches these — the runtime check
         # must too, or the fill/submit loops never pause for a human solve and
-        # never record captcha_required.
+        # never record captcha_required. ARIA-only CAPTCHAs (role=group with a
+        # captcha-role, or aria-label mentioning captcha) are matched too, so a
+        # custom-DOM widget with no recognizable class/iframe is still caught.
         has_widget = page.evaluate("""() => {
             const sel = 'iframe[src*="challenge"], iframe[src*="recaptcha"], '
                 + 'iframe[src*="hcaptcha"], iframe[src*="captcha"], '
                 + '.g-recaptcha, .h-captcha, '
                 + '[class*="cf-browser"], [id*="challenge"], '
-                + '[class*="challenge"], [class*="turnstile"]';
+                + '[class*="challenge"], [class*="turnstile"], '
+                + '[role="captcha"], [aria-label*="captcha" i], '
+                + '[aria-label*="security check" i]';
             for (const el of document.querySelectorAll(sel)) {
                 if (el.offsetParent !== null) return true;
             }
@@ -133,7 +137,16 @@ def check_captcha(page):
         if has_widget:
             return True
         text = page_text(page).lower()
-        for kw in ["verify you are human", "security check", "i'm not a robot", "complete the security check"]:
+        # English keywords plus the common localizations of the phrase
+        # ("je ne suis pas un robot", "no soy un robot", "ich bin kein roboter",
+        # "не робот", "我不是机器人") — a non-English CAPTCHA page should not
+        # slip past the text check entirely.
+        for kw in [
+            "verify you are human", "security check", "i'm not a robot",
+            "complete the security check", "je ne suis pas un robot",
+            "no soy un robot", "ich bin kein roboter", "не робот",
+            "我不是机器人", "नहीं रोबोट",
+        ]:
             if kw in text:
                 return True
         return False
@@ -174,12 +187,25 @@ def handle_captcha(page, state, wait_s=None, poll_s=3):
         return False
     # Policy skip: don't block a batch on a human solve — abort so the
     # caller records captcha_required (resumable when a human is present).
+    # Two controls: the global `captcha_skip` flag, and a per-domain
+    # `captcha_skip_domains` allow-list (a known-broken/unreachable ATS
+    # shouldn't stall every batch, but other domains still wait for the
+    # human). Either is an explicit operator decision in apply_policy.json.
     try:
         from apply.common.submit_policy import load_policy
-        if load_policy().get("captcha_skip"):
+        pol = load_policy()
+        if pol.get("captcha_skip"):
             print("  CAPTCHA_SKIP: policy captcha_skip=true — aborting this step",
                   file=sys.stderr)
             return True
+        _domains = set(pol.get("captcha_skip_domains") or [])
+        if _domains:
+            from lib.credentials import _domain_from_url
+            _cur = _domain_from_url(page.url or "")
+            if _cur and _cur in _domains:
+                print(f"  CAPTCHA_SKIP: domain '{_cur}' in captcha_skip_domains "
+                      f"— aborting this step", file=sys.stderr)
+                return True
     except Exception:
         pass
     # Cloudflare managed challenge auto-resolves — wait silently, don't alert

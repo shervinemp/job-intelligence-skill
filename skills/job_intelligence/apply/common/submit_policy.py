@@ -38,6 +38,7 @@ _DEFAULTS = {
     # the run on a human solve, and abort per-job after N seconds
     # (recorded as captcha_required / timed_out — both resumable).
     "captcha_skip": False,
+    "captcha_skip_domains": [],
     "job_timeout_sec": 0,
 }
 

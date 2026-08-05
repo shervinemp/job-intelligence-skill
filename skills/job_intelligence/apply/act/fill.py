@@ -595,6 +595,20 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
             except Exception:
                 pass
 
+            # Post-login CAPTCHA gate: a reCAPTCHA/hCaptcha can appear only
+            # after sign-in (or after the guest-apply click) — the login-wall
+            # handler runs before that transition, so catch it here rather
+            # than probing/filling a page the CAPTCHA is still blocking.
+            try:
+                if handle_captcha(page, state,
+                                  wait_s=None if not deadline else max(0, int(deadline - time.time()))):
+                    emit_status(_T.STATUS_CAPTCHA_REQUIRED, "CAPTCHA after login transition — solve then rerun")
+                    state["status"] = _T.STATUS_CAPTCHA_REQUIRED
+                    save_state(state)
+                    return 1
+            except Exception:
+                pass
+
             seen = set()
             _followed_apply = False
             for page_num in range(1, max_pages + 1):

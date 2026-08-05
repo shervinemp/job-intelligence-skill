@@ -7,6 +7,7 @@ and the LLM-assisted fill/submit retries.
 
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -187,6 +188,63 @@ class LoginWallCaptcha(unittest.TestCase):
         self.assertTrue(check_captcha(page))
 
 
+class CaptchaDetectionExtra(unittest.TestCase):
+    """C-C1 extension: ARIA-only and non-English CAPTCHAs must be detected,
+    and the per-domain skip list must be honored."""
+
+    def test_aria_role_captcha_detected(self):
+        from apply.common.page_helpers import check_captcha
+        page = MagicMock()
+        page.evaluate.return_value = True  # widget query: aria/captcha found
+        self.assertTrue(check_captcha(page))
+
+    def test_french_captcha_text_detected(self):
+        from apply.common.page_helpers import check_captcha
+        page = MagicMock()
+        page.evaluate.side_effect = [False, "je ne suis pas un robot"]
+        self.assertTrue(check_captcha(page))
+
+    def test_russian_captcha_text_detected(self):
+        from apply.common.page_helpers import check_captcha
+        page = MagicMock()
+        page.evaluate.side_effect = [False, "подтвердите, что вы не робот"]
+        self.assertTrue(check_captcha(page))
+
+    def test_handle_captcha_skips_listed_domain(self):
+        from apply.common.page_helpers import handle_captcha
+        page = MagicMock()
+        page.url = "https://jobs.example.com/apply"
+        with patch("apply.common.page_helpers.check_captcha", return_value=True), \
+             patch("apply.common.submit_policy.load_policy",
+                   return_value={"captcha_skip": False,
+                                 "captcha_skip_domains": ["jobs.example.com"]}):
+            self.assertTrue(handle_captcha(page, {}))
+
+    def test_handle_captcha_waits_unlisted_domain(self):
+        from apply.common.page_helpers import handle_captcha
+        page = MagicMock()
+        page.url = "https://jobs.other.com/apply"
+        with patch("apply.common.page_helpers.check_captcha", return_value=True), \
+             patch("apply.common.submit_policy.load_policy",
+                   return_value={"captcha_skip": False,
+                                 "captcha_skip_domains": ["jobs.example.com"]}), \
+             patch("apply.common.page_helpers.is_cloudflare_challenge",
+                   return_value=False), \
+             patch("apply.common.page_helpers.wait_cloudflare", return_value=False), \
+             patch("apply.common.page_helpers.time.sleep") as sl:
+            self.assertTrue(handle_captcha(page, {}, wait_s=6, poll_s=2))
+        sl.assert_called()  # it waited instead of skipping
+
+    def test_policy_default_has_no_domain_list(self):
+        from apply.common.submit_policy import load_policy
+        with patch("apply.common.submit_policy._policy_path",
+                   return_value=os.path.join(tempfile.gettempdir(),
+                                             "nope_policy.json")):
+            pol = load_policy()
+        self.assertIn("captcha_skip_domains", pol)
+        self.assertEqual(pol["captcha_skip_domains"], [])
+
+
 class LoginWallNoCreds(unittest.TestCase):
     def test_login_required_when_no_creds(self):
         from apply.act.fill import _handle_login_wall
@@ -281,6 +339,58 @@ class AutoLLMRetrySubmit(unittest.TestCase):
              patch("apply.act.submit.cmd_submit", return_value=0), \
              patch("lib.db.get_conn", return_value=self._conn("tailored")):
             self.assertFalse(_retry_submit_with_llm("jid", {}, None))
+
+
+class PlaintextFallbackGate(unittest.TestCase):
+    """ADVERSARIAL #2 residual: plaintext credential fallback
+    (~/.ji/credentials.json) must be opt-in, and files written only with
+    owner-only ACL. A silent keychain→plaintext downgrade is a security
+    change the operator must explicitly allow."""
+
+    def setUp(self):
+        self._old_env = os.environ.get("JI_ALLOW_PLAINTEXT")
+        os.environ.pop("JI_ALLOW_PLAINTEXT", None)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        os.environ.pop("JI_ALLOW_PLAINTEXT", None)
+        if self._old_env is not None:
+            os.environ["JI_ALLOW_PLAINTEXT"] = self._old_env
+
+    def test_refused_by_default(self):
+        from lib.credentials import _plaintext_fallback_allowed
+        with patch("lib.db.settings.setting_get", return_value=None):
+            self.assertFalse(_plaintext_fallback_allowed())
+
+    def test_env_var_allows(self):
+        from lib.credentials import _plaintext_fallback_allowed
+        with patch.dict(os.environ, {"JI_ALLOW_PLAINTEXT": "1"}):
+            self.assertTrue(_plaintext_fallback_allowed())
+
+    def test_fallback_write_refused_loudly(self):
+        from lib.credentials import _fallback_write
+        tmp = tempfile.mkdtemp()
+        with patch("lib.credentials._FALLBACK_PATH",
+                   os.path.join(tmp, "credentials.json")), \
+             patch("lib.credentials._plaintext_fallback_allowed",
+                   return_value=False), \
+             patch("sys.stderr") as err:
+            ok = _fallback_write({"x": "y"})
+        self.assertFalse(ok)
+        err.write.assert_called()
+        self.assertFalse(os.path.exists(os.path.join(tmp, "credentials.json")))
+
+    def test_fallback_write_allowed_writes_and_chmods(self):
+        from lib.credentials import _fallback_write
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "credentials.json")
+        with patch("lib.credentials._FALLBACK_PATH", path), \
+             patch("lib.credentials._plaintext_fallback_allowed",
+                   return_value=True):
+            ok = _fallback_write({"x": "y"})
+        self.assertTrue(ok)
+        import json as _json
+        self.assertEqual(_json.load(open(path, encoding="utf-8")), {"x": "y"})
 
 
 if __name__ == "__main__":

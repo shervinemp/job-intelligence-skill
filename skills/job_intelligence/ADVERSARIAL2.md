@@ -47,8 +47,11 @@ returns no-match rather than falling to a bare-code pick.
 ### C. Low-severity residuals
 - **Gmail search query** (`stage_emails.py:44`) is `shlex.split` from `.env` —
   env-sourced, not attacker-influenceable. Low.
-- **Plaintext credential fallback** (`~/.ji/credentials.json`) — keyring is
-  primary, but the fallback is a real on-disk surface. Worth hardening.
+- **Plaintext credential fallback** (`~/.ji/credentials.json`) — **HARDENED**:
+  now opt-in (`JI_ALLOW_PLAINTEXT=1` or settings `allow_plaintext`). A silent
+  keychain→plaintext downgrade refuses to write and says so; when allowed, the
+  file is written with an owner-only ACL (`0o600`). Pinned by
+  `PlaintextFallbackGate`.
 - **`ji fetch` doc-vs-behavior** — fixed this pass.
 
 ## Recommendation

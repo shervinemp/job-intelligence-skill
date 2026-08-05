@@ -122,10 +122,43 @@ def _fallback_read():
         return {}
 
 
+def _plaintext_fallback_allowed():
+    """Plaintext-on-disk credentials are an explicit opt-out from the OS
+    keychain. Refusing by default means a silent keychain failure can never
+    quietly drop a real password onto disk — the operator must set
+    JI_ALLOW_PLAINTEXT=1 (or put "allow_plaintext": true in JI_HOME/settings.json)
+    to permit the fallback at all.
+    """
+    if os.environ.get("JI_ALLOW_PLAINTEXT") == "1":
+        return True
+    try:
+        from lib.db.settings import setting_get
+        return bool(setting_get("allow_plaintext"))
+    except Exception:
+        return False
+
+
 def _fallback_write(data):
+    if not _plaintext_fallback_allowed():
+        print(f"ERROR: cannot persist credentials — OS keychain unavailable AND "
+              f"plaintext fallback disabled. Set JI_ALLOW_PLAINTEXT=1 or "
+              f"settings 'allow_plaintext': true to permit plaintext {_FALLBACK_PATH}.",
+              file=sys.stderr)
+        return False
     os.makedirs(os.path.dirname(_FALLBACK_PATH), exist_ok=True)
     with open(_FALLBACK_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except Exception:
+            pass
+    # POSIX: owner-only ACL — the plaintext file is a secret, not a config.
+    try:
+        os.chmod(_FALLBACK_PATH, 0o600)
+    except Exception:
+        pass
+    return True
 
 
 def _keyring_get(key):
