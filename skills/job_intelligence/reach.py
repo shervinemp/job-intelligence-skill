@@ -28,10 +28,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from lib.contacts import discover_contacts
 from lib.db import get_conn, get_job, pipeline_status
 from lib.db.contacts import (
-    attempt_add, contact_add, contact_list, contact_update,
-    attempt_list,
+    contact_list, contact_update, attempt_list,
 )
-from lib.db.events import event_add
 from lib.linkedin_messaging import (
     send_message,
     send_connect_request,
@@ -310,8 +308,9 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
         output = r.stdout.decode("utf-8", errors="replace")
         err = r.stderr.decode("utf-8", errors="replace")
         if r.returncode != 0:
-            attempt_add(contact["id"], "email", status="failed", subject=subject,
-                        body=body_text, error=err[:200])
+            from lib.outreach_ledger import record_outcome
+            record_outcome(conn, "email", contact["id"], jid, "failed",
+                           subject=subject, body=body_text, error=err[:200])
             print(f"EMAIL_FAILED: {err[:200]}", file=sys.stderr)
             return
 
@@ -319,30 +318,37 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
             parsed = json.loads(output)
             if parsed.get("status") == "sent":
                 msg_id = parsed.get("message_id", "")
-                conn.execute("UPDATE contacts SET email_sent=1, reached_out=1, last_contacted_at=datetime('now'), notes=notes || '\nEmailed: ' || datetime('now') WHERE id=?", (contact["id"],))
-                conn.execute("UPDATE jobs SET outreach_attempted=1 WHERE id=?", (jid,))
-                conn.commit()
-                attempt_add(contact["id"], "email", status="sent", subject=subject,
-                            body=body_text, message_id=msg_id)
-                event_add(jid, "email", f"Emailed {name} about {title}",
-                         description=f"Sent to {email_addr}, msg_id={msg_id}")
+                from lib.outreach_ledger import record_outcome
+                record_outcome(conn, "email", contact["id"], jid, "sent",
+                               subject=subject, body=body_text,
+                               message_id=msg_id,
+                               event_type="email",
+                               event_title=f"Emailed {name} about {title}",
+                               event_desc=f"Sent to {email_addr}, msg_id={msg_id}")
                 print(f"EMAIL_SENT: {msg_id} to {email_addr}", file=sys.stderr)
                 print(f"  NEXT: Wait for response or follow up", file=sys.stderr)
             else:
-                attempt_add(contact["id"], "email", status="failed", subject=subject,
-                            body=body_text, error=parsed.get('error', 'unknown'))
+                from lib.outreach_ledger import record_outcome
+                record_outcome(conn, "email", contact["id"], jid, "failed",
+                               subject=subject, body=body_text,
+                               error=parsed.get('error', 'unknown'))
                 print(f"EMAIL_FAILED: {parsed.get('error', 'unknown')}", file=sys.stderr)
         except json.JSONDecodeError:
-            attempt_add(contact["id"], "email", status="failed", subject=subject,
-                        body=body_text, error=f"unexpected response: {output[:200]}")
+            from lib.outreach_ledger import record_outcome
+            record_outcome(conn, "email", contact["id"], jid, "failed",
+                           subject=subject, body=body_text,
+                           error=f"unexpected response: {output[:200]}")
             print(f"EMAIL_FAILED: unexpected response: {output[:200]}", file=sys.stderr)
     except subprocess.TimeoutExpired:
-        attempt_add(contact["id"], "email", status="failed", subject=subject,
-                    body=body_text, error="timeout")
+        from lib.outreach_ledger import record_outcome
+        record_outcome(conn, "email", contact["id"], jid, "failed",
+                       subject=subject, body=body_text, error="timeout")
         print(f"EMAIL_FAILED: timeout sending to {email_addr}", file=sys.stderr)
     except FileNotFoundError:
-        attempt_add(contact["id"], "email", status="failed", subject=subject,
-                    body=body_text, error=f"gmail-cli not found at {GMAIL_CLI}")
+        from lib.outreach_ledger import record_outcome
+        record_outcome(conn, "email", contact["id"], jid, "failed",
+                       subject=subject, body=body_text,
+                       error=f"gmail-cli not found at {GMAIL_CLI}")
         print(f"EMAIL_FAILED: gmail-cli not found at {GMAIL_CLI}", file=sys.stderr)
 
 
@@ -433,20 +439,20 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
 
     try:
         result = send_message(ctx, linkedin_url, body_text, name=name)
+        from lib.outreach_ledger import record_outcome
         if result["status"] == "sent":
             conv_url = result.get("conversation_url", "")
-            conn.execute("UPDATE contacts SET message_sent=1, reached_out=1, last_contacted_at=datetime('now'), notes=notes || '\nMessaged: ' || datetime('now') WHERE id=?", (contact["id"],))
-            conn.execute("UPDATE jobs SET outreach_attempted=1 WHERE id=?", (jid,))
-            conn.commit()
-            attempt_add(contact["id"], "linkedin_message", status="sent",
-                        body=body_text, message_id=conv_url)
-            event_add(jid, "linkedin_message", f"Messaged {name} on LinkedIn",
-                     description=f"Conversation: {conv_url}")
+            record_outcome(conn, "linkedin_message", contact["id"], jid, "sent",
+                           body=body_text, message_id=conv_url,
+                           event_type="linkedin_message",
+                           event_title=f"Messaged {name} on LinkedIn",
+                           event_desc=f"Conversation: {conv_url}")
             print(f"MESSAGE_SENT: {name}", file=sys.stderr)
             print(f"  Conversation: {conv_url}", file=sys.stderr)
         elif result["status"] == "uncertain":
-            attempt_add(contact["id"], "linkedin_message", status="pending",
-                        body=body_text, error=result.get("detail", ""))
+            record_outcome(conn, "linkedin_message", contact["id"], jid,
+                           "pending", body=body_text,
+                           error=result.get("detail", ""))
             print(f"MESSAGE_UNCERTAIN: send clicked for {name} but not confirmed", file=sys.stderr)
             print(f"  {result.get('detail', '')}", file=sys.stderr)
             # --set-sent is the ONLY hint that actually settles the guard;
@@ -457,17 +463,18 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
             print(f"  NEXT: if it was NOT sent: reach.py message {jid} "
                   f"--contact {contact_idx} --force", file=sys.stderr)
         elif result["status"] == "connect_required":
-            attempt_add(contact["id"], "linkedin_message", status="failed",
-                        body=body_text, error="connect_required")
+            record_outcome(conn, "linkedin_message", contact["id"], jid,
+                           "failed", body=body_text, error="connect_required")
             print(f"CONNECT_REQUIRED: Need to connect with {name} first", file=sys.stderr)
             print(f"  NEXT: reach.py connect {jid} --contact {contact_idx}", file=sys.stderr)
         elif result["status"] == "premium_required":
-            attempt_add(contact["id"], "linkedin_message", status="failed",
-                        body=body_text, error="premium_required")
+            record_outcome(conn, "linkedin_message", contact["id"], jid,
+                           "failed", body=body_text, error="premium_required")
             print(f"PREMIUM_REQUIRED: LinkedIn Premium/InMail needed for {name}", file=sys.stderr)
         else:
-            attempt_add(contact["id"], "linkedin_message", status="failed",
-                        body=body_text, error=result.get("detail", "unknown"))
+            record_outcome(conn, "linkedin_message", contact["id"], jid,
+                           "failed", body=body_text,
+                           error=result.get("detail", "unknown"))
             print(f"MESSAGE_FAILED: {result.get('detail', 'unknown')}", file=sys.stderr)
     finally:
         try:
@@ -538,22 +545,23 @@ def cmd_connect(jid, contact_idx=1, note=None, force=False):
 
     try:
         result = send_connect_request(ctx, linkedin_url, note=note)
+        from lib.outreach_ledger import record_outcome
         if result["status"] == "sent":
-            conn.execute("UPDATE contacts SET reached_out=1, last_contacted_at=datetime('now') WHERE id=?", (contact["id"],))
-            conn.commit()
-            attempt_add(contact["id"], "linkedin_connect", status="sent", body=note)
-            event_add(jid, "linkedin_connect", f"Sent connection request to {name}")
+            record_outcome(conn, "linkedin_connect", contact["id"], jid, "sent",
+                           body=note,
+                           event_type="linkedin_connect",
+                           event_title=f"Sent connection request to {name}")
             print(f"CONNECT_SENT: {name}", file=sys.stderr)
         elif result["status"] == "already_connected":
             conn.execute("UPDATE contacts SET connection_degree='1st' WHERE id=?", (contact["id"],))
             conn.commit()
-            attempt_add(contact["id"], "linkedin_connect", status="failed", body=note,
-                        error="already_connected")
+            record_outcome(conn, "linkedin_connect", contact["id"], jid, "failed",
+                           body=note, error="already_connected")
             print(f"ALREADY_CONNECTED: {name}", file=sys.stderr)
             print(f"  NEXT: reach.py message {jid} --contact {contact_idx}", file=sys.stderr)
         else:
-            attempt_add(contact["id"], "linkedin_connect", status="failed", body=note,
-                        error=result.get("detail", "unknown"))
+            record_outcome(conn, "linkedin_connect", contact["id"], jid, "failed",
+                           body=note, error=result.get("detail", "unknown"))
             print(f"CONNECT_FAILED: {result.get('detail', 'unknown')}", file=sys.stderr)
     finally:
         try:
@@ -597,16 +605,10 @@ def cmd_update(jid, contact_idx=1, email=None, note=None, set_sent=None):
     # forever and every cross-job guard reads it as outreach-in-flight.
     if set_sent:
         channel = "email" if set_sent == "email" else "linkedin_message"
-        conn = get_conn()
-        cur = conn.execute(
-            "UPDATE contact_attempts SET status='sent', "
-            "sent_at=COALESCE(sent_at, datetime('now')) "
-            "WHERE contact_id=? AND channel=? AND status='pending'",
-            (contact["id"], channel),
-        )
-        conn.commit()
-        if cur.rowcount:
-            print(f"  settled {cur.rowcount} pending {channel} attempt(s)", file=sys.stderr)
+        from lib.outreach_ledger import settle
+        n = settle(get_conn(), contact["id"], channel)
+        if n:
+            print(f"  settled {n} pending {channel} attempt(s)", file=sys.stderr)
 
     print(f"UPDATED: contact {contact_idx} ({contact.get('name','')})", file=sys.stderr)
     for k, v in updates.items():
@@ -691,13 +693,9 @@ def cmd_undo(jid, confirm=False):
     # let undo silently disarm the cross-job guard for those people. Any
     # contact with outreach evidence (attempt row OR send flag) requires
     # --confirm, so the operator sees who loses their one-shot protection.
-    at_risk = conn.execute(
-        "SELECT DISTINCT c.name, c.linkedin_url, c.email FROM contacts c "
-        "LEFT JOIN contact_attempts a ON a.contact_id = c.id "
-        "WHERE c.job_id=? AND (c.reached_out = 1 OR c.email_sent = 1 "
-        "     OR c.message_sent = 1 OR a.status IN ('sent','pending'))",
-        (jid,),
-    ).fetchall()
+    # (Moved into lib/outreach_ledger with the other write choreography.)
+    from lib.outreach_ledger import clear_outreach, outreach_at_risk
+    at_risk = outreach_at_risk(conn, jid)
     if at_risk and not confirm:
         print(f"REFUSED: {len(at_risk)} contact(s) on {jid} have confirmed or "
               f"in-flight outreach. Deleting their attempts removes the only "
@@ -710,11 +708,7 @@ def cmd_undo(jid, confirm=False):
         print(f"  Re-run with --confirm if you really want this.", file=sys.stderr)
         return
 
-    conn.execute("UPDATE contacts SET email_sent=0, message_sent=0, reached_out=0 WHERE job_id=?", (jid,))
-    conn.execute("DELETE FROM contact_attempts WHERE contact_id IN "
-                 "(SELECT id FROM contacts WHERE job_id=?)", (jid,))
-    conn.execute("UPDATE jobs SET outreach_attempted=0 WHERE id=?", (jid,))
-    conn.commit()
+    clear_outreach(conn, jid)
     print(f"Undone: contact state + attempts reset for {jid}", file=sys.stderr)
     if at_risk:
         print(f"  WARNING: discarded outreach history for {len(at_risk)} "

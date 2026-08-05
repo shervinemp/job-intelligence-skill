@@ -504,5 +504,141 @@ class OutreachIsRecorded(_TempDBMixin, unittest.TestCase):
         self.assertEqual(self._rows("contacts")[0]["message_sent"], 1)
 
 
+class OutreachLedger(_TempDBMixin, unittest.TestCase):
+    """C3: lib/outreach_ledger is the single writer for the flag+attempt+event
+    choreography. Atomicity (item J), the uncertain path, settle, and the
+    flag-evidence undo gate (item K/C8) all live behind one seam."""
+
+    def _job(self, jid):
+        self.conn.execute(
+            "INSERT OR IGNORE INTO jobs (id, url, title, company, stage, state, "
+            "created_at, updated_at, scripts) "
+            "VALUES (?, ?, 'Role', 'Co', 'tailored', 'active', ?, ?, '[]')",
+            (jid, f"https://example.com/{jid}",
+             self._datetime.now().isoformat(), self._datetime.now().isoformat()),
+        )
+        self.conn.commit()
+
+    def _contact(self, jid="aaaaaaaaaaaaaaaa", url="", email="", cid=None):
+        self._job(jid)
+        if cid is None:
+            cur = self.conn.execute(
+                "INSERT INTO contacts (job_id, name, linkedin_url, email) "
+                "VALUES (?,?,?,?)", (jid, "Test Person", url, email),
+            )
+            self.conn.commit()
+            return cur.lastrowid
+        return cid
+
+    def _rows(self, table):
+        return self.conn.execute(f"SELECT * FROM {table}").fetchall()
+
+    def test_sent_records_flag_attempt_event_atomically(self):
+        from lib.outreach_ledger import record_outcome
+        cid = self._contact()
+        record_outcome(self.conn, "email", cid, "aaaaaaaaaaaaaaaa", "sent",
+                       subject="S", body="B", message_id="m1",
+                       event_type="email", event_title="Emailed",
+                       event_desc="to x")
+        c = self._rows("contacts")[0]
+        self.assertEqual(c["email_sent"], 1)
+        self.assertEqual(c["reached_out"], 1)
+        self.assertIsNotNone(c["last_contacted_at"])
+        a = self._rows("contact_attempts")
+        self.assertEqual(len(a), 1)
+        self.assertEqual(a[0]["status"], "sent")
+        self.assertEqual(a[0]["message_id"], "m1")
+        self.assertEqual(len(self._rows("events")), 1)
+        j = self.conn.execute("SELECT outreach_attempted FROM jobs WHERE id='aaaaaaaaaaaaaaaa'").fetchone()
+        self.assertEqual(j["outreach_attempted"], 1)
+
+    def test_pending_records_attempt_only_no_flags(self):
+        """The uncertain path must NOT set flags/reached_out — the guard stays
+        armed until the human settles it."""
+        from lib.outreach_ledger import record_outcome
+        cid = self._contact()
+        record_outcome(self.conn, "linkedin_message", cid, "aaaaaaaaaaaaaaaa",
+                       "pending", body="B", error="unconfirmed")
+        a = self._rows("contact_attempts")
+        self.assertEqual(len(a), 1)
+        self.assertEqual(a[0]["status"], "pending")
+        c = self._rows("contacts")[0]
+        self.assertEqual(c["message_sent"], 0)
+        self.assertEqual(c["reached_out"], 0)
+
+    def test_failed_records_attempt_only(self):
+        from lib.outreach_ledger import record_outcome
+        cid = self._contact()
+        record_outcome(self.conn, "email", cid, "aaaaaaaaaaaaaaaa", "failed",
+                       body="B", error="smtp")
+        a = self._rows("contact_attempts")
+        self.assertEqual(len(a), 1)
+        self.assertEqual(a[0]["status"], "failed")
+        self.assertEqual(self._rows("contacts")[0]["email_sent"], 0)
+        self.assertEqual(len(self._rows("events")), 0)
+
+    def test_rollback_on_failure_leaves_no_partial_write(self):
+        """Item J: a failed write must NOT leave flag=1 with no attempt row."""
+        from lib.outreach_ledger import record_outcome
+        cid = self._contact()
+        # The events INSERT (4th write) references jobs(id) — a job id that
+        # doesn't exist violates the FK AFTER the flag+attempt writes hit the
+        # same connection. If the writes were not atomic, flag=1 and an attempt
+        # row would survive the failed event write.
+        with self.assertRaises(Exception):
+            record_outcome(self.conn, "email", cid, "does-not-exist-0000",
+                           "sent", body="B", event_type="email",
+                           event_title="X", event_desc="d")
+        self.conn.rollback()
+        # nothing committed: no attempt row, flag still 0
+        self.assertEqual(len(self._rows("contact_attempts")), 0)
+        self.assertEqual(self._rows("contacts")[0]["email_sent"], 0)
+
+    def test_settle_confirms_pending_and_sets_flag(self):
+        from lib.outreach_ledger import record_outcome, settle
+        cid = self._contact()
+        record_outcome(self.conn, "linkedin_message", cid, "aaaaaaaaaaaaaaaa",
+                       "pending", body="B")
+        n = settle(self.conn, cid, "linkedin_message")
+        self.assertEqual(n, 1)
+        a = self._rows("contact_attempts")[0]
+        self.assertEqual(a["status"], "sent")
+        self.assertEqual(self._rows("contacts")[0]["message_sent"], 1)
+
+    def test_settle_flag_only_no_pending_row_still_sets_flag(self):
+        """Item K/C8: a flag-only send (via update --set-sent with no pending
+        row) must still set the flag so the undo gate sees the evidence."""
+        from lib.outreach_ledger import settle
+        cid = self._contact()
+        n = settle(self.conn, cid, "email")
+        self.assertEqual(n, 0)  # nothing to settle
+        self.assertEqual(self._rows("contacts")[0]["email_sent"], 1)
+
+    def test_undo_gate_sees_flag_evidence(self):
+        """Item K/C8: outreach_at_risk must include flag-only sends (no attempt
+        row), or undo could silently disarm the cross-job guard."""
+        from lib.outreach_ledger import outreach_at_risk
+        cid = self._contact()
+        self.conn.execute("UPDATE contacts SET email_sent=1, reached_out=1 WHERE id=?", (cid,))
+        self.conn.commit()
+        at_risk = outreach_at_risk(self.conn, "aaaaaaaaaaaaaaaa")
+        self.assertEqual(len(at_risk), 1)
+
+    def test_undo_gate_empty_when_no_evidence(self):
+        from lib.outreach_ledger import outreach_at_risk
+        self._contact()
+        self.assertEqual(outreach_at_risk(self.conn, "aaaaaaaaaaaaaaaa"), [])
+
+    def test_clear_outreach_resets_all(self):
+        from lib.outreach_ledger import clear_outreach, record_outcome, outreach_at_risk
+        cid = self._contact()
+        record_outcome(self.conn, "email", cid, "aaaaaaaaaaaaaaaa", "sent",
+                       body="B", event_type="email", event_title="X")
+        self.assertEqual(len(outreach_at_risk(self.conn, "aaaaaaaaaaaaaaaa")), 1)
+        clear_outreach(self.conn, "aaaaaaaaaaaaaaaa")
+        self.assertEqual(outreach_at_risk(self.conn, "aaaaaaaaaaaaaaaa"), [])
+        self.assertEqual(len(self._rows("contact_attempts")), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
