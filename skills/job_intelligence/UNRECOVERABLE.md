@@ -22,6 +22,7 @@ Recovered via `undo`; the underlying bug is now fixed.
 |---|---------|-------|--------|
 | 1 | Already-applied text on a non-target page marks the job applied | `_determine_outcome` line 33 returned success with no `_on_target` check; pre-flight had the check, the outcome path did not | **FIXED** — `target_url` now threaded through all 4 callers; pinned tests |
 | 2 | Applied with no `applied_at` | `has_already_applied_text` path never wrote the timestamp | **SURFACED** — `report.py applied --suspects` lists them; 2 recovered |
+| 1b | **Uncertain outcome certified applied** | `cmd_submit` called `mark_applied(jid)` on an UNCERTAIN outcome ("conservative — prevents duplicate"), certifying applied on a result we didn't know happened | **FIXED** — uncertain now stays `tailored` (submit_clicked set, no re-submit) and emits `submitted_uncertain`, routing to `verify` which certifies only on real success signals. Pinned by `SubmitUncertainNotApplied` |
 
 ## Category 2 — MISTAKE-OUTPUT that persists (silent poison)
 

@@ -448,12 +448,19 @@ def cmd_submit(jid, confirm=False, force=False):
                               "re-auth then 'act --fill' to regenerate the form "
                               "and resubmit")
                     return 1
-                # uncertain - mark as applied (conservative, prevents duplicate)
-                # but flag for human review
-                print("  UNCERTAIN - marking as applied (conservative), flagging for review", file=sys.stderr)
-                mark_applied(jid)
-                emit_status(_T.OUTCOME_SUBMITTED, f"uncertain outcome - {reason}. Review recommended.")
-                emit_next("verify", "please verify this submission was received")
+                # uncertain — the click happened but we have no confidence it
+                # landed. #6 (wrong-applied false-positive): do NOT mark the job
+                # applied on an outcome we don't know — that certified the
+                # Mongo/Dialpad class. Leave it tailored (submit_clicked stays
+                # set, so nothing re-submits) and route to verify(), which
+                # confirms with real success signals before applying.
+                print("  UNCERTAIN — NOT marking applied. submit_clicked stays "
+                      "set (no re-submit). Run verify to confirm.", file=sys.stderr)
+                emit_status(_T.STATUS_SUBMITTED_UNCERTAIN,
+                            f"uncertain outcome — {reason}. Not certified "
+                            "applied; verify to confirm.")
+                emit_next("verify", "confirm the submission was received — "
+                          "verify() certifies applied only on a real success signal")
                 return 0
 
             # LinkedIn Easy Apply: navigate to review/submit page
@@ -644,12 +651,16 @@ def cmd_submit(jid, confirm=False, force=False):
                               "regenerate form and resubmit (no --force needed)")
                     return 1
 
-                # uncertain — click succeeded, no validation errors, no success signal
-                # Mark as applied (conservative — prevents duplicate) but flag for review
-                print("  UNCERTAIN — marking as applied (conservative), flagging for review", file=sys.stderr)
-                mark_applied(jid)
-                emit_status(_T.OUTCOME_SUBMITTED, f"uncertain outcome — {reason}. Review recommended.")
-                emit_next("verify", "please verify this submission was received")
+                # uncertain — click succeeded, no validation errors, no success
+                # signal. #6: do NOT certify applied on an unknown outcome.
+                # submit_clicked stays set (no re-submit); verify() confirms.
+                print("  UNCERTAIN — NOT marking applied. submit_clicked stays "
+                      "set (no re-submit). Run verify to confirm.", file=sys.stderr)
+                emit_status(_T.STATUS_SUBMITTED_UNCERTAIN,
+                            f"uncertain outcome — {reason}. Not certified "
+                            "applied; verify to confirm.")
+                emit_next("verify", "confirm the submission was received — "
+                          "verify() certifies applied only on a real success signal")
                 return 0
 
             if not clicked:

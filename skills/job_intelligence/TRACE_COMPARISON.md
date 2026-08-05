@@ -92,12 +92,16 @@ vanishes. If the field is later rejected, the orchestrator can't tell "DOM lazy"
   OUTCOME: submitted — form gone, success text found
 STATUS: submitted
 ```
-or the uncertain case:
+or the uncertain case — **FIXED (#6)**:
 ```
   OUTCOME: uncertain — no success signal, form still present
-STATUS: submitted (uncertain outcome — Review recommended)
-NEXT: investigate
+STATUS: submitted_uncertain — Not certified applied; verify to confirm
+NEXT: verify
 ```
+The uncertain case used to `mark_applied(jid)` (certifying applied on an
+unknown outcome — the wrong-applied false-positive class, Mongo/Dialpad).
+Now it stays `tailored` (submit_clicked set, so nothing re-submits) and routes
+to `verify`, which certifies applied only on a real success signal.
 
 ### After C2/C1 — no change on this path
 

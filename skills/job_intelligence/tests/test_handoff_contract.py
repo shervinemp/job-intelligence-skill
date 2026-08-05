@@ -259,6 +259,35 @@ class SubmitHandoff(_HandoffDB):
         self.assertIn("validation", reason)
 
 
+class SubmitUncertainNotApplied(unittest.TestCase):
+    """#6 (wrong-applied false-positive): an UNCERTAIN submit outcome must NOT
+    certify the job applied. The old code called mark_applied on uncertain —
+    the Mongo/Dialpad class. Now it stays tailored, emits submitted_uncertain,
+    and routes to verify (which certifies on real success signals only)."""
+
+    def test_uncertain_does_not_call_mark_applied(self):
+        """Static guard: the uncertain branches of cmd_submit must not reach
+        mark_applied — only genuine-success and on-target already-applied do."""
+        import apply.act.submit as S
+        src = open(S.__file__, encoding="utf-8").read()
+        # the uncertain branches emit the fix-documenting message instead of
+        # certifying applied
+        self.assertIn("NOT marking applied", src)
+        self.assertEqual(src.count("STATUS_SUBMITTED_UNCERTAIN"), 2,
+                         "both uncertain branches must emit the distinct status")
+
+    def test_submitted_uncertain_term_exists(self):
+        from apply.common.terms import STATUS_SUBMITTED_UNCERTAIN
+        self.assertEqual(STATUS_SUBMITTED_UNCERTAIN, "submitted_uncertain")
+
+    def test_success_still_marks_applied(self):
+        """The fix must not over-correct: a genuine success still applies."""
+        import apply.act.submit as S
+        src = open(S.__file__, encoding="utf-8").read()
+        self.assertGreaterEqual(src.count("mark_applied"), 5,
+                                "genuine-success paths must still certify")
+
+
 class ActDispatcher(unittest.TestCase):
     """apply/act/__init__.py run() — the arg dispatcher that routes act
     subcommands. The --answers JSON parsing (orchestrator-supplied overrides)

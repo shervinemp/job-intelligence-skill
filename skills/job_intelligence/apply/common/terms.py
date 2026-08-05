@@ -45,6 +45,10 @@ STATUS_HOLD = "hold"
 STATUS_BLOCKED = "blocked"
 STATUS_CHECK_FAILED = "check_failed"
 STATUS_REGRESSION_GATE = "regression_gate"
+# #6: a submit click happened but the outcome is UNKNOWN — the job must NOT be
+# certified applied (that was the wrong-applied false-positive class). It stays
+# tailored; verify() confirms with real success signals and only THEN applies.
+STATUS_SUBMITTED_UNCERTAIN = "submitted_uncertain"
 STATUS_UNKNOWN = "unknown"
 
 # ── Shadow run outcomes (shadow log + worker outcome files) ───────────
