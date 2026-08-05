@@ -199,10 +199,10 @@ class AccountExists(unittest.TestCase):
              patch("lib.credentials.get_shared_passwords", return_value=["shared1"]), \
              patch("lib.credentials.save_creds") as save_mock, \
              patch("lib.credentials.pick_password_for_platform", return_value="genpw"), \
-             patch("apply.act.fill._check_account_created", return_value="exists"), \
-             patch("apply.act.fill._re_open_signin_form"), \
-             patch("apply.act.fill._fill_signin_form"), \
-             patch("apply.act.fill._login_check", return_value="yes"):
+             patch("apply.act.auth_flow.check_account_created", return_value="exists"), \
+             patch("apply.act.auth_flow.reopen_signin_form"), \
+             patch("apply.act.auth_flow.fill_signin_form"), \
+             patch("apply.act.auth_flow.login_check", return_value="yes"):
             self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "")
         save_mock.assert_called_once()
         self.assertEqual(save_mock.call_args[0][2], "genpw")
@@ -217,10 +217,10 @@ class AccountExists(unittest.TestCase):
              patch("lib.credentials.get_shared_passwords", return_value=[]), \
              patch("lib.credentials.save_creds"), \
              patch("lib.credentials.pick_password_for_platform", return_value="genpw"), \
-             patch("apply.act.fill._check_account_created", return_value="exists"), \
-             patch("apply.act.fill._re_open_signin_form"), \
-             patch("apply.act.fill._fill_signin_form"), \
-             patch("apply.act.fill._login_check", return_value="no"):
+             patch("apply.act.auth_flow.check_account_created", return_value="exists"), \
+             patch("apply.act.auth_flow.reopen_signin_form"), \
+             patch("apply.act.auth_flow.fill_signin_form"), \
+             patch("apply.act.auth_flow.login_check", return_value="no"):
             self.assertEqual(_handle_login_wall(self.page, "jid", quick=False),
                              "login_required")
 

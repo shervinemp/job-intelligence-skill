@@ -46,7 +46,7 @@ class LoginWallAutoLogin(unittest.TestCase):
         # These tests exercise the auto-login MECHANICS; the credential guard
         # (ADVERSARIAL #2-A) requires an approved domain — approve it here.
         self.approve_patch = patch(
-            "apply.act.fill._domain_approved", return_value=True)
+            "apply.act.auth_flow._domain_approved", return_value=True)
         self.approve_patch.start()
         self.addCleanup(self.approve_patch.stop)
 
@@ -57,8 +57,8 @@ class LoginWallAutoLogin(unittest.TestCase):
         creds = {"email": "a@b.com", "password": "pw1", "passwords": ["pw1"]}
         with patch("apply.common.registry.resolve", return_value=None), \
              patch("lib.credentials.get_creds", return_value=creds), \
-             patch("apply.act.fill._domain_approved", return_value=False), \
-             patch("apply.act.fill._fill_signin_form") as fill_mock:
+             patch("apply.act.auth_flow._domain_approved", return_value=False), \
+             patch("apply.act.auth_flow.fill_signin_form") as fill_mock:
             rc = _handle_login_wall(self.page, "jid", quick=False)
         fill_mock.assert_not_called()  # no password typed into an unapproved domain
         self.assertNotEqual(rc, "")
@@ -69,8 +69,8 @@ class LoginWallAutoLogin(unittest.TestCase):
         with patch("apply.common.registry.resolve", return_value=None), \
              patch("lib.credentials.get_creds", return_value=creds), \
              patch("lib.credentials.save_creds") as save_mock, \
-             patch("apply.act.fill._fill_signin_form"), \
-             patch("apply.act.fill._login_check", return_value="yes"):
+             patch("apply.act.auth_flow.fill_signin_form"), \
+             patch("apply.act.auth_flow.login_check", return_value="yes"):
             self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "")
         # primary password worked — nothing promoted
         save_mock.assert_not_called()
@@ -81,8 +81,8 @@ class LoginWallAutoLogin(unittest.TestCase):
         with patch("apply.common.registry.resolve", return_value=None), \
              patch("lib.credentials.get_creds", return_value=creds), \
              patch("lib.credentials.save_creds") as save_mock, \
-             patch("apply.act.fill._fill_signin_form"), \
-             patch("apply.act.fill._login_check", side_effect=["no", "yes"]):
+             patch("apply.act.auth_flow.fill_signin_form"), \
+             patch("apply.act.auth_flow.login_check", side_effect=["no", "yes"]):
             self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "")
         save_mock.assert_called_once()
         args = save_mock.call_args[0]
@@ -96,8 +96,8 @@ class LoginWallAutoLogin(unittest.TestCase):
         with patch("apply.common.registry.resolve", return_value=None), \
              patch("lib.credentials.get_creds", return_value=creds), \
              patch("lib.credentials.save_creds") as save_mock, \
-             patch("apply.act.fill._fill_signin_form") as fill_mock, \
-             patch("apply.act.fill._login_check", return_value="2fa"):
+             patch("apply.act.auth_flow.fill_signin_form") as fill_mock, \
+             patch("apply.act.auth_flow.login_check", return_value="2fa"):
             self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "2fa_required")
         fill_mock.assert_called_once()  # never tried the second password
         save_mock.assert_not_called()  # 2FA = credentials accepted, nothing promoted
@@ -107,9 +107,9 @@ class LoginWallAutoLogin(unittest.TestCase):
         creds = {"email": "a@b.com", "password": "pw1", "passwords": ["pw1", "pw2"]}
         with patch("apply.common.registry.resolve", return_value=None), \
              patch("lib.credentials.get_creds", return_value=creds), \
-             patch("apply.act.fill._fill_signin_form"), \
-             patch("apply.act.fill._login_check", return_value="no"), \
-             patch("apply.act.fill._re_open_signin_form"):
+             patch("apply.act.auth_flow.fill_signin_form"), \
+             patch("apply.act.auth_flow.login_check", return_value="no"), \
+             patch("apply.act.auth_flow.reopen_signin_form"):
             self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "login_failed")
 
 
@@ -126,7 +126,7 @@ class LoginWallCaptcha(unittest.TestCase):
         self.sleep_patch.start()
         self.addCleanup(self.sleep_patch.stop)
         self.approve_patch = patch(
-            "apply.act.fill._domain_approved", return_value=True)
+            "apply.act.auth_flow._domain_approved", return_value=True)
         self.approve_patch.start()
         self.addCleanup(self.approve_patch.stop)
 
@@ -136,8 +136,8 @@ class LoginWallCaptcha(unittest.TestCase):
         with patch("apply.common.registry.resolve", return_value=None), \
              patch("lib.credentials.get_creds", return_value=creds), \
              patch("lib.credentials.save_creds") as save_mock, \
-             patch("apply.act.fill._fill_signin_form"), \
-             patch("apply.act.fill._login_check", return_value="captcha"):
+             patch("apply.act.auth_flow.fill_signin_form"), \
+             patch("apply.act.auth_flow.login_check", return_value="captcha"):
             rc = _handle_login_wall(self.page, "jid", quick=False)
         self.assertEqual(rc, "captcha_required")
         save_mock.assert_not_called()  # never promote/save on a captcha-blocked login
@@ -148,8 +148,8 @@ class LoginWallCaptcha(unittest.TestCase):
         with patch("apply.common.registry.resolve", return_value=None), \
              patch("lib.credentials.get_creds", return_value=creds), \
              patch("lib.credentials.save_creds") as save_mock, \
-             patch("apply.act.fill._fill_signin_form"), \
-             patch("apply.act.fill._login_check",
+             patch("apply.act.auth_flow.fill_signin_form"), \
+             patch("apply.act.auth_flow.login_check",
                    side_effect=["uncertain", "captcha"]):
             rc = _handle_login_wall(self.page, "jid", quick=False)
         self.assertEqual(rc, "captcha_required")
@@ -243,6 +243,68 @@ class CaptchaDetectionExtra(unittest.TestCase):
             pol = load_policy()
         self.assertIn("captcha_skip_domains", pol)
         self.assertEqual(pol["captcha_skip_domains"], [])
+
+
+class PostLoginGates(unittest.TestCase):
+    """C1: post_login_gates is the sequential 2FA → captcha gate the fill loop
+    calls after sign-in. Each gate blocks independently (grilling item A/B:
+    two gates, not one verdict)."""
+
+    def test_2fa_blocks_before_captcha(self):
+        from apply.act.auth_flow import post_login_gates
+        page = MagicMock()
+        state = {}
+        prof = MagicMock()
+        prof.get.return_value = 2  # two_factor_signals truthy
+        with patch("apply.common.capabilities.scan", return_value=prof), \
+             patch("apply.common.page_helpers.handle_captcha") as hc, \
+             patch("apply.common.page_helpers.save_state") as ss:
+            blocked = post_login_gates(page, state, deadline=None)
+        self.assertTrue(blocked)
+        hc.assert_not_called()  # 2FA decided first
+        self.assertEqual(state["status"], "2fa_required")
+        ss.assert_called_once()
+
+    def test_captcha_blocks_when_no_2fa(self):
+        from apply.act.auth_flow import post_login_gates
+        page = MagicMock()
+        state = {}
+        prof = MagicMock()
+        prof.get.return_value = 0  # no 2FA
+        with patch("apply.common.capabilities.scan", return_value=prof), \
+             patch("apply.common.page_helpers.handle_captcha",
+                   return_value=True) as hc, \
+             patch("apply.common.page_helpers.save_state") as ss:
+            blocked = post_login_gates(page, state, deadline=None)
+        self.assertTrue(blocked)
+        hc.assert_called_once()
+        self.assertEqual(state["status"], "captcha_required")
+
+    def test_continues_when_neither_blocks(self):
+        from apply.act.auth_flow import post_login_gates
+        page = MagicMock()
+        state = {}
+        prof = MagicMock()
+        prof.get.return_value = 0
+        with patch("apply.common.capabilities.scan", return_value=prof), \
+             patch("apply.common.page_helpers.handle_captcha",
+                   return_value=False), \
+             patch("apply.common.page_helpers.save_state") as ss:
+            blocked = post_login_gates(page, state, deadline=None)
+        self.assertFalse(blocked)
+        ss.assert_not_called()
+
+    def test_scan_error_falls_through_to_captcha(self):
+        from apply.act.auth_flow import post_login_gates
+        page = MagicMock()
+        state = {}
+        with patch("apply.common.capabilities.scan",
+                   side_effect=Exception("boom")), \
+             patch("apply.common.page_helpers.handle_captcha",
+                   return_value=True), \
+             patch("apply.common.page_helpers.save_state"):
+            blocked = post_login_gates(page, state, deadline=None)
+        self.assertTrue(blocked)
 
 
 class LoginWallNoCreds(unittest.TestCase):
