@@ -4,6 +4,7 @@ import random, re, sys, time
 
 from lib.db import get_conn
 from lib.config import RESULTS_DIR
+from apply.common.domain_gate import is_approved as _domain_approved
 from apply.common import terms as _T
 from apply.common.output import emit_next, emit_status, emit_error, emit_fill_report
 from apply.common.page_helpers import load_state, save_state, handle_captcha, handle_session_timeout, tag_page
@@ -990,6 +991,23 @@ def _handle_login_wall(page, jid, quick):
 
     creds = get_creds(domain)
     if creds:
+        # ADVERSARIAL #2-A: never type a saved password into a login form on a
+        # domain we have NOT successfully authenticated before. A persuasive
+        # fake ATS (public host, real-looking sign-in form) would otherwise
+        # receive the user's real credentials. Reuses the F2 domain-approval
+        # gate: a domain must be approved (or have prior auth) before its
+        # password is typed.
+        try:
+            if not _domain_approved(domain):
+                print(f"  CRED_GUARD: '{domain}' has no prior successful auth — "
+                      f"refusing to type saved credentials. Approve it: "
+                      f"report.py domains approve {domain}", file=sys.stderr)
+                emit_status(_T.STATUS_LOGIN_REQUIRED,
+                            f"domain={domain} needs approval before credentials "
+                            "are used")
+                return _T.STATUS_LOGIN_REQUIRED
+        except Exception:
+            pass
         print(f"  Auto-login: {creds['email']} ({len(creds['passwords'])} password(s))", file=sys.stderr)
         try:
             # Accept cookie banners that can intercept clicks (Workday, etc.)

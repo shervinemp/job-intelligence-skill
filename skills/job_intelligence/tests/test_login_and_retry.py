@@ -42,6 +42,25 @@ class LoginWallAutoLogin(unittest.TestCase):
         self.sleep_patch = patch("apply.act.fill.time.sleep")
         self.sleep_patch.start()
         self.addCleanup(self.sleep_patch.stop)
+        # These tests exercise the auto-login MECHANICS; the credential guard
+        # (ADVERSARIAL #2-A) requires an approved domain — approve it here.
+        self.approve_patch = patch(
+            "apply.act.fill._domain_approved", return_value=True)
+        self.approve_patch.start()
+        self.addCleanup(self.approve_patch.stop)
+
+    def test_unapproved_domain_refuses_creds(self):
+        """The credential guard: an unapproved domain must NOT get a password
+        typed (persuasive-fake-ATS protection)."""
+        from apply.act.fill import _handle_login_wall
+        creds = {"email": "a@b.com", "password": "pw1", "passwords": ["pw1"]}
+        with patch("apply.common.registry.resolve", return_value=None), \
+             patch("lib.credentials.get_creds", return_value=creds), \
+             patch("apply.act.fill._domain_approved", return_value=False), \
+             patch("apply.act.fill._fill_signin_form") as fill_mock:
+            rc = _handle_login_wall(self.page, "jid", quick=False)
+        fill_mock.assert_not_called()  # no password typed into an unapproved domain
+        self.assertNotEqual(rc, "")
 
     def test_login_success_returns_empty(self):
         from apply.act.fill import _handle_login_wall
