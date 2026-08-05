@@ -1,8 +1,8 @@
 # Coverage baseline + handoff-testing strategy
 
 Measured 2026-08-05 with `coverage` 7.15.3 against the full suite
-(653 passed + 141 subtests — includes the handoff-contract tests below).
-Generated with:
+(662 passed + 141 subtests — includes the handoff-contract + report-round-trip
+tests). Generated with:
 
 ```
 coverage erase
@@ -12,9 +12,9 @@ coverage json -o <tmp>/covdata.json
 
 ## Baseline
 
-**Production coverage: 43.0%** (14,252 statements). Raised from 42.3% by the
-handoff-contract tests this pass — `detect.py` 12.5% → 75.0%, `submit.py`
-24.3% → 24.5%.
+**Production coverage: 44.1%** (14,252 statements). Raised from 42.3% across
+two passes: `detect.py` 12.5% → 75.0%, `submit.py` 24.3% → 24.5%,
+`lib/report.py` 15.1% → 27.3%, `lib/automation/diff.py` → 92.9%.
 
 | Module | Coverage | Why low |
 |--------|----------|---------|
@@ -80,6 +80,11 @@ Mock vs stub split:
    fill (`STATUS: filled` + `NEXT: check` + dossier fields), submit (outcome
    cascade → `STATUS: submitted`), detect (`TYPE:` + `NEXT:`), and the emit
    helpers' protocol-prefix quoting. **Added this pass (11 tests).**
+2. `test_report_roundtrip.py` — the dossier READERS consume what the WRITERS
+   emit: `report.py handoff|diff|audit` round-trip `handoff.json` +
+   `handoffs/` history + `apply_audit.jsonl`; DB-driven readers
+   (stats/candidates/applied-confirm) run against a temp schema DB.
+   **Added this pass (9 tests).**
 2. Extend to `report.py` handoff/diff/audit readers — assert they round-trip
    what the writers emit (the dossier is the truth the orchestrator reads).
 3. Live smoke (one real browser job) for the `(L)`-marked cases — these will
