@@ -112,6 +112,81 @@ class LoginWallAutoLogin(unittest.TestCase):
             self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "login_failed")
 
 
+class LoginWallCaptcha(unittest.TestCase):
+    """CAPTCHA on the auth form must surface as captcha_required — never
+    folded into the 'uncertain → assume OK' path that records a login (or
+    saves creds for an account) that never happened."""
+
+    def setUp(self):
+        self.page = MagicMock()
+        self.page.evaluate.return_value = dict(_LOGIN_JS_INFO)
+        self.page.url = "https://workday.example.com/job"
+        self.sleep_patch = patch("apply.act.fill.time.sleep")
+        self.sleep_patch.start()
+        self.addCleanup(self.sleep_patch.stop)
+        self.approve_patch = patch(
+            "apply.act.fill._domain_approved", return_value=True)
+        self.approve_patch.start()
+        self.addCleanup(self.approve_patch.stop)
+
+    def test_login_captcha_returns_captcha_required_and_never_promotes(self):
+        from apply.act.fill import _handle_login_wall
+        creds = {"email": "a@b.com", "password": "pw1", "passwords": ["pw1", "pw2"]}
+        with patch("apply.common.registry.resolve", return_value=None), \
+             patch("lib.credentials.get_creds", return_value=creds), \
+             patch("lib.credentials.save_creds") as save_mock, \
+             patch("apply.act.fill._fill_signin_form"), \
+             patch("apply.act.fill._login_check", return_value="captcha"):
+            rc = _handle_login_wall(self.page, "jid", quick=False)
+        self.assertEqual(rc, "captcha_required")
+        save_mock.assert_not_called()  # never promote/save on a captcha-blocked login
+
+    def test_uncertain_then_captcha_is_not_assumed_ok(self):
+        from apply.act.fill import _handle_login_wall
+        creds = {"email": "a@b.com", "password": "pw1", "passwords": ["pw1"]}
+        with patch("apply.common.registry.resolve", return_value=None), \
+             patch("lib.credentials.get_creds", return_value=creds), \
+             patch("lib.credentials.save_creds") as save_mock, \
+             patch("apply.act.fill._fill_signin_form"), \
+             patch("apply.act.fill._login_check",
+                   side_effect=["uncertain", "captcha"]):
+            rc = _handle_login_wall(self.page, "jid", quick=False)
+        self.assertEqual(rc, "captcha_required")
+        save_mock.assert_not_called()
+
+    def test_login_check_surfaces_captcha_when_widget_present(self):
+        """_login_check must translate an unresolved form + visible CAPTCHA
+        widget into 'captcha', not 'uncertain' (which callers treat as OK)."""
+        from apply.act.fill import _login_check
+        page = MagicMock()
+        page.evaluate.return_value = "uncertain"
+        with patch("apply.common.page_helpers.check_captcha",
+                   return_value=True):
+            self.assertEqual(_login_check(page), "captcha")
+        with patch("apply.common.page_helpers.check_captcha",
+                   return_value=False):
+            self.assertEqual(_login_check(page), "uncertain")
+
+    def test_check_account_created_surfaces_captcha(self):
+        from apply.act.fill import _check_account_created
+        page = MagicMock()
+        page.evaluate.return_value = "uncertain"
+        with patch("apply.common.page_helpers.check_captcha",
+                   return_value=True):
+            self.assertEqual(_check_account_created(page), "captcha")
+        with patch("apply.common.page_helpers.check_captcha",
+                   return_value=False):
+            self.assertEqual(_check_account_created(page), "uncertain")
+
+    def test_check_captcha_detects_recaptcha_iframe(self):
+        """The runtime CAPTCHA detector must match reCAPTCHA/hCaptcha widgets —
+        the probe-time detector already does, so the runtime must too."""
+        from apply.common.page_helpers import check_captcha
+        page = MagicMock()
+        page.evaluate.return_value = True  # widget present (visible)
+        self.assertTrue(check_captcha(page))
+
+
 class LoginWallNoCreds(unittest.TestCase):
     def test_login_required_when_no_creds(self):
         from apply.act.fill import _handle_login_wall

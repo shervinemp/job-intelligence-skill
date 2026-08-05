@@ -113,9 +113,22 @@ def page_text(page):
 
 def check_captcha(page):
     try:
+        # Visible CAPTCHA widgets. Cloudflare/Turnstile use challenge-stage /
+        # cf-* classes; reCAPTCHA uses iframe[src*="recaptcha"] + .g-recaptcha;
+        # hCaptcha uses iframe[src*="hcaptcha"] + .h-captcha. The probe-time
+        # detector (capabilities.py) already matches these — the runtime check
+        # must too, or the fill/submit loops never pause for a human solve and
+        # never record captcha_required.
         has_widget = page.evaluate("""() => {
-            const sel = 'iframe[src*="challenge"], [class*="cf-browser"], [id*="challenge"], [class*="challenge"], [class*="turnstile"]';
-            return !!document.querySelector(sel);
+            const sel = 'iframe[src*="challenge"], iframe[src*="recaptcha"], '
+                + 'iframe[src*="hcaptcha"], iframe[src*="captcha"], '
+                + '.g-recaptcha, .h-captcha, '
+                + '[class*="cf-browser"], [id*="challenge"], '
+                + '[class*="challenge"], [class*="turnstile"]';
+            for (const el of document.querySelectorAll(sel)) {
+                if (el.offsetParent !== null) return true;
+            }
+            return false;
         }""")
         if has_widget:
             return True

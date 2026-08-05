@@ -1084,10 +1084,32 @@ def _handle_login_wall(page, jid, quick):
                     emit_next("login",
                               f"domain={domain} jid={jid} — complete 2FA in Chrome then rerun fill")
                     return _T.STATUS_2FA_REQUIRED
+                if result == "captcha":
+                    # CAPTCHA blocking the auth form — must never be treated
+                    # as an uncertain-but-OK login. Record captcha_required
+                    # and hand off for a human solve.
+                    print(f"  LOGIN: CAPTCHA blocking auth at {domain} — "
+                          f"recording captcha_required", file=sys.stderr)
+                    emit_status(_T.STATUS_CAPTCHA_REQUIRED,
+                                f"domain={domain} login blocked by CAPTCHA")
+                    emit_next("login",
+                              f"domain={domain} jid={jid} — solve CAPTCHA in "
+                              "Chrome then rerun fill")
+                    return _T.STATUS_CAPTCHA_REQUIRED
                 if result == "uncertain":
                     # SPA may be slow — wait longer and re-check once.
                     time.sleep(5)
-                    if _login_check(page) in ("yes", "uncertain"):
+                    again = _login_check(page)
+                    if again == "captcha":
+                        print(f"  LOGIN: CAPTCHA blocking auth at {domain} — "
+                              f"recording captcha_required", file=sys.stderr)
+                        emit_status(_T.STATUS_CAPTCHA_REQUIRED,
+                                    f"domain={domain} login blocked by CAPTCHA")
+                        emit_next("login",
+                                  f"domain={domain} jid={jid} — solve CAPTCHA "
+                                  "in Chrome then rerun fill")
+                        return _T.STATUS_CAPTCHA_REQUIRED
+                    if again in ("yes", "uncertain"):
                         # If still uncertain, assume success (don't risk
                         # trying more passwords and locking the account).
                         print(f"  LOGIN: assuming OK (uncertain after extended wait) with password #{idx+1}", file=sys.stderr)
@@ -1186,6 +1208,19 @@ def _handle_login_wall(page, jid, quick):
             # Heuristic: Create Account form is gone (no createAccountSubmitButton
             # visible) AND no error text about password/email mismatch.
             create_result = _check_account_created(page)
+            if create_result == "captcha":
+                # Account-creation blocked by a CAPTCHA — do NOT save creds
+                # for an account that was never created (the old code folded
+                # this into 'uncertain' and wrote the password to disk).
+                print(f"  CREATE_CAPTCHA: account creation blocked by CAPTCHA "
+                      f"at {domain} — recording captcha_required",
+                      file=sys.stderr)
+                emit_status(_T.STATUS_CAPTCHA_REQUIRED,
+                            f"domain={domain} account creation blocked by CAPTCHA")
+                emit_next("login",
+                          f"domain={domain} jid={jid} — solve CAPTCHA in "
+                          "Chrome then rerun fill")
+                return _T.STATUS_CAPTCHA_REQUIRED
             if create_result in ("yes", "uncertain"):
                 save_creds(domain, defaults["email"], new_pw)
                 try:
@@ -1206,6 +1241,15 @@ def _handle_login_wall(page, jid, quick):
                     _fill_signin_form(page, defaults["email"], pw)
                     time.sleep(4)
                     r = _login_check(page)
+                    if r == "captcha":
+                        print(f"  LOGIN: CAPTCHA blocking auth at {domain} — "
+                              f"recording captcha_required", file=sys.stderr)
+                        emit_status(_T.STATUS_CAPTCHA_REQUIRED,
+                                    f"domain={domain} login blocked by CAPTCHA")
+                        emit_next("login",
+                                  f"domain={domain} jid={jid} — solve CAPTCHA "
+                                  "in Chrome then rerun fill")
+                        return _T.STATUS_CAPTCHA_REQUIRED
                     if r == "yes":
                         save_creds(domain, defaults["email"], pw)
                         print(f"  LOGIN: OK on existing account (password matched known pool)", file=sys.stderr)
@@ -1238,10 +1282,13 @@ def _handle_login_wall(page, jid, quick):
 def _check_account_created(page):
     """Heuristic: did account creation succeed?
 
-    Returns 'yes', 'no', 'exists', or 'uncertain' — same protocol as
-    _login_check. 'exists' means the email is already registered, so the
-    caller should attempt sign-in instead of create.
+    Returns 'yes', 'no', 'exists', 'captcha', or 'uncertain' — same protocol
+    as _login_check. 'exists' means the email is already registered, so the
+    caller should attempt sign-in instead of create. 'captcha' means a CAPTCHA
+    is blocking the create form — the caller must NOT treat it as 'uncertain'
+    (which saves creds for an account that was never created).
     """
+    from apply.common.page_helpers import check_captcha
     try:
         result = page.evaluate("""() => {
             const txt = (document.body.innerText || '').toLowerCase();
@@ -1267,7 +1314,12 @@ def _check_account_created(page):
             if (createVisible) return 'uncertain';
             return 'uncertain';
         }""")
-        return result or 'uncertain'
+        result = result or 'uncertain'
+        # CAPTCHA blocking the create form must surface as its own signal —
+        # the caller's uncertain path saves creds for a created account.
+        if result == "uncertain" and check_captcha(page):
+            return "captcha"
+        return result
     except Exception:
         return 'uncertain'
 
@@ -1339,9 +1391,13 @@ def _login_check(page):
       "2fa"      — login succeeded but 2FA code is now required.
                    Caller must NOT treat this as success — leave the
                    user at the 2FA prompt so they can complete it.
+      "captcha"  — a CAPTCHA is blocking the auth form. Caller must NOT
+                   treat the unresolved form as "uncertain" and assume
+                   OK (that would record a login that never happened).
       "uncertain"— form still visible, no error, no greeting — could be
                    slow SPA transition. Caller should wait and re-check.
     """
+    from apply.common.page_helpers import check_captcha
     try:
         result = page.evaluate(r"""() => {
             const txt = (document.body.innerText || '').toLowerCase();
@@ -1393,7 +1449,14 @@ def _login_check(page):
             // Sign-in form still visible — likely failed, but could be slow.
             return 'uncertain';
         }""")
-        return result or 'uncertain'
+        result = result or 'uncertain'
+        # A CAPTCHA on the auth form must never read as "uncertain" — the
+        # caller's uncertain path assumes OK and would record a login that
+        # never happened. Surface it explicitly so the caller records
+        # captcha_required instead.
+        if result == "uncertain" and check_captcha(page):
+            return "captcha"
+        return result
     except Exception:
         return 'uncertain'
 
