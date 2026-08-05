@@ -114,6 +114,17 @@ def _prior_outreach(conn, contact):
 
 def _block_if_prior(conn, contact, force):
     """Cross-job/duplicate-row one-shot gate shared by email/message/connect."""
+    # CURVEBALL C7: a person with NO identity key (no linkedin_url, no email)
+    # cannot be compared to prior contacts — the guard would silently let a
+    # name-only person be contacted twice. Surface that gap at the moment of
+    # send so the operator knows this send is unprotected, rather than
+    # silently proceeding as if the one-shot guard applied.
+    if not person_keys(contact):
+        print(f"BLANK_IDENTITY: {contact.get('name','')} has no email or "
+              f"LinkedIn URL — the cross-job one-shot guard CANNOT verify "
+              f"this person was never contacted on another job. Proceeding "
+              f"unverified.", file=sys.stderr)
+        return False
     prior = _prior_outreach(conn, contact)
     if prior and not force:
         print(f"ALREADY_REACHED: {contact.get('name','')} was already contacted "
@@ -674,10 +685,17 @@ def cmd_undo(jid, confirm=False):
     requires --confirm, and the people at risk are named first.
     """
     conn = get_conn()
+    # CURVEBALL C8: the at-risk set must cover flag-based sends too. A send
+    # confirmed via `update --set-sent` sets email_sent/message_sent WITHOUT
+    # creating a sent attempt row, so keying at_risk only on contact_attempts
+    # let undo silently disarm the cross-job guard for those people. Any
+    # contact with outreach evidence (attempt row OR send flag) requires
+    # --confirm, so the operator sees who loses their one-shot protection.
     at_risk = conn.execute(
         "SELECT DISTINCT c.name, c.linkedin_url, c.email FROM contacts c "
-        "JOIN contact_attempts a ON a.contact_id = c.id "
-        "WHERE c.job_id=? AND a.status IN ('sent','pending')",
+        "LEFT JOIN contact_attempts a ON a.contact_id = c.id "
+        "WHERE c.job_id=? AND (c.reached_out = 1 OR c.email_sent = 1 "
+        "     OR c.message_sent = 1 OR a.status IN ('sent','pending'))",
         (jid,),
     ).fetchall()
     if at_risk and not confirm:

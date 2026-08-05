@@ -54,19 +54,28 @@ state but shadow re-runs it from scratch (state is per-job, cleared). Handled.
 person+job is allowed (intended funnel). Cross-job repeats are blocked.
 Handled.
 
-### C7. Email after DM to the same person (cross-channel) — RISK
+### C7. Email after DM to the same person (cross-channel) — HARDENED
 `email_sent` and `message_sent` are independent per-channel guards. A person
 DM'd on job A could receive an email on job B — `_prior_outreach` blocks if the
 IDENTITY matches, but only if a contact row exists with a sent/pending attempt.
 If discovery on job B created a NEW row for the same person, `_prior_outreach`
 catches it. Handled IF both rows have identity; a person with only a name and no
-email/URL on job B is NOT blocked (blank identity = no key). This is the
-documented blank-identity gap — LOW.
+email/URL on job B is NOT blocked (blank identity = no key). Now surfaced:
+`_block_if_prior` prints `BLANK_IDENTITY` at send time whenever the contact has
+no identity key, so the operator knows the one-shot guard cannot verify this
+send (informational — never hard-blocks, since a name-only connect is
+legitimate). Pinned by test.
 
-### C8. `reach.py undo` disarms the cross-person guard — RISK
-`undo` (reach.py:695) resets `email_sent=0, message_sent=0` for the job — so a
-person previously contacted via that job can be re-contacted after undo, unless
-`--confirm` is enforced. The guard exists; the operator must confirm.
+### C8. `reach.py undo` disarms the cross-person guard — FIXED
+`undo` (reach.py) resets `email_sent=0, message_sent=0, reached_out=0` for the
+job — so a person previously contacted via that job can be re-contacted after
+undo, unless `--confirm` is enforced. The at-risk query previously keyed only
+on `contact_attempts` rows, so a send confirmed via `update --set-sent` (flag
+set, no attempt row) could be undone WITHOUT `--confirm`, silently disarming
+the guard. `cmd_undo` now treats ANY contact with outreach evidence (attempt
+row OR `email_sent`/`message_sent`/`reached_out` flag) as at-risk and requires
+`--confirm`, naming the people who lose their one-shot protection. Pinned by
+test.
 
 ## State-machine curveballs
 
@@ -82,4 +91,6 @@ Legal stages enforced; illegal stage raises.
 1. **C1 (the `--next` submit bypass)** — DONE. `--next` refuses submit-like
    buttons and routes to the gated `act --submit` path. Pinned by tests.
 2. **C2** — DONE. `cmd_next` refuses to click when `submit_clicked` is set.
-3. **C7/C8** — document the blank-identity and undo caveats; low severity.
+3. **C7/C8** — DONE. Blank-identity sends now surface `BLANK_IDENTITY`; `undo`
+   requires `--confirm` whenever ANY outreach evidence exists (attempt row or
+   send flag), closing the `update --set-sent` disarm gap.

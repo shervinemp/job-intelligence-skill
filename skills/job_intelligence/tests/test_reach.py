@@ -280,6 +280,30 @@ class CrossJobGuard(_TempDBMixin, unittest.TestCase):
         self.assertNotIn("REFUSED", err)
         self.assertIn("Undone", err)
 
+    def test_blank_identity_warns_but_does_not_block(self):
+        """CURVEBALL C7: a person with no email and no LinkedIn URL cannot be
+        compared against prior contacts — surface that gap at send time but do
+        not hard-block (a name-only connect is legitimate)."""
+        from reach import _block_if_prior, person_keys
+        blank = {"id": 99, "name": "No Keys", "linkedin_url": "", "email": ""}
+        self.assertEqual(person_keys(blank), set())
+        err = self._stderr_of(_block_if_prior, self.conn, blank, False)
+        self.assertIn("BLANK_IDENTITY", err)
+        self.assertNotIn("ALREADY_REACHED", err)
+
+    def test_undo_refuses_when_only_send_flag_set_no_attempt_row(self):
+        """CURVEBALL C8: `update --set-sent` records a send via the flag
+        WITHOUT an attempt row. Undo must treat that contact as at-risk too —
+        otherwise --confirm is skipped and the cross-job guard is disarmed
+        silently."""
+        self._contact("aaaaaaaaaaaaaaaa", reached=1)  # flag-only evidence
+        err = self._stderr_of(cmd_undo, "aaaaaaaaaaaaaaaa")
+        self.assertIn("REFUSED", err)
+        # evidence survived
+        still = self.conn.execute(
+            "SELECT COUNT(*) FROM contacts WHERE reached_out=1").fetchone()[0]
+        self.assertEqual(still, 1)
+
     def test_uncertain_pending_blocks_resend(self):
         """Unconfirmed send (status=pending) must never silently re-send."""
         cid = self._contact("aaaaaaaaaaaaaaaa")
