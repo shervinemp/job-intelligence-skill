@@ -222,9 +222,52 @@ class CanaryEnforcement(unittest.TestCase):
         lh.assert_called_once()
 
 
+class AlreadyAppliedTargetGuard(unittest.TestCase):
+    """UNRECOVERABLE guard: 'already-applied' text must be on the TARGET
+    posting, else it is a false positive that can never be corrected."""
+
+    def _page(self, url, text):
+        from unittest.mock import MagicMock
+        page = MagicMock()
+        page.url = url
+        page.frames = []
+        from apply.common.page_helpers import page_text
+        page.__class__.frame = None
+        # _all_text_sources calls _pt(page) -> page_text -> page.evaluate
+        page.evaluate.return_value = text
+        return page
+
+    def test_on_target_counts_as_success(self):
+        from apply.act.submit import _determine_outcome
+        from unittest.mock import MagicMock
+        page = MagicMock(); page.url = "https://x.com/jobs/view/123"
+        page.frames = []
+        page.evaluate.return_value = "You have already applied for this role."
+        outcome, reason = _determine_outcome(
+            page, MagicMock(), set(), "https://x.com/jobs/view/123",
+            "Apply", target_url="https://x.com/jobs/view/123")
+        self.assertEqual(outcome, "success")
+
+    def test_non_target_does_not_count(self):
+        from apply.act.submit import _determine_outcome
+        from unittest.mock import MagicMock, patch
+        # redirected to a DIFFERENT page that shows "already applied" — the
+        # already-applied text must NOT count; other success signals absent.
+        page = MagicMock(); page.url = "https://x.com/jobs/view/OTHER"
+        page.frames = []
+        page.evaluate.return_value = "You have already applied for this role."
+        with patch("apply.common.signals.has_success_text",
+                   return_value=False), \
+             patch("apply.act.submit._check_submit_success",
+                   return_value=(False, None)):
+            outcome, reason = _determine_outcome(
+                page, MagicMock(), set(), "https://x.com/jobs/view/123",
+                "Apply", target_url="https://x.com/jobs/view/123")
+        self.assertNotEqual(outcome, "success")
+
+
 class UnconfirmedQueue(unittest.TestCase):
     """Gap 9 — unconfirmed skips are cause-tagged and re-examined."""
-
     def test_worker_tags_unconfirmed_detail(self):
         # auto._no_apply_path_detail already tested; here the supervisor
         # side: a skip with the unconfirmed detail gets recheck=True.

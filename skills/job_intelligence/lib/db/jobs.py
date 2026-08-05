@@ -334,6 +334,15 @@ def failure_stats():
 
 
 def advance_job(jid, new_stage, **updates):
+    """Advance a job to a new stage. `state` updates are free-form (active /
+    rejected / failed); `stage` must be a legal pipeline stage, else the call
+    is refused so a buggy caller cannot wedge a job in an impossible state
+    (UNRECOVERABLE.md #7)."""
+    _LEGAL_STAGES = ("extracted", "described", "tailored", "applied")
+    if new_stage not in _LEGAL_STAGES:
+        raise ValueError(
+            f"advance_job: illegal stage {new_stage!r} — legal: "
+            f"{', '.join(_LEGAL_STAGES)}")
     conn = get_conn()
     sets = ["stage=?", "updated_at=?"]
     vals = [new_stage, datetime.now().isoformat()]

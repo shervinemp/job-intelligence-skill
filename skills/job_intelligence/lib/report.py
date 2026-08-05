@@ -1649,14 +1649,16 @@ def _applied_confirmed():
         return {}
 
 
-def cmd_applied(unconfirmed_only=False):
+def cmd_applied(unconfirmed_only=False, suspects_only=False):
     """G2 — post-submit confirmation surface. Applied jobs that still lack a
     post-submit confirmation (the submit was marked applied from signals but
     never verified against the portal/email). The orchestrator re-checks and
     confirms, or flags the submission as in-doubt.
 
-      report.py applied              list all applied
+      report.py applied                list all applied
       report.py applied --unconfirmed  list applied needing confirmation
+      report.py applied --suspects     list applied with NO applied_at
+                                        (the unrecoverable wrong-applied class)
     """
     import json, os
     from .config import STATE_DIR
@@ -1669,6 +1671,24 @@ def cmd_applied(unconfirmed_only=False):
         print("APPLIED: none", file=sys.stderr)
         return 0
     confirmed = _applied_confirmed()
+    # --suspects: applied with no applied_at — marked applied via a signal that
+    # never set the timestamp. This is the unrecoverable wrong-applied class:
+    # the job may not actually be applied, and there is no trace to trust.
+    if suspects_only:
+        suspects = [r for r in rows if not r["applied_at"]]
+        if not suspects:
+            print("APPLIED: no suspect applied rows (all have applied_at)",
+                  file=sys.stderr)
+            return 0
+        print(f"APPLIED SUSPECTS: {len(suspects)} applied with NO applied_at — "
+              f"verify the portal before trusting:", file=sys.stderr)
+        for r in suspects:
+            print(f"  {r['id'][:12]} {r['title'][:40] if r['title'] else ''} "
+                  f"@ {r['company'][:20] if r['company'] else ''}", file=sys.stderr)
+        print("  NEXT: open the posting, confirm applied or ji undo <jid>",
+              file=sys.stderr)
+        return 0
+    unconfirmed = [r for r in rows if r["id"] not in confirmed]
     unconfirmed = [r for r in rows if r["id"] not in confirmed]
     if unconfirmed_only:
         if not unconfirmed:
@@ -1915,7 +1935,8 @@ def main():
         rc = cmd_domains(action, args[1] if len(args) > 1 else "")
         sys.exit(rc or 0)
     elif cmd == "applied":
-        rc = cmd_applied(unconfirmed_only="--unconfirmed" in args)
+        rc = cmd_applied(unconfirmed_only="--unconfirmed" in args,
+                         suspects_only="--suspects" in args)
         sys.exit(rc or 0)
     elif cmd == "fleet-scan":
         rc = cmd_fleet_scan()

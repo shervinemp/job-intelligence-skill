@@ -22,7 +22,8 @@ from apply.act.helpers import (
 #   "uncertain"  — tried everything, could not determine confidently
 
 
-def _determine_outcome(page, ctx, pages_before, url_before, submit_text_before):
+def _determine_outcome(page, ctx, pages_before, url_before, submit_text_before,
+                       target_url=""):
     """Multi-step confidence cascade. Tries everything before giving up."""
     from apply.common.signals import has_success_text, has_already_applied_text
 
@@ -30,8 +31,20 @@ def _determine_outcome(page, ctx, pages_before, url_before, submit_text_before):
     for source, label in _all_text_sources(page):
         if has_success_text(source):
             return "success", f"success signal in {label}"
+        # UNRECOVERABLE guard: 'already-applied' text must be on the TARGET
+        # posting to count. A redirected/stale page showing it for a DIFFERENT
+        # job must not mark THIS job applied — that false positive can never
+        # be corrected (the job is already applied with no applied_at).
         if has_already_applied_text(source):
-            return "success", f"already-applied text in {label}"
+            _cur = (page.url or "").lower()
+            _tgt = (target_url or "").lower()
+            _on_target = bool(_cur and _tgt and
+                              (_cur.split("?")[0].rstrip("/")
+                               == _tgt.split("?")[0].rstrip("/")))
+            if _on_target:
+                return "success", f"already-applied text in {label} (on target)"
+            print(f"  WARN: 'already-applied' text on a non-target page "
+                  f"({_cur[:70]}) — NOT counting as success", file=sys.stderr)
 
     # 2. _check_submit_success (new pages, signals, iframes)
     success, _ = _check_submit_success(ctx, page, pages_before)
@@ -409,7 +422,7 @@ def cmd_submit(jid, confirm=False, force=False):
                 url_before = state.get("external_url") or state.get("url") or ""
                 submit_text_before = state.get("submit_text", "")
                 pages_before = {id(p) for p in ctx.pages}
-                outcome, reason = _determine_outcome(page, ctx, pages_before, url_before, submit_text_before)
+                outcome, reason = _determine_outcome(page, ctx, pages_before, url_before, submit_text_before, target_url=url)
                 print(f"  INVESTIGATE: {outcome} — {reason}", file=sys.stderr)
 
                 if outcome == "success":
@@ -583,7 +596,7 @@ def cmd_submit(jid, confirm=False, force=False):
                 outcome, reason = "uncertain", ""
                 for attempt in range(4):
                     outcome, reason = _determine_outcome(
-                        page, ctx, pages_before, url_before_click, submit_text_before)
+                        page, ctx, pages_before, url_before_click, submit_text_before, target_url=url)
                     if outcome != "uncertain":
                         break
                     if attempt < 3:
