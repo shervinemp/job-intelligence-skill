@@ -906,6 +906,28 @@ def _fill_one(page, field: dict, ans: str) -> tuple[bool, str]:
             return False, "no_selector"
         field["_sel"] = sel
 
+    # Hydration-race recovery (#b): a probe that ran before React/Next
+    # hydration finished captured a PLACEHOLDER id selector (`[id="«rn»"]`).
+    # By fill time the real ids exist and the placeholder selector resolves to
+    # nothing → no_filler. Re-resolve by label/name (which survive hydration)
+    # so the field actually fills instead of wedging the loop.
+    from apply.common.hydration import (is_hydration_stale_selector,
+                                        resolve_hydration_safe)
+    if is_hydration_stale_selector(sel):
+        try:
+            fresh = resolve_hydration_safe(page, field)
+            if fresh:
+                print(f"  HYDRATION: stale selector {sel[:40]} → {fresh[:60]} "
+                      f"(re-resolved after hydration)", file=sys.stderr)
+                field["_sel"] = fresh
+                field.setdefault("_diag", {})["hydration_recovered"] = True
+                sel = fresh
+            else:
+                field.setdefault("_diag", {})["reason"] = "hydration_stale"
+                return False, "hydration_stale"
+        except Exception:
+            pass
+
     fr = _frame_for_sel(page, sel) or page
     label = field.get("label", "")
     _host = ""

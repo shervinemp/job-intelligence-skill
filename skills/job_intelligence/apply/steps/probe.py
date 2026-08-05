@@ -4,7 +4,16 @@
 def resolve_selector(page, f):
     """Resolve a CSS selector for a field element."""
     if f.get("id"):
-        return f'[id="{f["id"]}"]'
+        # Hydration-race guard (#b): a placeholder id (`«rn»`, `«rq»`) is a
+        # pre-hydration React/Next marker that gets replaced after hydration.
+        # Using it as a selector resolves to nothing by fill time → no_filler
+        # wedges the loop. Skip it and fall through to name/label recovery.
+        from apply.common.hydration import is_placeholder_id
+        if is_placeholder_id(f["id"]):
+            f = dict(f)
+            f.pop("id", None)
+        else:
+            return f'[id="{f["id"]}"]'
     if f.get("name"):
         sel = f'[name="{f["name"]}"]'
         # Ambiguity hazard (bhvr pronouns: N checkboxes share one name):

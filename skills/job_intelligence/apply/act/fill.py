@@ -180,6 +180,19 @@ def _write_handoff(jid, url, filled_recs, failed_all, state,
 
     blockers = []
     status = state.get("status", "")
+    # (a) platform-scoped upload expectation: the probed page reported a file
+    # input (has_file_input) or a file-type field, but no upload was placed.
+    # A silently-missing required artifact must surface — the Acceldata run
+    # hid exactly this. Observed-DOM scoped, never a platform assumption.
+    if state.get("upload_expected") and not state.get("upload_placed"):
+        blockers.append({
+            "type": "upload_pending",
+            "needs": "resume/cover upload expected (page showed a file input) "
+                     "but none was placed — advance to the upload step and "
+                     "fill it",
+            "next": "apply.py act --next <jid>  then act --fill  (or upload "
+                    "manually in Chrome)",
+        })
     if status == _T.STATUS_LOGIN_REQUIRED:
         domain = ""
         try:
@@ -374,6 +387,13 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     def _expired():
         return deadline and time.time() > deadline
 
+    def _is_file_rec(rec):
+        """A fill record that placed a file (resume/cover upload)."""
+        lbl = (rec.get("label") or "").lower()
+        return (rec.get("type") == "file"
+                or any(k in lbl for k in ("resume", "cover", "upload", "attach",
+                                          " cv", " cv ")))
+
     def _abort_timed_out():
         if _expired():
             emit_status(_T.STATUS_TIMED_OUT, "job_timeout_sec exceeded — aborting (resumable)")
@@ -386,6 +406,9 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     filled_recs = []
     filled_keys = set()
     field_total = 0
+    # (a) upload expectation tracking — see the probe block below.
+    upload_expected = False
+    upload_placed = False
     submit_visible = False
 
     try:
@@ -618,6 +641,17 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                     state["external_url"] = page.url
                     url = page.url
                 fields = pr.fields or []
+                # (a) platform-scoped upload expectation: when the probed page
+                # OBSERVED a file input (or a required file field), the form
+                # expects a resume/cover upload. Track whether one was placed;
+                # surface upload_pending in the dossier if expected-but-missing
+                # (a silent missing required artifact is what the Acceldata
+                # run hid).
+                _file_fields = [f for f in fields if (f.get("type") or "").lower() == "file"]
+                if pr.has_file_input or pr.has_required_file or _file_fields:
+                    upload_expected = True
+                # a placed file field marks upload_done; cleared below when a
+                # field actually fills so `upload_placed` reflects reality
 
                 # ── History/education entry rows from resume.json ──
                 # Greenhouse-style forms render generic labels (Company
@@ -766,6 +800,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         filled_keys.add(rec["key"])
                         filled_all.append(rec["label"])
                         filled_recs.append(rec)
+                        if _is_file_rec(rec):
+                            upload_placed = True
                 for rec in failed:
                     k = rec.get("key") or _field_key(rec)
                     if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
@@ -840,6 +876,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
                         filled_keys.add(rec["key"])
                         filled_all.append(rec["label"])
                         filled_recs.append(rec)
+                        if _is_file_rec(rec):
+                            upload_placed = True
                 for rec in failed2:
                     k = rec.get("key") or _field_key(rec)
                     if k not in filled_keys and k not in {_field_key(r) for r in failed_all}:
@@ -871,6 +909,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
     except Exception as e:
         emit_error(f"Playwright fill failed: {e}")
         try:
+            state["upload_expected"] = upload_expected
+            state["upload_placed"] = upload_placed
             _write_handoff(jid, orig_url, filled_recs, failed_all, state,
                            mode="shadow" if os.environ.get("JI_APPLY_MODE") == "shadow" else "live",
                            error=str(e)[:200])
@@ -902,6 +942,8 @@ def cmd_fill(jid, answers: dict = None, verify: bool = True, max_pages: int = 4,
 
     # Hand the structured dossier to the orchestrator.
     try:
+        state["upload_expected"] = upload_expected
+        state["upload_placed"] = upload_placed
         _write_handoff(jid, orig_url, filled_recs, failed_all, state,
                        mode="shadow" if os.environ.get("JI_APPLY_MODE") == "shadow" else "live")
     except Exception:
