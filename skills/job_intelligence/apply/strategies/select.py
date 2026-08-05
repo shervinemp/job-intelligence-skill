@@ -1,7 +1,46 @@
 """Select element strategy with fallback chain."""
 import time
 
-METHOD_CHAIN = ["select_option", "dispatch", "native_setter", "js_click"]
+METHOD_CHAIN = ["select_option", "native_setter", "js_click"]
+
+
+def _set_native_by_index(el, final, country_words=None):
+    """Set a native <select> by OPTION INDEX from the authoritative
+    el.options list, bypassing any lazy-rendered/truncated visible list.
+
+    Playwright's select_option matches a passed string against option value
+    OR label; when the visible DOM is lazy (only a partial A-list rendered)
+    the label it must match may not be in the DOM, and when the option's
+    value attribute differs from its text (country selects: value='CA',
+    text='Canada (+1)') setting el.value=<text> selects nothing. el.options
+    is always complete for a native <select>, so match against it and assign
+    selectedIndex directly — the browser then makes it the active option
+    regardless of what the DOM has rendered. Returns the option's value on
+    success, None on failure."""
+    try:
+        opts = el.evaluate(
+            "el => Array.from(el.options).map(o => "
+            "{'value': o.value, 'text': (o.textContent || '').trim()})"
+        ) or []
+        if not opts:
+            return None
+        texts = [str(o["text"]) for o in opts]
+        match = _pick_option(texts, final, country_words=country_words)
+        if match is None:
+            return None
+        idx = next((i for i, o in enumerate(opts)
+                    if str(o["text"]) == match), None)
+        if idx is None:
+            return None
+        el.evaluate("""(args) => {
+            const el = args[0], idx = args[1];
+            el.selectedIndex = idx;
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+        }""", (el, idx))
+        return opts[idx]["value"]
+    except Exception:
+        return None
 
 
 def _country_words(f):
@@ -106,19 +145,13 @@ def try_select_tag(el, f, ans, method=None):
 
         if method is None or method == "select_option":
             el.select_option(final)
-        elif method == "dispatch":
-            el.select_option(final)
-            el.evaluate("""el => {
-                el.dispatchEvent(new Event('change', {bubbles: true}));
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-            }""")
         elif method == "native_setter":
-            el.evaluate("""(args) => {
-                const el = args[0], val = args[1];
-                el.value = val;
-                el.dispatchEvent(new Event('change', {bubbles: true}));
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-            }""", (el, final))
+            # CURVEBALL B: prefer selecting by option INDEX from el.options.
+            # The visible DOM can be lazy (partial A-list) and an option's
+            # value attribute often differs from its text, so setting
+            # el.value=<text> or matching labels in a truncated DOM fails.
+            # el.options is authoritative for native selects.
+            _set_native_by_index(el, final, cw)
         elif method == "js_click":
             el.evaluate("""(args) => {
                 const el = args[0], val = args[1];
@@ -127,7 +160,7 @@ def try_select_tag(el, f, ans, method=None):
                 if (!opt) opt = Array.from(el.options).find(o => o.text.toLowerCase().includes(vl));
                 if (!opt && vl.startsWith('+')) opt = Array.from(el.options).find(o => o.text.toLowerCase().includes('(' + vl + ')'));
                 if (opt) {
-                    el.value = opt.value;
+                    el.selectedIndex = opt.index;
                     el.dispatchEvent(new Event('change', {bubbles: true}));
                     el.dispatchEvent(new Event('input', {bubbles: true}));
                 }

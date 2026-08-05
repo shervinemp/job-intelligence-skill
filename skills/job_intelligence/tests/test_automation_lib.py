@@ -233,5 +233,98 @@ class LLMPolicyTest(unittest.TestCase):
         g.assert_called_once_with("option_pick")
 
 
+class FakeSelectEl:
+    """A minimal fake Playwright element modeling a native <select> where the
+    option VALUE differs from its TEXT (country pickers: value='CA',
+    text='Canada (+1)'). Records evaluate calls so tests can assert the
+    selection went through el.options + selectedIndex, not el.value=<text>."""
+
+    def __init__(self, options):
+        # options: list of (value, text)
+        self._options = [{"value": v, "text": t} for v, t in options]
+        self.selected_index = -1
+        self.value = ""
+        self.evaluate_calls = []
+
+    def evaluate(self, js, *args):
+        self.evaluate_calls.append(js)
+        if "'value': o.value" in js:
+            return [dict(o) for o in self._options]
+        if "selectedIndex = idx" in js:
+            idx = args[0][1]
+            self.selected_index = idx
+            self.value = self._options[idx]["value"]
+            return True
+        if "o.textContent.trim()" in js:
+            return [o["text"] for o in self._options]
+        if js.strip() == "el => el.value":
+            return self.value
+        if "selectedIndex = opt.index" in js:
+            opt_text = args[0][1]
+            for i, o in enumerate(self._options):
+                if o["text"] == opt_text or opt_text in o["text"]:
+                    self.selected_index = i
+                    self.value = o["value"]
+                    return True
+            return False
+        return None
+
+    def select_option(self, value):
+        for i, o in enumerate(self._options):
+            if o["value"] == value or o["text"] == value:
+                self.selected_index = i
+                self.value = o["value"]
+                return
+        raise Exception(f"no option {value!r}")
+
+
+class NativeSelectStrategy(unittest.TestCase):
+    """CURVEBALL B: the lazy native <select> success path. The visible DOM can
+    be truncated (partial A-list) and the option value differs from its text,
+    so the fix selects by INDEX from the authoritative el.options list."""
+
+    def _field(self, opts, ans, method=None, country="canada"):
+        from apply.strategies.select import try_select_tag
+        el = FakeSelectEl(opts)
+        f = {"tag": "SELECT", "options": [t for _, t in opts][:3],
+             "value": "", "_country": country}
+        ok = try_select_tag(el, f, ans, method=method)
+        return ok, el
+
+    def test_value_differs_from_text_selects_by_index(self):
+        """value='CA', text='Canada (+1)' — the option is the last one so a
+        truncated A-list DOM would not contain it; el.options must."""
+        opts = [("AF", "Afghanistan"), ("AL", "Albania"), ("CA", "Canada (+1)")]
+        ok, el = self._field(opts, "Canada", method="native_setter")
+        self.assertTrue(ok, "native_setter must succeed on index-based select")
+        self.assertEqual(el.selected_index, 2)
+        self.assertEqual(el.value, "CA")
+
+    def test_select_option_method_still_works(self):
+        opts = [("AF", "Afghanistan"), ("CA", "Canada (+1)")]
+        ok, el = self._field(opts, "Canada", method=None)
+        self.assertTrue(ok)
+        self.assertEqual(el.value, "CA")
+
+    def test_bare_code_known_country_not_loaded_is_no_match(self):
+        """Antigua guard: country known but not among loaded options must NOT
+        fall through to a bare-code pick (would select Antigua for +1)."""
+        from apply.strategies.select import _pick_option
+        opts = ["Algeria (+213)", "Angola (+244)"]  # Canada absent
+        self.assertIsNone(_pick_option(opts, "+1", country_words=["canada"]))
+
+    def test_bare_code_known_country_loaded_picks_country(self):
+        from apply.strategies.select import _pick_option
+        opts = ["Antigua and Barbuda (+1-268)", "Canada (+1)"]
+        self.assertEqual(_pick_option(opts, "+1", country_words=["canada"]),
+                         "Canada (+1)")
+
+    def test_no_country_falls_to_bare_code(self):
+        from apply.strategies.select import _pick_option
+        opts = ["Antigua and Barbuda (+1-268)"]
+        self.assertEqual(_pick_option(opts, "+1", country_words=[]),
+                         "Antigua and Barbuda (+1-268)")
+
+
 if __name__ == "__main__":
     unittest.main()

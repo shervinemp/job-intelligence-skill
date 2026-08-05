@@ -14,7 +14,7 @@ FAILURE_MAP. Every finding below was verified against the live code.
 
 ## Verified-OPEN finding (actionable)
 
-### A. Auto-login types saved passwords into an unauthenticated page
+### A. Auto-login types saved passwords into an unauthenticated page — FIXED
 `fill.py:991` `creds = get_creds(domain)` — `domain` is derived from the page
 URL, and auto-login then types the real password into whatever login form is
 present, switching to a "Sign In" form via heuristics (`fill.py:1011-1028`).
@@ -25,24 +25,24 @@ receive the user's real email + password. The domain-key lookup does not
 authenticate *which page* is receiving the credentials — it only keys on the
 host string.
 
-**Mitigation (proposed):** before typing any credential, verify the page is a
-genuine login for the credentialed domain:
-1. the current URL host must be an exact/subdomain match of the creds domain,
-2. the page must have a password input AND an email/username input (a real
-   sign-in form), not just a fake prompt,
-3. and — the key guard — if the ATS domain has NEVER been successfully
-   authenticated before (no prior logged-in session in the shared profile),
-   require explicit approval before typing the password (mirrors F2's
-   first-contact rule, extended to credentials).
+**Mitigation (applied):** a module-level `_domain_approved` guard
+(`apply/act/fill.py:1001`, backed by `apply/common/domain_gate.py`) refuses to
+type credentials into any domain that has not been explicitly approved
+(`report.py domains approve|deny`). Mirrors F2's first-contact rule, extended
+to credentials: a never-authenticated ATS domain gets no password typed until
+human approval. Committed as `96ee679`.
 
-### B. Lazy-loaded native `<select>` still can't reveal off-list options
+### B. Lazy-loaded native `<select>` still can't reveal off-list options — FIXED
 The phone-country field on CyberCoders: native `el.options` now has all 249,
-and the country-match works when Canada IS present. But a native `<select>` can
-have the *rendered* DOM truncated while `el.options` is complete — the read-back
-verified the selection, yet the field still shows rejected on that job. The
-remaining gap: native selects whose visible options are lazy — the success path
-needs a "select by exact option value from el.options" bypass of the visible
-list. (Safety half done; success half open.)
+and the country-match works when Canada IS present. The success path now
+selects by **option INDEX from the authoritative `el.options` list**
+(`apply/strategies/select.py` `_set_native_by_index`), bypassing the rendered
+visible list entirely — this handles both lazy/truncated DOMs and options whose
+`value` attribute differs from their text (country pickers: `value='CA'`,
+`text='Canada (+1)'`). `native_setter` and `js_click` both use the index path;
+`el.value=<text>` assignment is gone. Pinned by `NativeSelectStrategy` (5
+tests). The Antigua guard is preserved: a known-but-not-loaded country still
+returns no-match rather than falling to a bare-code pick.
 
 ### C. Low-severity residuals
 - **Gmail search query** (`stage_emails.py:44`) is `shlex.split` from `.env` —
