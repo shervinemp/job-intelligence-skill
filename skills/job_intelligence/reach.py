@@ -110,6 +110,18 @@ def _prior_outreach(conn, contact):
     return None
 
 
+def _default_message_body(name, title, company):
+    """Warm, human LinkedIn DM default — the same register as the curated
+    templates/linkedin_message.md. Short, relationship-first, one soft ask."""
+    return (
+        f"Hi {name},\n\n"
+        f"I saw {title} is open at {company} and just applied — it looks "
+        f"like a great fit for what I do. Would you be open to a quick chat "
+        f"sometime soon?\n\n"
+        f"Thanks,\nShervin"
+    )
+
+
 def _block_if_prior(conn, contact, force):
     """Cross-job/duplicate-row one-shot gate shared by email/message/connect."""
     # CURVEBALL C7: a person with NO identity key (no linkedin_url, no email)
@@ -410,12 +422,7 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
             print(f"Body file not found: {body_file}", file=sys.stderr)
             return
     else:
-        body_text = (
-            f"Hi {name},\n\n"
-            f"I recently came across the {title} role at {company} and "
-            f"wanted to learn more. Would you be open to a quick chat?\n\n"
-            f"Thanks!"
-        )
+        body_text = _default_message_body(name, title, company)
         print(f"DEFAULT_BODY: used template — provide --body or --body-file for custom message", file=sys.stderr)
 
     if dry_run:

@@ -22,6 +22,77 @@ from apply.act.helpers import (
 #   "uncertain"  — tried everything, could not determine confidently
 
 
+# ─── Re-fill before submit ───────────────────────────────────────────
+# LinkedIn Easy Apply (and similar SPAs) do NOT persist in-form values
+# across Chrome sessions: the profile resume/contact survive, but fields
+# filled in a prior `act --fill` session are gone when submit opens a fresh
+# session. Submitting a re-opened modal without re-filling would transmit
+# empty required fields (e.g. the location autocomplete). `cmd_submit`
+# therefore re-fills the open modal in the SAME session before navigating
+# to review/submit, reusing the stored fill answers from state.
+def _refill_for_submit(page, ctx, state, jid, profile, reg):
+    """Best-effort re-fill of the open LinkedIn Easy Apply modal. Returns
+    (filled_ok, refill_warns). Never raises — submit is the safety-critical
+    step and must not be blocked by a refill helper."""
+    try:
+        from apply.common.output import emit_diag
+        from apply.common.page_helpers import tag_page
+        from apply.common.resolve import _build_ephemeral
+        from apply.common.fill_runner import fill_page
+        from apply.act.helpers import _probe_form
+        import re as _re
+
+        tag_page(page, jid)
+        answers_override = dict(state.get("fill_answers") or {})
+        profile = profile or {}
+        filled_keys = set()
+        warns = []
+
+        def _probe_fields():
+            pr = _probe_form(page, reg, jid, allow_vision=False)
+            return pr.fields or []
+
+        # Probe the first page of the open modal.
+        fields = _probe_fields()
+        if not fields:
+            return False, ["no fields on open modal — cannot re-fill"]
+        pages = 0
+        seen = set()
+        while fields and pages < 12:
+            pages += 1
+            fp = tuple(sorted(f.get("label", "") for f in fields))
+            if fp in seen:
+                break
+            seen.add(fp)
+            filled, failed = fill_page(page, fields, profile,
+                                      answers_override=answers_override,
+                                      filled_keys=filled_keys)
+            for rec in filled:
+                if rec.get("key"):
+                    filled_keys.add(rec["key"])
+            if failed:
+                for r in failed[:5]:
+                    warns.append(f"{r.get('label', '?')} re-fill failed: "
+                                 f"{r.get('_why', '?')}")
+            # Advance to the next page / review.
+            try:
+                nxt = _find_next_button(page)
+                if not nxt:
+                    break
+                txt = (nxt.get("text") or "").lower()
+                if any(w in txt for w in ("submit", "send", "apply now")):
+                    break  # already at review/submit
+                if _click_action(page, nxt["text"]):
+                    time.sleep(2)
+            except Exception:
+                break
+            fields = _probe_fields()
+        return True, warns
+    except Exception as e:
+        return False, [f"re-fill error: {str(e)[:120]}"]
+
+
+
 def _determine_outcome(page, ctx, pages_before, url_before, submit_text_before,
                        target_url=""):
     """Multi-step confidence cascade. Tries everything before giving up."""
@@ -186,6 +257,7 @@ def _form_still_present(page):
 
 
 def cmd_submit(jid, confirm=False, force=False):
+    from apply.act.helpers import _host as _url_host
     db_row = get_conn().execute(
         "SELECT stage, state FROM jobs WHERE id=?", (jid,)
     ).fetchone()
@@ -235,7 +307,15 @@ def cmd_submit(jid, confirm=False, force=False):
     # skipping the one validation step and then claiming it passed is the
     # opposite of that.
     check_rc = 0
-    if not force:
+    _url_host_check = _url_host(url)
+    # LinkedIn Easy Apply does NOT persist form values across Chrome sessions:
+    # a pre-check in its own session always sees a fresh empty modal and
+    # false-errors on fields the fill DID set. For LinkedIn, the gate is the
+    # IN-SESSION re-fill + empty-required check below (submit runs against the
+    # re-filled modal in the same session). Non-LinkedIn platforms persist, so
+    # they keep the separate pre-check.
+    _linkedin_submit = _url_host_check and "linkedin.com" in (_url_host_check or "")
+    if not force and not _linkedin_submit:
         from apply.act.check import cmd_check
         print("  Pre-submit check...", file=sys.stderr)
         check_rc = cmd_check(jid)
@@ -409,9 +489,40 @@ def cmd_submit(jid, confirm=False, force=False):
                         print("  Easy Apply: modal opened", file=sys.stderr)
                         time.sleep(3)
 
+            # LinkedIn/SPA non-persistence: the modal in THIS session is a
+            # fresh form — the profile-linked resume/contact survive but the
+            # prior fill's field values do not. Re-fill before submit so we
+            # never transmit empty required fields.
+            if "linkedin.com" in (page.url or "").lower() and not force:
+                try:
+                    from apply.act.helpers import _load_profile
+                    _profile = _load_profile()
+                    _refilled, _rwarns = _refill_for_submit(
+                        page, ctx, state, jid, _profile, reg)
+                    if not _refilled:
+                        print(f"  RE_FILL: could not re-fill ({_rwarns[0] if _rwarns else '?'})",
+                              file=sys.stderr)
+                    else:
+                        print(f"  RE_FILL: modal re-filled for submit "
+                              f"({' '.join(_rwarns[:2]) if _rwarns else 'clean'})",
+                              file=sys.stderr)
+                except Exception as _rf:
+                    print(f"  RE_FILL_ERR: {str(_rf)[:120]}", file=sys.stderr)
+
             try:
                 empt = _empty_required(page)
                 if empt:
+                    # LinkedIn inline gate: the re-fill is the check. Empty
+                    # required fields after re-fill BLOCK submit — do not
+                    # transmit a form with missing required answers.
+                    if "linkedin.com" in (page.url or "").lower() and not force:
+                        emit_status(
+                            _T.STATUS_CHECK_FAILED,
+                            f"{empt} required field(s) still empty after "
+                            f"in-session re-fill — verify the form before submit")
+                        emit_next("check",
+                                  "review the modal and re-run submit (or --force)")
+                        return 1
                     print(f"  WARN: {empt} required field(s) still empty before submit", file=sys.stderr)
             except Exception as re_:
                 print(f"  Re-fill skipped: {re_}", file=sys.stderr)
