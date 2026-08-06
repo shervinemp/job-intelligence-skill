@@ -47,6 +47,114 @@ _LOGIN_JS = r"""() => {
 }"""
 
 
+def _try_complete_2fa_from_inbox(page, domain):
+    """Read the inbox for the security code the platform just sent and enter it.
+
+    Returns "yes" (2FA completed, logged in), "no" (could not complete), or
+    "skip" (no inbox reader / nothing attributable found — caller falls back
+    to manual handoff). Fail-closed: only a code extracted from an email
+    FROM the auth domain is entered; nothing guessed.
+    """
+    from lib.inbox import find_security_email
+    try:
+        found = find_security_email(domain, kind="code")
+    except Exception as e:
+        print(f"  INBOX_SKIP: {e}", file=sys.stderr)
+        return "skip"
+    if not found:
+        print(f"  INBOX_NO_CODE: no security-code email from {domain} found",
+              file=sys.stderr)
+        return "skip"
+    code = found.get("code")
+    print(f"  INBOX_CODE: found code for {domain} "
+          f"(from {found.get('from','?')})", file=sys.stderr)
+    if not code:
+        return "skip"
+    # Enter the code into the visible one-time-code input.
+    try:
+        entered = page.evaluate("""(code) => {
+            const inputs = document.querySelectorAll(
+                'input[autocomplete*="one-time-code" i],'
+                + 'input[inputmode="numeric"][maxlength],'
+                + 'input[type="tel"][maxlength]');
+            for (const inp of inputs) {
+                if (inp.offsetParent === null) continue;
+                inp.focus();
+                inp.value = code;
+                inp.dispatchEvent(new Event('input', {bubbles: true}));
+                inp.dispatchEvent(new Event('change', {bubbles: true}));
+                return true;
+            }
+            return false;
+        }""", code)
+        if not entered:
+            print(f"  INBOX_CODE_ENTER: no 2FA input visible — leaving for "
+                  f"manual completion", file=sys.stderr)
+            return "skip"
+        time.sleep(2)
+        # Submit the code (the button may be a numeric-verify submit).
+        try:
+            sb = page.locator(
+                'button[type="submit"], button:has-text("Verify"), '
+                'button:has-text("Confirm"), button:has-text("Submit")'
+            ).first
+            if sb.count() > 0 and sb.is_visible(timeout=2000):
+                sb.click(timeout=4000)
+        except Exception:
+            pass
+        time.sleep(5)
+        result = login_check(page)
+        if result == "yes":
+            print(f"  INBOX_CODE_OK: 2FA completed via inbox code", file=sys.stderr)
+            return "yes"
+        if result == "2fa":
+            print(f"  INBOX_CODE_RETRY: still a 2FA prompt after entering code "
+                  f"— leaving for manual completion", file=sys.stderr)
+            return "skip"
+        if result == "no":
+            print(f"  INBOX_CODE_REJECTED: code rejected — leaving for manual "
+                  f"completion", file=sys.stderr)
+            return "skip"
+        return "skip"
+    except Exception as e:
+        print(f"  INBOX_CODE_SKIP: {e}", file=sys.stderr)
+        return "skip"
+
+
+def _try_verify_account_from_inbox(page, domain):
+    """Read the inbox for the account-verification link the platform just sent
+    and click it (in a new tab). Returns True when a verification link was
+    found and opened; False otherwise.
+
+    The link is only opened when it attributes to the auth domain or a known
+    verify host — never an arbitrary email link.
+    """
+    from lib.inbox import find_security_email
+    try:
+        found = find_security_email(domain, kind="verify",
+                                    query_extra="subject:(verify OR confirm OR activate)")
+    except Exception as e:
+        print(f"  INBOX_VERIFY_SKIP: {e}", file=sys.stderr)
+        return False
+    if not found:
+        print(f"  INBOX_NO_VERIFY: no verification email from {domain} found",
+              file=sys.stderr)
+        return False
+    link = found.get("link")
+    if not link:
+        return False
+    print(f"  INBOX_VERIFY: opening verification link from "
+          f"{found.get('from','?')}", file=sys.stderr)
+    try:
+        page.goto(link, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(4)
+        print(f"  INBOX_VERIFY_OPENED: verification link opened", file=sys.stderr)
+        return True
+    except Exception as e:
+        print(f"  INBOX_VERIFY_FAIL: {e}", file=sys.stderr)
+        return False
+
+
 def handle_login_wall(page, jid, quick):
     """Detect login walls and auto-login or auto-create account.
 
@@ -175,12 +283,18 @@ def handle_login_wall(page, jid, quick):
                             save_creds(domain, creds["email"], tried_pw, passwords=remaining)
                         except Exception:
                             pass
-                    emit_status(_T.STATUS_2FA_REQUIRED,
-                                f"domain={domain} credentials accepted — "
-                                "complete 2FA manually then rerun")
-                    emit_next("login",
-                              f"domain={domain} jid={jid} — complete 2FA in Chrome then rerun fill")
-                    return _T.STATUS_2FA_REQUIRED
+                    # Try inbox completion first — a security code emailed
+                    # by the platform can be read and entered automatically.
+                    inbox = _try_complete_2fa_from_inbox(page, domain)
+                    if inbox == "yes":
+                        return ""
+                    if inbox == "skip":
+                        emit_status(_T.STATUS_2FA_REQUIRED,
+                                    f"domain={domain} credentials accepted — "
+                                    "complete 2FA manually then rerun")
+                        emit_next("login",
+                                  f"domain={domain} jid={jid} — complete 2FA in Chrome then rerun fill")
+                        return _T.STATUS_2FA_REQUIRED
                 if result == "captcha":
                     # CAPTCHA blocking the auth form — must never be treated
                     # as an uncertain-but-OK login. Record captcha_required
@@ -326,6 +440,10 @@ def handle_login_wall(page, jid, quick):
                 except Exception:
                     pass
                 print(f"  ACCOUNT_CREATED: {defaults['email']} @ {domain} — creds saved (also added to shared pool)", file=sys.stderr)
+                # Some platforms send a "verify your email" link after
+                # account creation. Try to complete it via the inbox so the
+                # account is fully usable — never blocks, best-effort.
+                _try_verify_account_from_inbox(page, domain)
                 return ""
             if create_result == "exists":
                 # Email already registered — try signing in with the
