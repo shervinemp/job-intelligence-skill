@@ -1750,6 +1750,65 @@ def cmd_fleet_scan():
     return 0
 
 
+def cmd_applied_confirm_batch():
+    """G2 for the whole unconfirmed LinkedIn backlog in ONE tracker visit.
+    Reads the Job Tracker 'Applied' list once, then matches every applied
+    LinkedIn job that is not yet confirmed. External-ATS jobs stay in the
+    unconfirmed surface (they need the email/portal + --manual)."""
+    from lib.db import get_conn
+    from lib import g2
+    rows = get_conn().execute(
+        "SELECT id, url, title, company FROM jobs WHERE stage='applied'").fetchall()
+    targets = []
+    for r in rows:
+        if g2.is_confirmed(r["id"]):
+            continue
+        host = ""
+        try:
+            from urllib.parse import urlparse as _up
+            host = (_up(r["url"] or "").netloc or "").lower().split(":")[0]
+        except Exception:
+            pass
+        if host and "linkedin.com" in host:
+            targets.append(r)
+    if not targets:
+        print("APPLIED: no unconfirmed LinkedIn applied jobs to check",
+              file=sys.stderr)
+        return 0
+
+    print(f"APPLIED: checking {len(targets)} unconfirmed LinkedIn jobs "
+          f"against the tracker (one visit)...", file=sys.stderr)
+    hay, detail = g2.tracker_applied_entries()
+    if not hay:
+        print(f"APPLIED: tracker unavailable — {detail}", file=sys.stderr)
+        return 1
+
+    confirmed = 0
+    for r in targets:
+        title = (r["title"] or "").strip()
+        company = (r["company"] or "").strip()
+        tlb = title.lower()
+        clb = company.lower()
+        hit = False
+        if tlb and tlb in hay:
+            hit = True
+            why = f"found '{title[:40]}'"
+        elif clb and clb in hay:
+            hit = True
+            why = f"found company '{company[:30]}'"
+        if hit:
+            if g2.record_confirmed(r["id"]):
+                confirmed += 1
+                print(f"  G2: confirmed {r['id'][:12]} — {why}",
+                      file=sys.stderr)
+        else:
+            print(f"  G2: NOT FOUND {r['id'][:12]} — '{title[:40]}'",
+                  file=sys.stderr)
+    print(f"APPLIED: batch done — {confirmed}/{len(targets)} confirmed",
+          file=sys.stderr)
+    return 0
+
+
 def cmd_applied_confirm(jid, manual=False):
     """G2 — record that a submission was confirmed against the portal/email.
     Accepts a full 16-hex jid or an unambiguous prefix.
@@ -1997,8 +2056,12 @@ def main():
         sys.exit(rc or 0)
     elif cmd == "applied-confirm":
         if not args:
-            print("Usage: report.py applied-confirm <jid> [--manual]", file=sys.stderr)
+            print("Usage: report.py applied-confirm <jid> [--manual] | --all",
+                  file=sys.stderr)
             sys.exit(1)
+        if args[0] == "--all":
+            rc = cmd_applied_confirm_batch()
+            sys.exit(rc or 0)
         manual = "--manual" in args
         rc = cmd_applied_confirm(args[0], manual=manual)
         sys.exit(rc or 0)

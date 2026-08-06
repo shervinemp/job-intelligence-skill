@@ -149,7 +149,7 @@ def _create_v3_tables():
             direction TEXT NOT NULL DEFAULT 'outbound' CHECK(direction IN ('outbound','inbound')),
             subject TEXT DEFAULT '',
             body TEXT DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','opened','replied')),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','opened','replied','backfilled')),
             message_id TEXT DEFAULT '',
             error TEXT DEFAULT '',
             sent_at TEXT,
@@ -272,6 +272,59 @@ def _migrate_schema():
         c.execute("ALTER TABLE jobs ADD COLUMN state TEXT NOT NULL DEFAULT 'active'")
     except sqlite3.OperationalError:
         pass
+    _migrate_contact_attempts_backfill(c)
+
+
+def _migrate_contact_attempts_backfill(c):
+    """Extend contact_attempts.status CHECK to allow 'backfilled'.
+
+    'backfilled' marks an attempt row reconciled from the REAL LinkedIn
+    inbox (reach.py threads --backfill) — outreach that happened outside the
+    pipeline's ledger and must feed the one-shot guards. SQLite cannot ALTER
+    a CHECK constraint, so rebuild the table, copying rows. Idempotent: the
+    rebuilt table's CHECK includes 'backfilled', so a second run finds no
+    'backfilled' in the source CHECK string and skips."""
+    try:
+        src = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='contact_attempts'").fetchone()
+        if not src:
+            return
+        if "'backfilled'" in (src["sql"] or ""):
+            return
+        c.execute("PRAGMA foreign_keys=OFF")
+        c.execute("ALTER TABLE contact_attempts RENAME TO contact_attempts_old")
+        c.execute("""
+            CREATE TABLE contact_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+                channel TEXT NOT NULL CHECK(channel IN ('email','linkedin_message','linkedin_connect')),
+                direction TEXT NOT NULL DEFAULT 'outbound' CHECK(direction IN ('outbound','inbound')),
+                subject TEXT DEFAULT '',
+                body TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','opened','replied','backfilled')),
+                message_id TEXT DEFAULT '',
+                error TEXT DEFAULT '',
+                sent_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        c.execute("""
+            INSERT INTO contact_attempts
+                (id, contact_id, channel, direction, subject, body, status,
+                 message_id, error, sent_at, created_at)
+            SELECT id, contact_id, channel, direction, subject, body, status,
+                   message_id, error, sent_at, created_at
+            FROM contact_attempts_old
+        """)
+        c.execute("DROP TABLE contact_attempts_old")
+        c.execute("PRAGMA foreign_keys=ON")
+        c.commit()
+    except Exception:
+        try:
+            c.execute("PRAGMA foreign_keys=ON")
+        except Exception:
+            pass
 
 
 _JOBS_COLS = (

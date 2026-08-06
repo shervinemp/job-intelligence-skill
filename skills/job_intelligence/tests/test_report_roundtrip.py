@@ -267,6 +267,69 @@ class DBDrivenReport(_ReportFixture):
         data = json.load(open(conf_path, encoding="utf-8"))
         self.assertIn("1000000000000001", data)
 
+    def test_applied_confirm_batch_confirms_matches(self):
+        """G2 batch: ONE tracker visit confirms every unconfirmed LinkedIn
+        applied job found there, and skips external-ATS jobs."""
+        import json
+        from lib.report import cmd_applied_confirm_batch
+        conn = self._seed()
+        # all three are LinkedIn applied; make #3 external to test the skip
+        conn.execute("UPDATE jobs SET stage='applied' WHERE id IN "
+                     "('1000000000000001','1000000000000002')")
+        conn.execute(
+            "UPDATE jobs SET url='https://icims.com/job/9', title='External',"
+            " company='ExtCo' WHERE id='1000000000000003'")
+        conn.commit()
+        conf_path = os.path.join(self._tmp, "applied_confirmations.json")
+        tracker_text = (
+            "saved jobs  applied  Role  Co  another posting "
+            "Senior Software Engineer at Acme"
+        ).lower()
+        with patch("lib.config.STATE_DIR", self._tmp), \
+             patch("lib.g2.tracker_applied_entries",
+                   return_value=(tracker_text, "tracker Applied list read")):
+            err = self._stderr(cmd_applied_confirm_batch)
+        self.assertIn("2/2", err)
+        data = json.load(open(conf_path, encoding="utf-8"))
+        self.assertIn("1000000000000001", data)
+        self.assertIn("1000000000000002", data)
+        self.assertNotIn("1000000000000003", data)
+
+    def test_applied_confirm_batch_skips_already_confirmed(self):
+        """G2 batch: a job already confirmed is not re-checked (idempotent)."""
+        import json
+        from lib.report import cmd_applied_confirm_batch
+        conn = self._seed()
+        conn.execute("UPDATE jobs SET stage='applied' WHERE id IN "
+                     "('1000000000000001','1000000000000002')")
+        conn.execute(
+            "UPDATE jobs SET url='https://icims.com/job/9', title='External',"
+            " company='ExtCo' WHERE id='1000000000000003'")
+        conn.commit()
+        conf_path = os.path.join(self._tmp, "applied_confirmations.json")
+        with patch("lib.config.STATE_DIR", self._tmp):
+            from lib import g2
+            g2.record_confirmed("1000000000000001")
+        with patch("lib.config.STATE_DIR", self._tmp), \
+             patch("lib.g2.tracker_applied_entries",
+                   return_value=("role co", "tracker Applied list read")):
+            err = self._stderr(cmd_applied_confirm_batch)
+        self.assertIn("1/1", err)  # only #2 still-unconfirmed LinkedIn; #1 skipped
+        data = json.load(open(conf_path, encoding="utf-8"))
+        self.assertEqual(sorted(data), ["1000000000000001", "1000000000000002"])
+
+    def test_applied_confirm_batch_tracker_unavailable(self):
+        """G2 batch: tracker unreachable → fail-closed, no confirmations."""
+        from lib.report import cmd_applied_confirm_batch
+        self._seed()
+        conf_path = os.path.join(self._tmp, "applied_confirmations.json")
+        with patch("lib.config.STATE_DIR", self._tmp), \
+             patch("lib.g2.tracker_applied_entries",
+                   return_value=("", "login wall")):
+            err = self._stderr(cmd_applied_confirm_batch)
+        self.assertIn("tracker unavailable", err)
+        self.assertFalse(os.path.exists(conf_path))
+
 
 class ObserveRoundTrip(_ReportFixture):
     """`report.py observe` — the LLM observation brief: dossier + regression

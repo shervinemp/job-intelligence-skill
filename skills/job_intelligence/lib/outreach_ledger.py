@@ -132,7 +132,7 @@ def outreach_at_risk(conn, jid):
         "SELECT DISTINCT c.name, c.linkedin_url, c.email FROM contacts c "
         "LEFT JOIN contact_attempts a ON a.contact_id = c.id "
         "WHERE c.job_id=? AND (c.reached_out = 1 OR c.email_sent = 1 "
-        "     OR c.message_sent = 1 OR a.status IN ('sent','pending'))",
+        "     OR c.message_sent = 1 OR a.status IN ('sent','pending','backfilled'))",
         (jid,),
     ).fetchall()
     return [dict(r) for r in rows]

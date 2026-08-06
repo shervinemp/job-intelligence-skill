@@ -64,7 +64,7 @@ class CommandSurface(unittest.TestCase):
         import reach as _reach
         documented = {
             "discover", "list", "email", "message", "connect", "update",
-            "attempts", "retry", "undo", "help",
+            "attempts", "retry", "undo", "threads", "help",
         }
         parser_src = _reach.main.__code__.co_consts
         # Cheap structural check: the module must expose a cmd_ for each.
@@ -478,6 +478,84 @@ class OutreachIsRecorded(_TempDBMixin, unittest.TestCase):
         self.assertEqual(len(self._rows("events")), 1)
         self.assertEqual(self._rows("contacts")[0]["email_sent"], 1)
 
+    def test_email_attaches_tailored_resume(self):
+        """Outreach email must attach the SAME per-job tailored resume PDF the
+        apply pipeline built — a generic profile attachment would mismatch the
+        submission. The send command carries --attach <resume.pdf>."""
+        from unittest import mock
+        import json as _json
+        self._contact(email="person@example.com")
+        resume = os.path.join(self._tmp, "Shervin_Naseri_Co_Role_Resume.pdf")
+        with open(resume, "wb") as f:
+            f.write(b"%PDF-1.4 fake")
+        fake = mock.Mock(returncode=0,
+                         stdout=_json.dumps({"status": "sent",
+                                             "message_id": "m1"}).encode(),
+                         stderr=b"")
+        with mock.patch.object(self.reach.subprocess, "run",
+                               return_value=fake) as run, \
+             mock.patch.object(self.reach, "_job_resume_pdf",
+                               return_value=resume):
+            err = self._stderr_of(self.reach.cmd_email, "aaaaaaaaaaaaaaaa", 1,
+                                  body="hi")
+        self.assertIn("EMAIL_SENT", err)
+        cmd = run.call_args.args[0]
+        self.assertIn("--attach", cmd)
+        self.assertIn(resume, cmd)
+
+    def test_email_dry_run_shows_attachment(self):
+        """The dry-run must surface the attachment decision so the operator
+        sees what would go out before any send."""
+        from unittest import mock
+        self._contact(email="person@example.com")
+        resume = os.path.join(self._tmp, "Shervin_Naseri_Co_Role_Resume.pdf")
+        with open(resume, "wb") as f:
+            f.write(b"%PDF-1.4 fake")
+        with mock.patch.object(self.reach, "_job_resume_pdf",
+                               return_value=resume):
+            err = self._stderr_of(self.reach.cmd_email, "aaaaaaaaaaaaaaaa", 1,
+                                  body="hi", dry_run=True)
+        self.assertIn("Attach: Shervin_Naseri_Co_Role_Resume.pdf", err)
+        self.assertIn("tailored resume", err)
+
+    def test_email_without_resume_warns_but_sends(self):
+        """No tailored PDF on disk must not block the email — it warns in the
+        dry-run and sends without --attach. A missing attachment is a weaker
+        outreach, not a reason to silently drop the whole message."""
+        from unittest import mock
+        import json as _json
+        self._contact(email="person@example.com")
+        fake = mock.Mock(returncode=0,
+                         stdout=_json.dumps({"status": "sent",
+                                             "message_id": "m1"}).encode(),
+                         stderr=b"")
+        with mock.patch.object(self.reach.subprocess, "run",
+                               return_value=fake) as run, \
+             mock.patch.object(self.reach, "_job_resume_pdf",
+                               return_value=None):
+            err = self._stderr_of(self.reach.cmd_email, "aaaaaaaaaaaaaaaa", 1,
+                                  body="hi")
+        self.assertIn("EMAIL_SENT", err)
+        cmd = run.call_args.args[0]
+        self.assertNotIn("--attach", cmd)
+
+    def test_message_dry_run_shows_attachment(self):
+        """LinkedIn DM dry-run surfaces the tailored-resume attachment decision
+        (DMs DO support .pdf attachments — verified against the live composer's
+        document file input) so the operator sees it before any send."""
+        from unittest import mock
+        self._contact(url="https://www.linkedin.com/in/test-person")
+        resume = os.path.join(self._tmp, "Shervin_Naseri_Co_Role_Resume.pdf")
+        with open(resume, "wb") as f:
+            f.write(b"%PDF-1.4 fake")
+        with mock.patch.object(self.reach, "_job_resume_pdf",
+                               return_value=resume):
+            err = self._stderr_of(self.reach.cmd_message, "aaaaaaaaaaaaaaaa", 1,
+                                  body="hi", dry_run=True)
+        self.assertIn("Attach: Shervin_Naseri_Co_Role_Resume.pdf", err)
+        self.assertIn("tailored resume", err)
+        self.assertNotIn("MESSAGE_SENT", err)
+
     def test_failed_email_still_records_the_attempt(self):
         """Failures must be recorded too — an unrecorded failure is
         indistinguishable from 'never tried' on the next run."""
@@ -503,6 +581,128 @@ class OutreachIsRecorded(_TempDBMixin, unittest.TestCase):
                         set_sent="message")
         self.assertEqual(self._rows("contact_attempts")[0]["status"], "sent")
         self.assertEqual(self._rows("contacts")[0]["message_sent"], 1)
+
+    def test_threads_backfill_records_existing_thread(self):
+        """cmd_threads --backfill records an existing inbox thread as a
+        backfilled attempt row so the one-shot guards see the truth — a
+        person messaged manually (or before the ledger existed) must not be
+        re-messaged as if new."""
+        from unittest import mock
+        cid = self._contact(url="https://www.linkedin.com/in/sina-akbarian")
+        fake_thread = {"exists": True, "checked": True,
+                       "last_message_time": "2:47 AM",
+                       "last_message_direction": "out",
+                       "preview": "Hi Sina, I saw the posting",
+                       "thread_url": "https://linkedin.com/messaging/thread/1"}
+        fake_ctx = mock.MagicMock()
+        with mock.patch.object(self.reach, "get_conn", return_value=self.conn), \
+             mock.patch("lib.chrome_manager.connect",
+                        return_value=(mock.MagicMock(), fake_ctx)), \
+             mock.patch("lib.linkedin_messaging.thread_status",
+                        return_value=fake_thread):
+            err = self._stderr_of(self.reach.cmd_threads, "aaaaaaaaaaaaaaaa",
+                                  backfill=True)
+        self.assertIn("THREAD EXISTS", err)
+        self.assertIn("backfilled", err)
+        rows = self._rows("contact_attempts")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "backfilled")
+        self.assertEqual(rows[0]["channel"], "linkedin_message")
+
+    def test_threads_backfill_is_idempotent(self):
+        """Re-running --backfill must not create duplicate rows."""
+        from unittest import mock
+        cid = self._contact(url="https://www.linkedin.com/in/sina-akbarian")
+        fake_thread = {"exists": True, "checked": True,
+                       "last_message_time": "2:47 AM",
+                       "last_message_direction": "out",
+                       "preview": "Hi Sina", "thread_url": "u"}
+        fake_ctx = mock.MagicMock()
+        with mock.patch.object(self.reach, "get_conn", return_value=self.conn), \
+             mock.patch("lib.chrome_manager.connect",
+                        return_value=(mock.MagicMock(), fake_ctx)), \
+             mock.patch("lib.linkedin_messaging.thread_status",
+                        return_value=fake_thread):
+            self._stderr_of(self.reach.cmd_threads, "aaaaaaaaaaaaaaaa",
+                            backfill=True)
+            self._stderr_of(self.reach.cmd_threads, "aaaaaaaaaaaaaaaa",
+                            backfill=True)
+        rows = self._rows("contact_attempts")
+        self.assertEqual(len(rows), 1)
+
+    def test_backfilled_thread_blocks_repeat_dm(self):
+        """A backfilled thread is prior-outreach evidence: the cross-job
+        guard must treat it like a sent/pending attempt so a person we
+        already have a thread with is not cold-messaged again."""
+        from unittest import mock
+        # contact on job A messaged manually (backfilled)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO jobs (id, url, title, company, stage, state, scripts) "
+            "VALUES ('bbbbbbbbbbbbbbbb', 'https://example.com/b', 'Role2', 'Co2', "
+            "'tailored', 'active', '[]')", ())
+        cur = self.conn.execute(
+            "INSERT INTO contacts (job_id, name, linkedin_url, source) "
+            "VALUES (?, 'Sina Akbarian', 'https://www.linkedin.com/in/sina-akbarian', 'team_search')",
+            ("bbbbbbbbbbbbbbbb",))
+        cid = cur.lastrowid
+        self.conn.execute(
+            "INSERT INTO contact_attempts (contact_id, channel, direction, status) "
+            "VALUES (?, 'linkedin_message', 'outbound', 'backfilled')", (cid,))
+        self.conn.commit()
+        # same person on job "aaaaaaaaaaaaaaaa" — DM must be blocked
+        self._contact(url="https://www.linkedin.com/in/sina-akbarian")
+        err = self._stderr_of(self.reach.cmd_message, "aaaaaaaaaaaaaaaa", 1,
+                              body="hi", dry_run=True)
+        self.assertIn("ALREADY_REACHED", err)
+        self.assertNotIn("MESSAGE_SENT", err)
+
+    def test_schema_migrates_backfilled_status(self):
+        """A pre-backfill DB (status CHECK without 'backfilled') must be
+        migrated in place so `threads --backfill` can write its rows."""
+        import lib.db.schema as schema
+        # Build a table with the OLD CHECK, exactly as an existing DB has it.
+        c = self.conn
+        c.execute("DROP TABLE IF EXISTS contact_attempts")
+        # seed a real contact so the FK is satisfied
+        self._contact(url="https://www.linkedin.com/in/test-person")
+        c.execute("""
+            CREATE TABLE contact_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+                channel TEXT NOT NULL CHECK(channel IN ('email','linkedin_message','linkedin_connect')),
+                direction TEXT NOT NULL DEFAULT 'outbound' CHECK(direction IN ('outbound','inbound')),
+                subject TEXT DEFAULT '',
+                body TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','opened','replied')),
+                message_id TEXT DEFAULT '',
+                error TEXT DEFAULT '',
+                sent_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        cid = c.execute("SELECT id FROM contacts WHERE name='Test Person'").fetchone()["id"]
+        c.execute("""
+            INSERT INTO contact_attempts (contact_id, channel, direction, status)
+            VALUES (?, 'linkedin_message', 'outbound', 'sent')
+        """, (cid,))
+        c.commit()
+        schema._migrate_contact_attempts_backfill(c)
+        src = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='contact_attempts'").fetchone()
+        self.assertIn("'backfilled'", src["sql"])
+        # data survived the rebuild
+        row = c.execute("SELECT status FROM contact_attempts").fetchone()
+        self.assertEqual(row["status"], "sent")
+        # and a backfilled row is now insertable
+        c.execute("""
+            INSERT INTO contact_attempts (contact_id, channel, direction, status)
+            VALUES (?, 'linkedin_message', 'outbound', 'backfilled')
+        """, (cid,))
+        c.commit()
+        self.assertEqual(
+            c.execute("SELECT COUNT(*) n FROM contact_attempts "
+                      "WHERE status='backfilled'").fetchone()["n"], 1)
 
 
 class OutreachLedger(_TempDBMixin, unittest.TestCase):

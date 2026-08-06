@@ -9,6 +9,7 @@ Usage:
   reach.py message <jid> [--contact N] [--dry-run] [--force] [--body <text>] [--body-file <path>]
   reach.py connect <jid> [--contact N] [--note <text>]
   reach.py update <jid> [--contact N] [--email <addr>] [--note <text>] [--set-sent email|message]
+  reach.py threads <jid> [--backfill]       Reconcile contacts against the REAL LinkedIn inbox
   reach.py attempts [<jid>]                 Show outreach attempts
   reach.py retry <jid>                       Retry failed contact discovery
   reach.py undo <jid> [--confirm]            Reset contact state (--confirm when already contacted)
@@ -47,6 +48,25 @@ def _sandbox_refused():
               "remove JI_TESTS from the environment to send.", file=sys.stderr)
         return True
     return False
+
+
+def _job_resume_pdf(jid):
+    """The tailored resume PDF for a job, if one exists on disk.
+
+    Outreach emails should attach the SAME resume the apply pipeline sent —
+    the per-job tailored artifact, not the generic profile. Returns None
+    when the job has no built PDF (the caller then sends with no attachment).
+    """
+    import glob
+    try:
+        from lib.config import RESULTS_DIR
+        rd = os.path.join(RESULTS_DIR, str(jid))
+        if not os.path.isdir(rd):
+            return None
+        pdfs = sorted(glob.glob(os.path.join(rd, "*_Resume.pdf")))
+        return pdfs[0] if pdfs else None
+    except Exception:
+        return None
 
 
 def person_keys(contact):
@@ -101,7 +121,7 @@ def _prior_outreach(conn, contact):
         "WHERE c.id != ? "
         "AND ((c.linkedin_url IS NOT NULL AND c.linkedin_url != '') "
         "     OR (c.email IS NOT NULL AND c.email != '')) "
-        "AND (c.reached_out = 1 OR a.status IN ('sent', 'pending')) "
+        "AND (c.reached_out = 1 OR a.status IN ('sent', 'pending', 'backfilled')) "
         "ORDER BY a.created_at DESC",
         (contact["id"],),
     ).fetchall()
@@ -230,8 +250,9 @@ def _template_vars(name, title, company, contact=None, job=None):
 
 def cmd_draft(jid, contact_idx=1, channel="message"):
     """Load the outreach template, fill {variables} from the job + contact,
-    and print the draft for review. No send, no browser — the orchestrator
-    reviews via --dry-run before any channel actually sends."""
+    reconcile against the REAL LinkedIn inbox (thread history), and print the
+    draft + evidence for the orchestrator to review. No send — the
+    orchestrator writes the final message with the evidence in view."""
     contacts = contact_list(job_id=jid)
     if not contacts:
         print(f"No contacts for {jid}. Run 'reach.py discover {jid}' first.", file=sys.stderr)
@@ -257,10 +278,14 @@ def cmd_draft(jid, contact_idx=1, channel="message"):
 
     # Strip the trailing VOICE SPEC (orchestrator guidance) — it is not the
     # message text. It stays in the file as the drafting anchor.
-    body = template
+    voice_spec = ""
     marker = "---\nVOICE SPEC"
-    if marker in body:
-        body = body.split(marker)[0].strip()
+    if marker in template:
+        head, _, spec = template.partition(marker)
+        body = head.strip()
+        voice_spec = spec.strip()
+    else:
+        body = template.strip()
 
     for k, v in _template_vars(name, title, company, contact=contact, job=job).items():
         body = body.replace("{" + k + "}", v or "")
@@ -269,11 +294,49 @@ def cmd_draft(jid, contact_idx=1, channel="message"):
     import re as _re
     body = _re.sub(r"\{[a-z_]+\}", "", body)
 
+    # Reconcile against the real inbox — the pipeline's ledger is NOT the
+    # history of the account. thread_status reads LinkedIn itself.
+    from lib import linkedin_messaging as _lm
+    from lib.outreach_llm import build_evidence
+    thread = None
+    try:
+        from lib.chrome_manager import connect as _connect
+        b, ctx = _connect(timeout=30)
+        if ctx:
+            thread = _lm.thread_status(ctx, name)
+            try:
+                b.close()
+            except Exception:
+                pass
+    except Exception as _e:
+        thread = None  # unchecked — the evidence line marks it UNKNOWN
+
+    resume_pdf = _job_resume_pdf(jid)
+    evidence = build_evidence(contact, job, thread=thread,
+                              resume_pdf=resume_pdf, channel=channel)
+
     print(f"DRAFT ({channel}): {name} @ {company}", file=sys.stderr)
     print(f"  From template: {tpl_name}", file=sys.stderr)
     print(f"  Voice spec at: {tpl_path} (review it — it is the tone anchor)", file=sys.stderr)
+    if thread is not None:
+        print(f"  THREAD: exists={thread.get('exists')}", file=sys.stderr)
+        if thread.get("exists"):
+            print(f"    last message {thread.get('last_message_time') or '?'} — "
+                  f"{'you sent' if thread.get('last_message_direction') == 'out' else 'they replied'}", file=sys.stderr)
+            print(f"    preview: {thread.get('preview') or '(none)'}", file=sys.stderr)
+    else:
+        print(f"  THREAD: UNKNOWN (inbox not reachable — the ledger is NOT "
+              f"the history)", file=sys.stderr)
+    if resume_pdf:
+        print(f"  Attach: {os.path.basename(resume_pdf)} (tailored resume)", file=sys.stderr)
+    else:
+        print(f"  Attach: NONE — no tailored resume PDF for {jid}", file=sys.stderr)
     print(body)
-    print(f"\nNEXT: review, then reach.py {channel} {jid} --contact {contact_idx} --body-file <this> --dry-run",
+    print(f"\nORCHESTRATOR BRIEF:", file=sys.stderr)
+    print(evidence, file=sys.stderr)
+    print(f"\nNEXT: adjust the draft for the evidence above (prior thread, "
+          f"relationship, resume), then reach.py {channel} {jid} "
+          f"--contact {contact_idx} --body-file <this> --dry-run",
           file=sys.stderr)
     return 0
 
@@ -384,8 +447,80 @@ def cmd_list(jid):
 
 
 # ---------------------------------------------------------------------------
-# Email
+# Threads / backfill
 # ---------------------------------------------------------------------------
+
+def cmd_threads(jid, backfill=False):
+    """Reconcile each contact of a job against the REAL LinkedIn inbox.
+
+    The ledger records only what the PIPELINE sent. A person messaged
+    manually (or from an earlier unrecorded run) leaves no DB trace — the
+    inbox is the authoritative history. `threads` surfaces that; `--backfill`
+    additionally records a `backfilled` attempt row per existing thread so
+    the one-shot guards and cross-job dedup see the truth."""
+    contacts = contact_list(job_id=jid)
+    if not contacts:
+        print(f"No contacts for {jid}. Run 'reach.py discover {jid}' first.", file=sys.stderr)
+        return 1
+    try:
+        from lib.chrome_manager import connect
+        b, ctx = connect(timeout=30)
+        if not ctx:
+            print("THREADS: no Chrome context — cannot read the inbox",
+                  file=sys.stderr)
+            return 1
+    except Exception as e:
+        print(f"THREADS: no Chrome context — cannot read the inbox ({str(e)[:80]})",
+              file=sys.stderr)
+        return 1
+
+    from lib import linkedin_messaging as _lm
+    conn = get_conn()
+    found = 0
+    try:
+        print(f"THREADS: {jid} — reconciling {len(contacts)} contacts against "
+              f"the real inbox...", file=sys.stderr)
+        for i, c in enumerate(contacts, 1):
+            name = c.get("name", "")
+            t = _lm.thread_status(ctx, name)
+            if t.get("exists"):
+                found += 1
+                print(f"  {i}. {name} — THREAD EXISTS, last "
+                      f"{t.get('last_message_time') or '?'} "
+                      f"({'you sent' if t.get('last_message_direction') == 'out' else 'they replied'})",
+                      file=sys.stderr)
+                print(f"     preview: {t.get('preview') or '(none)'}", file=sys.stderr)
+                if backfill:
+                    prior = conn.execute(
+                        "SELECT 1 FROM contact_attempts WHERE contact_id=? "
+                        "AND status='backfilled' LIMIT 1", (c["id"],)).fetchone()
+                    if not prior:
+                        conn.execute(
+                            "INSERT INTO contact_attempts (contact_id, channel, "
+                            "direction, subject, body, status, message_id, "
+                            "error, sent_at) "
+                            "VALUES (?,?,?,?,?,?,?,?,NULL)",
+                            (c["id"], "linkedin_message", "outbound",
+                             "reconciled from LinkedIn inbox",
+                             f"last {t.get('last_message_time') or '?'} — "
+                             f"{t.get('preview') or ''}"[:400],
+                             "backfilled", "", ""))
+                        conn.commit()
+                        print(f"     -> backfilled attempt row", file=sys.stderr)
+            else:
+                mark = "UNKNOWN (inbox not read)" if not t.get("checked") else "no thread"
+                print(f"  {i}. {name} — {mark}", file=sys.stderr)
+        print(f"THREADS: done — {found}/{len(contacts)} contacts have an "
+              f"existing thread", file=sys.stderr)
+        if found and not backfill:
+            print(f"  Re-run with --backfill to record these in the ledger so "
+                  f"the one-shot guards see them.", file=sys.stderr)
+        return 0
+    finally:
+        try:
+            b.close()
+        except Exception:
+            pass
 
 def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, force=False):
     contacts = contact_list(job_id=jid)
@@ -457,9 +592,17 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
         print(f"DEFAULT_BODY: used template — provide --body or --body-file for custom message", file=sys.stderr)
 
     if dry_run:
+        resume_pdf = _job_resume_pdf(jid)
         print(f"DRY_RUN: Would email {name} at {email_addr}", file=sys.stderr)
         print(f"  Subject: {subject}", file=sys.stderr)
         print(f"  {_voice_line('email')}", file=sys.stderr)
+        if resume_pdf:
+            print(f"  Attach: {os.path.basename(resume_pdf)} (tailored resume)",
+                  file=sys.stderr)
+        else:
+            print(f"  Attach: NONE — no tailored resume PDF for {jid} "
+                  f"(apply.py produces it during tailoring)",
+                  file=sys.stderr)
         _tone = _tone_check(body_text)
         if _tone:
             print(f"  TONE: {len(_tone)} note(s):", file=sys.stderr)
@@ -477,6 +620,9 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
         sys.executable, GMAIL_CLI, "send", email_addr, subject,
         "--body", body_text, "--json",
     ]
+    resume_pdf = _job_resume_pdf(jid)
+    if resume_pdf:
+        cmd += ["--attach", resume_pdf]
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=60)
         output = r.stdout.decode("utf-8", errors="replace")
@@ -530,7 +676,7 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
 # LinkedIn Message
 # ---------------------------------------------------------------------------
 
-def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, force=False):
+def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, force=False, no_attach=False):
     contacts = contact_list(job_id=jid)
     if not contacts:
         print(f"No contacts for {jid}. Run 'reach.py discover {jid}' first.", file=sys.stderr)
@@ -591,6 +737,14 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
         print(f"DRY_RUN: Would DM {name} on LinkedIn", file=sys.stderr)
         print(f"  To: {linkedin_url}", file=sys.stderr)
         print(f"  {_voice_line('message')}", file=sys.stderr)
+        resume_pdf = _job_resume_pdf(jid)
+        if resume_pdf:
+            print(f"  Attach: {os.path.basename(resume_pdf)} (tailored resume)",
+                  file=sys.stderr)
+        else:
+            print(f"  Attach: NONE — no tailored resume PDF for {jid} "
+                  f"(apply.py produces it during tailoring)",
+                  file=sys.stderr)
         _tone = _tone_check(body_text)
         if _tone:
             print(f"  TONE: {len(_tone)} note(s):", file=sys.stderr)
@@ -613,7 +767,9 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
         return
 
     try:
-        result = send_message(ctx, linkedin_url, body_text, name=name)
+        resume_pdf = None if no_attach else _job_resume_pdf(jid)
+        result = send_message(ctx, linkedin_url, body_text, name=name,
+                              attach=resume_pdf)
         from lib.outreach_ledger import record_outcome
         if result["status"] == "sent":
             conv_url = result.get("conversation_url", "")
@@ -906,6 +1062,8 @@ def main():
     msg_p.add_argument("--contact", type=int, default=1, help="Contact index from list (1-based)")
     msg_p.add_argument("--dry-run", action="store_true", help="Preview without sending")
     msg_p.add_argument("--force", action="store_true", help="Re-send even if already messaged")
+    msg_p.add_argument("--no-attach", action="store_true",
+                       help="Send WITHOUT the tailored resume attachment (default: attach)")
     body_group2 = msg_p.add_mutually_exclusive_group()
     body_group2.add_argument("--body", help="Message body text")
     body_group2.add_argument("--body-file", help="File containing message body")
@@ -927,6 +1085,11 @@ def main():
 
     attempts_p = sub.add_parser("attempts", help="Show outreach attempts")
     attempts_p.add_argument("jid", nargs="?", help="Job ID (optional filter)")
+
+    threads_p = sub.add_parser("threads", help="Reconcile contacts against the real LinkedIn inbox")
+    threads_p.add_argument("jid", help="Job ID")
+    threads_p.add_argument("--backfill", action="store_true",
+                           help="Record existing threads as backfilled attempt rows")
 
 
     retry_p = sub.add_parser("retry", help="Retry contact discovery for a job")
@@ -953,12 +1116,15 @@ def main():
         cmd_list(args.jid)
     elif args.command == "draft":
         cmd_draft(args.jid, contact_idx=args.contact, channel=args.channel)
+    elif args.command == "threads":
+        cmd_threads(args.jid, backfill=args.backfill)
     elif args.command == "email":
         cmd_email(args.jid, contact_idx=args.contact, dry_run=args.dry_run,
                   body=args.body, body_file=args.body_file, force=args.force)
     elif args.command == "message":
         cmd_message(args.jid, contact_idx=args.contact, dry_run=args.dry_run,
-                    body=args.body, body_file=args.body_file, force=args.force)
+                    body=args.body, body_file=args.body_file, force=args.force,
+                    no_attach=args.no_attach)
     elif args.command == "connect":
         cmd_connect(args.jid, contact_idx=args.contact, note=args.note,
                     force=args.force)

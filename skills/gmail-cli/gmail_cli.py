@@ -278,9 +278,23 @@ def _cmd_gmail_get(message_id):
 # Email send
 # ---------------------------------------------------------------------------
 
-def _build_mime(to, subject, body, cc=None, bcc=None):
+def _build_mime(to, subject, body, cc=None, bcc=None, attach=None):
     from email.mime.text import MIMEText
-    msg = MIMEText(body, "plain", "utf-8")
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.application import MIMEApplication
+    files = attach or []
+    if files:
+        msg = MIMEMultipart()
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        for fp in files:
+            with open(fp, "rb") as f:
+                part = MIMEApplication(f.read(), _subtype="pdf")
+            part.add_header(
+                "Content-Disposition", "attachment",
+                filename=os.path.basename(fp))
+            msg.attach(part)
+    else:
+        msg = MIMEText(body, "plain", "utf-8")
     msg["To"] = to
     msg["Subject"] = subject
     if cc:
@@ -291,9 +305,9 @@ def _build_mime(to, subject, body, cc=None, bcc=None):
     return {"raw": raw}
 
 
-def _cmd_email_send(to, subject, body, cc=None, bcc=None, email=None, json_out=False):
+def _cmd_email_send(to, subject, body, cc=None, bcc=None, email=None, json_out=False, attach=None):
     service = _get_send_service(email)
-    message = _build_mime(to, subject, body, cc, bcc)
+    message = _build_mime(to, subject, body, cc, bcc, attach=attach)
     try:
         sent = service.users().messages().send(userId="me", body=message).execute()
         msg_id = sent.get("id", "")
@@ -303,6 +317,8 @@ def _cmd_email_send(to, subject, body, cc=None, bcc=None, email=None, json_out=F
             print(f"Sent: {msg_id}")
             print(f"  To: {to}")
             print(f"  Subject: {subject}")
+            for fp in (attach or []):
+                print(f"  Attach: {os.path.basename(fp)}")
         return True
     except HttpError as e:
         err = str(e)
@@ -313,14 +329,14 @@ def _cmd_email_send(to, subject, body, cc=None, bcc=None, email=None, json_out=F
         return False
 
 
-def _cmd_email_send_file(to, subject, body_file, cc=None, bcc=None, email=None, json_out=False):
+def _cmd_email_send_file(to, subject, body_file, cc=None, bcc=None, email=None, json_out=False, attach=None):
     try:
         with open(body_file, "r", encoding="utf-8") as f:
             body = f.read()
     except FileNotFoundError:
         print(f"Body file not found: {body_file}", file=sys.stderr)
         sys.exit(1)
-    return _cmd_email_send(to, subject, body, cc=cc, bcc=bcc, email=email, json_out=json_out)
+    return _cmd_email_send(to, subject, body, cc=cc, bcc=bcc, email=email, json_out=json_out, attach=attach)
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +404,8 @@ def _build_parser():
     body_group.add_argument("--body-file", help="Path to file containing email body")
     email_subs.add_argument("--cc", help="CC recipient")
     email_subs.add_argument("--bcc", help="BCC recipient")
+    email_subs.add_argument("--attach", action="append", dest="attach",
+                           help="File to attach (repeatable, e.g. a resume PDF)")
     email_subs.add_argument("--account", "--email", dest="email", help="Sender email account")
     email_subs.add_argument("--json", "-j", action="store_true", dest="json_out", help="Output JSON")
 
@@ -426,9 +444,9 @@ def main():
                   "— unset JI_TESTS to send.", file=sys.stderr)
             raise SystemExit(3)
         if args.body:
-            _cmd_email_send(args.to, args.subject, args.body, cc=args.cc, bcc=args.bcc, email=args.email, json_out=args.json_out)
+            _cmd_email_send(args.to, args.subject, args.body, cc=args.cc, bcc=args.bcc, email=args.email, json_out=args.json_out, attach=args.attach)
         else:
-            _cmd_email_send_file(args.to, args.subject, args.body_file, cc=args.cc, bcc=args.bcc, email=args.email, json_out=args.json_out)
+            _cmd_email_send_file(args.to, args.subject, args.body_file, cc=args.cc, bcc=args.bcc, email=args.email, json_out=args.json_out, attach=args.attach)
     elif cmd in ("gmail", "mail", "email"):
         gc = args.gmail_command
         if gc in ("search", "find", "query", "ls", "list"):

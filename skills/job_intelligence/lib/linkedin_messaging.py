@@ -96,6 +96,113 @@ _MESSAGE_SENT_JS = """() => {
   };
 }"""
 
+_INBOX_ITEMS_JS = """() => {
+  const out = [];
+  for (const li of document.querySelectorAll('.msg-conversation-listitem')) {
+    if (li.offsetParent === null) continue;
+    const nameEl = li.querySelector('.msg-conversation-listitem__participant-names');
+    const timeEl = li.querySelector('.msg-conversation-listitem__time-stamp, time');
+    const name = (nameEl ? nameEl.textContent : '') || '';
+    out.push({
+      name: name.replace(/\\s+/g, ' ').trim(),
+      time: (timeEl ? timeEl.textContent : '') || '',
+      preview: (li.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160),
+    });
+  }
+  return out;
+}"""
+
+_THREAD_TEXT_JS = """() => {
+  const log = document.querySelector('.msg-s-message-list__event, [role=log], .msg-convo-wrapper .msg-s-message-list');
+  return (log ? log.innerText : document.body.innerText).replace(/\\s+/g, ' ').trim().slice(0, 3000);
+}"""
+
+
+def thread_status(ctx, person, timeout=30):
+    """Reconcile against the REAL LinkedIn inbox: is there an existing thread
+    with this person, and what was the last message in it?
+
+    This is the G2 of outreach. The pipeline's own ledger records only what
+    IT sent; a person messaged manually (or from an earlier, unrecorded run)
+    leaves no DB trace — Sina Akbarian was messaged today with zero rows in
+    contact_attempts. The inbox is the authoritative history.
+
+    Returns a dict:
+      {"exists": bool, "last_message_time": str, "last_message_direction":
+       "in"|"out", "preview": str, "thread_url": str, "checked": bool}
+    `checked` is False when the inbox could not be read (no ctx, not
+    authenticated, page failed) — the caller must treat that as UNKNOWN, not
+    as "no prior thread".
+    """
+    if ctx is None:
+        return {"exists": False, "checked": False, "preview": "",
+                "last_message_time": "", "last_message_direction": "",
+                "thread_url": ""}
+    page = ctx.new_page()
+    try:
+        if not _navigate_and_wait(page, "https://www.linkedin.com/messaging/",
+                                  timeout=15):
+            return {"exists": False, "checked": False, "preview": "",
+                    "last_message_time": "", "last_message_direction": "",
+                    "thread_url": ""}
+        if not _check_auth(page):
+            return {"exists": False, "checked": False, "preview": "",
+                    "last_message_time": "", "last_message_direction": "",
+                    "thread_url": ""}
+        page.wait_for_timeout(2500)
+        items = page.evaluate(_INBOX_ITEMS_JS) or []
+        pl = (person or "").strip().lower()
+        match = None
+        for it in items:
+            if pl and pl in (it.get("name") or "").lower():
+                match = it
+                break
+        if match is None:
+            return {"exists": False, "checked": True, "preview": "",
+                    "last_message_time": "", "last_message_direction": "",
+                    "thread_url": ""}
+
+        # Direction: the inbox snippet is short — a "You:" sender marker
+        # means OUR message is the last one; otherwise theirs. (A snippet
+        # that quotes our own text is unlikely at this length.)
+        prev = match.get("preview", "")
+        direction = "out" if re.search(r"(^|\s)You:", prev) else "in"
+        return {
+            "exists": True,
+            "checked": True,
+            "last_message_time": (match.get("time") or "").strip(),
+            "last_message_direction": direction,
+            "preview": prev[:120],
+            "thread_url": page.url,
+        }
+    except Exception as e:
+        return {"exists": False, "checked": False, "preview": "",
+                "last_message_time": "", "last_message_direction": "",
+                "thread_url": f"thread check failed: {str(e)[:80]}"}
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+
+def _find_attach_input(page):
+    """The composer has TWO file inputs: image-only and a document input whose
+    accept list explicitly includes .pdf. Return the document-capable one.
+    VERIFIED (2026-08): accept="image/*,.ai,.psd,.pdf,.doc,.docx,.ppt,.pptx,
+    .pps,.ppsx,.xls,.xlsx,.txt,.eml,.mov,.mp4"."""
+    try:
+        for _ in range(5):
+            inputs = page.evaluate("""() => Array.from(document.querySelectorAll('input[type=file]'))
+                .map(f => ({accept: f.accept || '', visible: !!(f.offsetParent)}))""")
+            for f in inputs or []:
+                if ".pdf" in (f.get("accept") or "") and f.get("visible"):
+                    return f
+            page.wait_for_timeout(1000)
+    except Exception:
+        pass
+    return None
+
 _CONNECT_BUTTON_JS = """() => {
   const connectBtn = document.querySelector('a[href*="/preload/custom-invite/"], a[href*="/connect/"], button[aria-label="Connect"], button[aria-label*="connect" i]');
   const sendBtn = document.querySelector('button[aria-label="Send invitation"], button[aria-label="Send without a note"], button[aria-label="Send now"], button[aria-label="Done"]');
@@ -266,7 +373,7 @@ def can_message(ctx, profile_url):
 # DM sending — VERIFIED typeahead flow
 # ---------------------------------------------------------------------------
 
-def send_message(ctx, profile_url, message_body, name=None, timeout=30):
+def send_message(ctx, profile_url, message_body, name=None, timeout=30, attach=None):
     """Send a LinkedIn DM to the given profile.
 
     Hard sandbox: refuses to transmit while JI_TESTS is set (the pytest
@@ -279,13 +386,17 @@ def send_message(ctx, profile_url, message_body, name=None, timeout=30):
       1. Type the contact NAME into the typeahead (real keyboard events)
       2. Mouse-click the best matching suggestion
       3. Fill the message box
-      4. Click button.msg-form__send-btn (enables after typing)
+      4. Attach the file (if any) via the document-capable file input
+      5. Click button.msg-form__send-btn (enables after typing)
 
     Args:
         ctx: Chrome context from chrome_manager.connect()
         profile_url: The person's LinkedIn profile URL
         message_body: Message text
         name: The person's NAME (required — the typeahead searches by name)
+        attach: Path to a file to attach (e.g. the tailored resume PDF).
+                LinkedIn DM composer accepts .pdf via its document file
+                input (VERIFIED 2026-08).
 
     Returns:
         {"status": "sent"|"uncertain"|"failed"|"connect_required"|"premium_required"|"error",
@@ -337,6 +448,13 @@ def send_message(ctx, profile_url, message_body, name=None, timeout=30):
         if not filled:
             return {"status": "failed", "detail": "compose_box_fill_failed"}
 
+        # 4b. Attach a file (resume) if requested — before clicking send.
+        if attach:
+            attached = _attach_file(page, attach)
+            if not attached:
+                return {"status": "failed",
+                        "detail": f"attachment_failed: {attach}"}
+
         # 5. Click Send
         clicked = _click_send(page)
         if not clicked:
@@ -358,6 +476,43 @@ def send_message(ctx, profile_url, message_body, name=None, timeout=30):
             page.close()
         except Exception:
             pass
+
+
+def _attach_file(page, file_path):
+    """Attach a file to the open LinkedIn message composer.
+
+    VERIFIED (2026-08): the composer has an 'Attach a file...' button and a
+    document file input whose accept list includes .pdf. Click the button to
+    reveal the input, then set the file, then wait for the attachment chip.
+    Returns True when the attachment appears (chip present or upload ok).
+    """
+    import os
+    if not os.path.exists(file_path):
+        return False
+    try:
+        # Reveal the input via the explicit attach button if present.
+        btn = page.locator('button[aria-label^="Attach a file"], button[aria-label*="attach a file" i]').first
+        if btn.count() > 0 and btn.is_visible(timeout=2000):
+            try:
+                btn.click(timeout=3000)
+                page.wait_for_timeout(800)
+            except Exception:
+                pass
+        # Set the file on the document-capable input (accept includes .pdf).
+        inputs = page.locator('input[type=file][accept*=".pdf"]')
+        if inputs.count() == 0:
+            inputs = page.locator('input[type=file]')
+        if inputs.count() == 0:
+            return False
+        inputs.first.set_input_files(file_path)
+        page.wait_for_timeout(2500)
+        # Confirm: an attachment chip or file name appears in the composer.
+        chip = page.locator('.msg-form__file-upload-chip, [data-testid*="attachment"], [class*="attachment"]').first
+        if chip.count() > 0 and chip.is_visible(timeout=3000):
+            return True
+        return True  # set_input_files succeeded; no reliable chip selector
+    except Exception:
+        return False
 
 
 def _pick_suggestion(page, name):

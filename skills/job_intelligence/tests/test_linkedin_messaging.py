@@ -135,6 +135,143 @@ class SendMessageRequiresName(unittest.TestCase):
         self.assertIn("name", sig.parameters)
         self.assertIsNone(sig.parameters["name"].default)
 
+    def test_send_message_accepts_attach(self):
+        import inspect
+        from lib.linkedin_messaging import send_message
+        sig = inspect.signature(send_message)
+        self.assertIn("attach", sig.parameters)
+
+
+class ThreadStatus(unittest.TestCase):
+    """thread_status reconciles against the REAL inbox — the pipeline ledger
+    is not the account's history (Sina Akbarian was messaged with zero DB
+    rows). It must distinguish a definitive 'no thread' from 'could not
+    check', and return the last-message evidence when a thread exists."""
+
+    def _page(self, items=None, authed=True, nav_ok=True):
+        from unittest.mock import MagicMock
+        page = MagicMock()
+        page.evaluate.return_value = items or []
+        page.wait_for_timeout.return_value = None
+        # simulate _navigate_and_wait + _check_auth via patched helpers
+        return page
+
+    def _ctx(self, page):
+        from unittest.mock import MagicMock
+        ctx = MagicMock()
+        ctx.new_page.return_value = page
+        return ctx
+
+    def test_finds_existing_thread_with_evidence(self):
+        from unittest.mock import patch
+        from lib.linkedin_messaging import thread_status
+        page = self._page([{"name": "Sina Akbarian", "time": "2:47 AM",
+                            "preview": "You: Hi Sina, I saw the posting"}])
+        with patch("lib.linkedin_messaging._navigate_and_wait", return_value=True), \
+             patch("lib.linkedin_messaging._check_auth", return_value=True):
+            t = thread_status(self._ctx(page), "Sina Akbarian")
+        self.assertTrue(t["exists"])
+        self.assertTrue(t["checked"])
+        self.assertEqual(t["last_message_time"], "2:47 AM")
+        self.assertEqual(t["last_message_direction"], "out")
+
+    def test_no_thread_is_definitive_when_checked(self):
+        from unittest.mock import patch
+        from lib.linkedin_messaging import thread_status
+        page = self._page([{"name": "Someone Else", "time": "Aug 3",
+                            "preview": "hi"}])
+        with patch("lib.linkedin_messaging._navigate_and_wait", return_value=True), \
+             patch("lib.linkedin_messaging._check_auth", return_value=True):
+            t = thread_status(self._ctx(page), "Sina Akbarian")
+        self.assertFalse(t["exists"])
+        self.assertTrue(t["checked"])
+
+    def test_unreachable_inbox_is_unknown_not_no_thread(self):
+        from unittest.mock import patch
+        from lib.linkedin_messaging import thread_status
+        page = self._page()
+        with patch("lib.linkedin_messaging._navigate_and_wait", return_value=False):
+            t = thread_status(self._ctx(page), "Sina Akbarian")
+        self.assertFalse(t["exists"])
+        self.assertFalse(t["checked"])  # NOT a definitive no
+
+    def test_no_ctx_is_unknown(self):
+        from lib.linkedin_messaging import thread_status
+        t = thread_status(None, "Sina Akbarian")
+        self.assertFalse(t["exists"])
+        self.assertFalse(t["checked"])
+
+
+class AttachFile(unittest.TestCase):
+    def test_attach_returns_false_for_missing_file(self):
+        from lib.linkedin_messaging import _attach_file
+        from unittest.mock import MagicMock
+        self.assertFalse(_attach_file(MagicMock(), "/nope/does/not/exist.pdf"))
+
+    def test_attach_uses_document_input(self):
+        import os
+        from unittest.mock import MagicMock
+        from lib.linkedin_messaging import _attach_file
+        fd, path = __import__("tempfile").mkstemp(suffix=".pdf")
+        os.write(fd, b"%PDF-1.4")
+        os.close(fd)
+        try:
+            page = MagicMock()
+            btn_first = MagicMock()
+            btn_first.count.return_value = 0
+            btn_box = MagicMock()
+            btn_box.first = btn_first
+            inputs = MagicMock()
+            inputs.count.return_value = 1
+            inputs.first.set_input_files = MagicMock()
+
+            def _locator(sel):
+                if sel.startswith('input[type=file]'):
+                    return inputs
+                return btn_box
+            page.locator.side_effect = _locator
+            self.assertTrue(_attach_file(page, path))
+            inputs.first.set_input_files.assert_called_once_with(path)
+        finally:
+            os.unlink(path)
+
+
+class OutreachLLM(unittest.TestCase):
+    def test_build_evidence_never_invents_relationship(self):
+        from lib.outreach_llm import build_evidence
+        ev = build_evidence(
+            {"name": "Keyvan K", "notes": ""},
+            {"company": "Co", "title": "Role"},
+            thread=None, resume_pdf=None, channel="message")
+        self.assertIn("Existing thread: UNKNOWN", ev)
+        self.assertNotIn("suggested", ev.lower())
+        self.assertNotIn("shared", ev.lower())
+
+    def test_build_evidence_includes_thread_when_present(self):
+        from lib.outreach_llm import build_evidence
+        ev = build_evidence(
+            {"name": "Sina A"},
+            {"company": "Lyft", "title": "ML Engineer"},
+            thread={"exists": True, "last_message_time": "2:47 AM",
+                    "last_message_direction": "out",
+                    "preview": "Hi Sina, I saw the posting"},
+            resume_pdf="/x/Resume.pdf", channel="message")
+        self.assertIn("Existing thread: YES", ev)
+        self.assertIn("last message: 2:47 AM", ev)
+        self.assertIn("you sent it", ev)
+        self.assertIn("Resume: attached", ev)
+
+    def test_compose_gated_in_auto_mode(self):
+        import os
+        os.environ["JI_LLM_MODE"] = "auto"
+        try:
+            from lib.outreach_llm import compose
+            body, detail = compose({"name": "X"}, {"company": "C", "title": "T"})
+            self.assertIsNone(body)
+            self.assertIn("orchestrator", detail.lower())
+        finally:
+            os.environ.pop("JI_LLM_MODE", None)
+
 
 if __name__ == "__main__":
     unittest.main()
