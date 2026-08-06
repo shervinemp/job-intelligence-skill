@@ -177,14 +177,48 @@ def _default_message_body(name, title, company):
 def _template_vars(name, title, company, contact=None, job=None):
     """The {variable} fill set for outreach templates. Relationship signals
     from the contact's notes (a referral, a mutual connection, a suggestion)
-    are surfaced here so the orchestrator can lead with them."""
+    are surfaced here so the orchestrator can lead with them. years_of_
+    experience and relevant_skills are derived from the profile, not hardcoded."""
+    from lib.config import PROFILE_PATH
+    profile = {}
+    try:
+        with open(PROFILE_PATH, encoding="utf-8") as f:
+            profile = json.load(f) or {}
+    except Exception:
+        pass
+
+    # Derive years of experience from the earliest work-history start date.
+    years_exp = ""
+    try:
+        starts = [w.get("startDate") for w in (profile.get("work_history") or [])
+                  if w.get("startDate")]
+        if starts:
+            import re as _re
+            yr = min(int(_re.match(r"(\d{4})", s).group(1)) for s in starts
+                     if _re.match(r"(\d{4})", s))
+            years_exp = str(max(0, 2026 - yr))
+    except Exception:
+        pass
+
+    skills = ""
+    try:
+        sk = profile.get("skills") or []
+        if isinstance(sk, list):
+            skills = ", ".join(str(s) for s in sk[:3])
+        elif isinstance(sk, str):
+            skills = sk[:60]
+    except Exception:
+        pass
+    if not skills:
+        skills = "machine learning"
+
     vars = {
         "contact_name": name or "",
         "job_title": title or "",
         "company": company or "",
         "my_name": "Shervin",
-        "years_of_experience": "",
-        "relevant_skills": "machine learning",
+        "years_of_experience": years_exp,
+        "relevant_skills": skills,
         "team_name": "",
     }
     if contact:
