@@ -501,13 +501,18 @@ def cmd_submit(jid, confirm=False, force=False):
             # LinkedIn/SPA non-persistence: the modal in THIS session is a
             # fresh form — the profile-linked resume/contact survive but the
             # prior fill's field values do not. Re-fill before submit so we
-            # never transmit empty required fields.
+            # never transmit empty required fields. FAIL-CLOSED: a re-fill
+            # that errors must abort the submit, not silently proceed — an
+            # unverified submit is exactly the blind-submit class the gates
+            # exist to stop.
             if "linkedin.com" in (page.url or "").lower() and not force:
                 try:
                     from apply.act.helpers import _load_profile
+                    from apply.common.registry import resolve as _resolve_reg
                     _profile = _load_profile()
+                    _reg = _resolve_reg(page.url or url or "")
                     _refilled, _rwarns = _refill_for_submit(
-                        page, ctx, state, jid, _profile, reg)
+                        page, ctx, state, jid, _profile, _reg)
                     if not _refilled:
                         print(f"  RE_FILL: could not re-fill ({_rwarns[0] if _rwarns else '?'})",
                               file=sys.stderr)
@@ -516,7 +521,12 @@ def cmd_submit(jid, confirm=False, force=False):
                               f"({' '.join(_rwarns[:2]) if _rwarns else 'clean'})",
                               file=sys.stderr)
                 except Exception as _rf:
-                    print(f"  RE_FILL_ERR: {str(_rf)[:120]}", file=sys.stderr)
+                    emit_status(
+                        _T.STATUS_CHECK_FAILED,
+                        f"re-fill failed ({str(_rf)[:80]}) — aborting submit. "
+                        f"Never transmit an unverified form.")
+                    emit_next("check", "inspect the modal and re-run submit")
+                    return 1
 
             try:
                 empt = _empty_required(page)

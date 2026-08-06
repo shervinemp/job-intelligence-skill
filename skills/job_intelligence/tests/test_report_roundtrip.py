@@ -191,9 +191,79 @@ class DBDrivenReport(_ReportFixture):
         from lib.report import cmd_applied_confirm
         self._seed()
         conf_path = os.path.join(self._tmp, "applied_confirmations.json")
-        with patch("lib.config.STATE_DIR", self._tmp):
+        with patch("lib.config.STATE_DIR", self._tmp), \
+             patch("lib.g2.linkedin_tracker_confirm",
+                   return_value=(True, "found")):
             err = self._stderr(cmd_applied_confirm, "1000000000000001")
         self.assertIn("APPLIED", err)
+        data = json.load(open(conf_path, encoding="utf-8"))
+        self.assertIn("1000000000000001", data)
+
+    def test_applied_confirm_linkedin_gate_fails_closed(self):
+        """G2 enforcement: a LinkedIn job whose tracker check comes back NOT
+        confirmed must NOT be marked confirmed — the flag must not be flipped
+        on the pipeline's own belief alone."""
+        import json
+        from lib.report import cmd_applied_confirm
+        self._seed()
+        conf_path = os.path.join(self._tmp, "applied_confirmations.json")
+        with patch("lib.config.STATE_DIR", self._tmp), \
+             patch("lib.g2.linkedin_tracker_confirm", return_value=(False, "not found")):
+            err = self._stderr(cmd_applied_confirm, "1000000000000001")
+        self.assertIn("NOT CONFIRMED", err)
+        self.assertFalse(os.path.exists(conf_path))
+
+    def test_applied_confirm_linkedin_gate_confirms_on_match(self):
+        """G2: a LinkedIn job confirmed present on the tracker IS recorded."""
+        import json
+        from lib.report import cmd_applied_confirm
+        self._seed()
+        conf_path = os.path.join(self._tmp, "applied_confirmations.json")
+        with patch("lib.config.STATE_DIR", self._tmp), \
+             patch("lib.g2.linkedin_tracker_confirm",
+                   return_value=(True, "found 'Role' in the Applied tracker")):
+            err = self._stderr(cmd_applied_confirm, "1000000000000001")
+        self.assertIn("G2 confirmed", err)
+        data = json.load(open(conf_path, encoding="utf-8"))
+        self.assertIn("1000000000000001", data)
+
+    def test_applied_confirm_manual_skips_gate(self):
+        """--manual records the confirmation without the tracker check
+        (external ATS where the operator verified via email/portal)."""
+        import json
+        from lib.report import cmd_applied_confirm
+        self._seed()
+        conf_path = os.path.join(self._tmp, "applied_confirmations.json")
+        with patch("lib.config.STATE_DIR", self._tmp), \
+             patch("lib.g2.linkedin_tracker_confirm") as g2m:
+            err = self._stderr(cmd_applied_confirm, "1000000000000001", True)
+        g2m.assert_not_called()
+        data = json.load(open(conf_path, encoding="utf-8"))
+        self.assertIn("1000000000000001", data)
+
+    def test_applied_confirm_non_linkedin_requires_manual(self):
+        """G2: a non-LinkedIn (external ATS) submission must NOT be confirmed
+        without --manual — there is no tracker check, so an auto-confirm would
+        be the blind-submit class again."""
+        import json
+        from lib.report import cmd_applied_confirm
+        from lib.db import get_conn
+        conn = self._seed()
+        # reseed one job with an external ATS URL
+        conn.execute(
+            "UPDATE jobs SET url=?, title='X', company='Y' WHERE id=?",
+            ("https://autodesk.wd1.myworkdayjobs.com/job/1", "1000000000000001"))
+        conn.commit()
+        conf_path = os.path.join(self._tmp, "applied_confirmations.json")
+        with patch("lib.config.STATE_DIR", self._tmp), \
+             patch("lib.g2.linkedin_tracker_confirm") as g2m:
+            err = self._stderr(cmd_applied_confirm, "1000000000000001")
+        g2m.assert_not_called()
+        self.assertIn("non-LinkedIn", err)
+        self.assertFalse(os.path.exists(conf_path))
+        # with --manual it records
+        with patch("lib.config.STATE_DIR", self._tmp):
+            err2 = self._stderr(cmd_applied_confirm, "1000000000000001", True)
         data = json.load(open(conf_path, encoding="utf-8"))
         self.assertIn("1000000000000001", data)
 

@@ -454,9 +454,10 @@ def main():
         return cmd_fetch()
     if cmd == "verify-applied":
         if not args:
-            print("Usage: ji verify-applied <jid>", file=sys.stderr)
+            print("Usage: ji verify-applied <jid> [--manual]", file=sys.stderr)
             return 1
-        return _run("report.py", "applied-confirm", args[0])
+        extra = ["--manual"] if "--manual" in args else []
+        return _run("report.py", "applied-confirm", args[0], *extra)
     if cmd == "applied":
         extra = ["--unconfirmed"] if "--unconfirmed" in args else []
         return _run("report.py", "applied", *extra)

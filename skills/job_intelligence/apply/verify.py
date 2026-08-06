@@ -74,6 +74,27 @@ def _vision_confirms(page, jid):
     return False
 
 
+def _g2_confirm(jid, url="", title="", company=""):
+    """Best-effort G2: after G1 marks a job applied, try the independent
+    tracker check. Success records the confirmation; failure leaves the job
+    in the applied/unconfirmed surface for the orchestrator to re-check.
+    Never raises — G2 is an enhancement, not a blocker on the verify path."""
+    try:
+        from lib import g2
+        if g2.is_confirmed(jid):
+            return True
+        ok, detail = g2.linkedin_tracker_confirm(
+            jid, url=url, title=title, company=company)
+        if ok:
+            g2.record_confirmed(jid)
+            print(f"  G2: {detail}", file=sys.stderr)
+            return True
+        print(f"  G2_pending: {detail}", file=sys.stderr)
+    except Exception as e:
+        print(f"  G2_skip: {str(e)[:120]}", file=sys.stderr)
+    return False
+
+
 def _playwright_verify(page, jid, state):
     """Run all 4 deterministic verification strategies on a Playwright page."""
     last_submit = state.get("_last_submit", "")
@@ -170,6 +191,10 @@ def run(jid):
                     page = p
                     break
             if page and _playwright_verify(page, jid, state):
+                _g2_confirm(jid,
+                            url=state.get("external_url") or state.get("url", ""),
+                            title=state.get("title", ""),
+                            company=state.get("company", ""))
                 return
             # Same-site redirect scan
             site = _registrable_domain(state.get("external_url", ""))
@@ -182,6 +207,10 @@ def run(jid):
                             mark_applied(jid)
                             emit_status("submitted (same-site redirect)")
                             emit_next("none")
+                            _g2_confirm(jid,
+                                        url=state.get("external_url") or state.get("url", ""),
+                                        title=state.get("title", ""),
+                                        company=state.get("company", ""))
                             return
                     except Exception:
                         pass
@@ -190,6 +219,10 @@ def run(jid):
                 mark_applied(jid)
                 emit_status("submitted (vision last-resort)")
                 emit_next("none")
+                _g2_confirm(jid,
+                            url=state.get("external_url") or state.get("url", ""),
+                            title=state.get("title", ""),
+                            company=state.get("company", ""))
                 return
     except Exception as e:
         print(f"  CHROME_VERIFY_SKIP: {e}", file=sys.stderr)

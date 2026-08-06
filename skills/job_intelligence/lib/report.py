@@ -1750,12 +1750,20 @@ def cmd_fleet_scan():
     return 0
 
 
-def cmd_applied_confirm(jid):
+def cmd_applied_confirm(jid, manual=False):
     """G2 — record that a submission was confirmed against the portal/email.
-    Accepts a full 16-hex jid or an unambiguous prefix."""
+    Accepts a full 16-hex jid or an unambiguous prefix.
+
+    For LinkedIn jobs this RUNS the independent tracker check first and only
+    records the confirmation when the posting is actually found there. An
+    unconfirmed submit must not be certified by flipping a flag — that is
+    exactly the blind-submit class G2 exists to stop. `--manual` records the
+    confirmation without the tracker check (for external ATS where the
+    operator verified via email/portal)."""
     import json, os
     from lib.config import atomic_write_json
     from lib.db import get_conn
+    from lib import g2
     full = jid
     if len(jid) < 16:
         rows = get_conn().execute(
@@ -1768,14 +1776,60 @@ def cmd_applied_confirm(jid):
                   f"({len(rows)} matches)", file=sys.stderr)
             return 1
     try:
-        d = _applied_confirmed()
-        d[full] = True
-        atomic_write_json(_applied_confirm_path(), d, indent=2)
-        print(f"APPLIED: confirmed {full}", file=sys.stderr)
-        return 0
-    except Exception as e:
-        print(f"APPLIED: could not confirm {jid}: {e}", file=sys.stderr)
+        row = get_conn().execute(
+            "SELECT url, title, company FROM jobs WHERE id=?", (full,)).fetchone()
+        url = row["url"] if row else ""
+        title = row["title"] if row else ""
+        company = row["company"] if row else ""
+    except Exception:
+        url = title = company = ""
+
+    host = ""
+    try:
+        from urllib.parse import urlparse as _up
+        host = (_up(url or "").netloc or "").lower().split(":")[0]
+    except Exception:
+        pass
+
+    if host and "linkedin.com" in host:
+        if manual:
+            # Operator verified via email/portal explicitly — record it.
+            if g2.record_confirmed(full):
+                print(f"APPLIED: confirmed {full} (manual)", file=sys.stderr)
+                return 0
+            print(f"APPLIED: could not confirm {jid}", file=sys.stderr)
+            return 1
+        ok, detail = g2.linkedin_tracker_confirm(
+            full, url=url, title=title, company=company)
+        if not ok:
+            print(f"APPLIED: G2 NOT CONFIRMED — {detail}", file=sys.stderr)
+            print(f"  Do NOT mark this submission confirmed on the tracker "
+                  f"check alone.", file=sys.stderr)
+            print(f"  Re-run the tracker check, or confirm via email/portal "
+                  f"and use --manual.", file=sys.stderr)
+            return 1
+        print(f"APPLIED: G2 confirmed — {detail}", file=sys.stderr)
+        if g2.record_confirmed(full):
+            print(f"APPLIED: confirmed {full}", file=sys.stderr)
+            return 0
+        print(f"APPLIED: could not confirm {jid}", file=sys.stderr)
         return 1
+
+    # Non-LinkedIn (external ATS: Oracle, Workday, Greenhouse...): G2 is the
+    # confirmation email/portal. Require --manual — a silent auto-confirm here
+    # would be the blind-submit class again (no independent check ran).
+    if not manual:
+        print(f"APPLIED: {jid} is a non-LinkedIn submission — G2 confirmation "
+              f"must come from the email/portal, not a flag.", file=sys.stderr)
+        print(f"  Check the confirmation email or the ATS application status, "
+              f"then re-run with --manual.", file=sys.stderr)
+        return 1
+
+    if g2.record_confirmed(full):
+        print(f"APPLIED: confirmed {full} (manual)", file=sys.stderr)
+        return 0
+    print(f"APPLIED: could not confirm {jid}", file=sys.stderr)
+    return 1
 
 
 def cmd_widget_draft(artifact_path=None):
@@ -1943,9 +1997,10 @@ def main():
         sys.exit(rc or 0)
     elif cmd == "applied-confirm":
         if not args:
-            print("Usage: report.py applied-confirm <jid>", file=sys.stderr)
+            print("Usage: report.py applied-confirm <jid> [--manual]", file=sys.stderr)
             sys.exit(1)
-        rc = cmd_applied_confirm(args[0])
+        manual = "--manual" in args
+        rc = cmd_applied_confirm(args[0], manual=manual)
         sys.exit(rc or 0)
     elif cmd == "adjudicate":
         # adjudicate                       -> show the sample
