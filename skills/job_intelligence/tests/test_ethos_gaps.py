@@ -222,6 +222,108 @@ class CanaryEnforcement(unittest.TestCase):
         lh.assert_called_once()
 
 
+class RefillGate(unittest.TestCase):
+    """The re-fill contract must NOT claim success while a REQUIRED field
+    failed — that is the blind-submit class (required fields went out as
+    blanks because the refill reported a warning, not a failure)."""
+
+    def _page(self):
+        from unittest.mock import MagicMock
+        page = MagicMock()
+        page.url = "https://www.linkedin.com/jobs/view/1"
+        page.frames = []
+        return page
+
+    def _refill_page(self, eval_result, url="https://www.linkedin.com/jobs/view/1"):
+        from unittest.mock import MagicMock
+        page = MagicMock()
+        page.url = url
+        page.frames = []
+        page.evaluate.return_value = eval_result
+        loc = MagicMock()
+        loc.count.return_value = 0
+        loc.first.count.return_value = 0
+        page.locator.return_value = loc
+        page.goto.return_value = None
+        page.wait_for_timeout.return_value = None
+        page.close.return_value = None
+        return page
+
+    def test_required_field_failure_returns_false(self):
+        from apply.act.submit import _refill_for_submit
+        page = self._page()
+        ctx = MagicMock()
+        fields = [
+            {"label": "Email address*", "required": True,
+             "id": "email", "name": "email"},
+            {"label": "Years", "required": False,
+             "id": "years", "name": "years"},
+        ]
+        # fill_page reports email (required) failed; years optional failed.
+        with patch("apply.common.fill_runner.fill_page",
+                   return_value=([], [{"label": "Email address*", "required": True,
+                                       "_why": "fill_failed"},
+                                      {"label": "Years", "required": False,
+                                       "_why": "fill_failed"}])), \
+             patch("apply.act.submit._find_next_button", return_value=None), \
+             patch("apply.act.helpers._probe_form") as pf:
+            pf.return_value.fields = fields
+            ok, warns = _refill_for_submit(page, ctx, {"jid": "j1"},
+                                           "j1", {}, {})
+        self.assertFalse(ok)
+        self.assertTrue(any("Email address*" in w for w in warns))
+
+    def test_optional_field_failure_returns_true(self):
+        """Optional-only failures must NOT block — the form can submit with
+        optional fields unfilled."""
+        from apply.act.submit import _refill_for_submit
+        page = self._page()
+        ctx = MagicMock()
+        fields = [
+            {"label": "Years", "required": False,
+             "id": "years", "name": "years"},
+        ]
+        with patch("apply.common.fill_runner.fill_page",
+                   return_value=([], [{"label": "Years", "required": False,
+                                       "_why": "fill_failed"}])), \
+             patch("apply.act.submit._find_next_button", return_value=None), \
+             patch("apply.act.helpers._probe_form") as pf:
+            pf.return_value.fields = fields
+            ok, warns = _refill_for_submit(page, ctx, {"jid": "j1"},
+                                           "j1", {}, {})
+        self.assertTrue(ok)
+
+    def test_submit_aborts_when_refill_blocks(self):
+        """The caller must BLOCK (return 1) when the re-fill reports a
+        required-field failure — printing the reason is not enough."""
+        from apply.act.submit import cmd_submit
+        from unittest.mock import MagicMock
+        page = MagicMock()
+        page.url = "https://www.linkedin.com/jobs/view/1"
+        page.frames = []
+        ctx = MagicMock()
+        ctx.pages = [page]
+        # cmd_submit needs a session that yields this page
+        with patch("apply.act.submit.load_state", return_value={"jid": "j1",
+                  "external_url": "https://www.linkedin.com/jobs/view/1"}), \
+             patch("apply.act.submit.save_state"), \
+             patch("apply.act.submit.handle_captcha", return_value=False), \
+             patch("apply.common.submit_policy.load_policy", return_value={}), \
+             patch("apply.common.submit_policy.resolve_mode", return_value="live"), \
+             patch("apply.common.gate.submit_decision",
+                   return_value=("go", "")), \
+             patch("apply.act.submit.get_conn") as conn, \
+             patch("apply.act.submit.chrome_session") as cs, \
+             patch("apply.act.submit._refill_for_submit",
+                   return_value=(False, ["Email address* re-fill failed: fill_failed"])):
+            conn.return_value.execute.return_value.fetchone.return_value = \
+                {"stage": "tailored", "state": "active"}
+            cs.return_value.__enter__.return_value = (page, ctx)
+            cs.return_value.__exit__.return_value = None
+            rc = cmd_submit("j1")
+        self.assertEqual(rc, 1)
+
+
 class AlreadyAppliedTargetGuard(unittest.TestCase):
     """UNRECOVERABLE guard: 'already-applied' text must be on the TARGET
     posting, else it is a false positive that can never be corrected."""

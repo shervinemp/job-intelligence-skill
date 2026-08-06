@@ -71,9 +71,20 @@ def _refill_for_submit(page, ctx, state, jid, profile, reg):
                 if rec.get("key"):
                     filled_keys.add(rec["key"])
             if failed:
+                # A FAILED fill on the re-fill pass is a hard gate when the
+                # field is REQUIRED: the form is about to be submitted and a
+                # required field did NOT land. The caller treats (False, ...)
+                # as an abort — report failure here, not a warning. Optional
+                # failures stay warnings (they don't block submission).
+                # (Lesson: the re-fill contract must not claim success while
+                # a required field is still empty.)
                 for r in failed[:5]:
                     warns.append(f"{r.get('label', '?')} re-fill failed: "
                                  f"{r.get('_why', '?')}")
+                required_failed = [r for r in failed
+                                   if r.get("required")]
+                if required_failed:
+                    return False, warns
             # Advance to the next page / review.
             try:
                 nxt = _find_next_button(page)
@@ -514,8 +525,13 @@ def cmd_submit(jid, confirm=False, force=False):
                     _refilled, _rwarns = _refill_for_submit(
                         page, ctx, state, jid, _profile, _reg)
                     if not _refilled:
-                        print(f"  RE_FILL: could not re-fill ({_rwarns[0] if _rwarns else '?'})",
-                              file=sys.stderr)
+                        emit_status(
+                            _T.STATUS_CHECK_FAILED,
+                            f"re-fill could not place required fields — "
+                            f"aborting submit ({_rwarns[0] if _rwarns else '?'})")
+                        emit_next("check", "inspect the modal and re-run submit "
+                                          "(or --force after visual confirmation)")
+                        return 1
                     else:
                         print(f"  RE_FILL: modal re-filled for submit "
                               f"({' '.join(_rwarns[:2]) if _rwarns else 'clean'})",
