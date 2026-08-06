@@ -97,10 +97,27 @@ class LoginWallAutoLogin(unittest.TestCase):
              patch("lib.credentials.get_creds", return_value=creds), \
              patch("lib.credentials.save_creds") as save_mock, \
              patch("apply.act.auth_flow.fill_signin_form") as fill_mock, \
-             patch("apply.act.auth_flow.login_check", return_value="2fa"):
+             patch("apply.act.auth_flow.login_check", return_value="2fa"), \
+             patch("apply.act.auth_flow._try_complete_2fa_from_inbox",
+                   return_value="skip"):
             self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "2fa_required")
         fill_mock.assert_called_once()  # never tried the second password
         save_mock.assert_not_called()  # 2FA = credentials accepted, nothing promoted
+
+    def test_2fa_completed_via_inbox(self):
+        """When the inbox yields a valid security code, the flow enters it and
+        continues — the manual 2FA handoff must not fire."""
+        from apply.act.fill import _handle_login_wall
+        creds = {"email": "a@b.com", "password": "pw1", "passwords": ["pw1", "pw2"]}
+        with patch("apply.common.registry.resolve", return_value=None), \
+             patch("lib.credentials.get_creds", return_value=creds), \
+             patch("lib.credentials.save_creds"), \
+             patch("apply.act.auth_flow.fill_signin_form"), \
+             patch("apply.act.auth_flow.login_check", return_value="2fa"), \
+             patch("apply.act.auth_flow._try_complete_2fa_from_inbox",
+                   return_value="yes") as inbox_mock:
+            self.assertEqual(_handle_login_wall(self.page, "jid", quick=False), "")
+        inbox_mock.assert_called_once()
 
     def test_all_passwords_fail_status(self):
         from apply.act.fill import _handle_login_wall

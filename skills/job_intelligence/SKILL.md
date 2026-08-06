@@ -84,6 +84,8 @@ detect [<jid>] → [navigate] → act --fill → act --next (repeat) → act --s
 |------|-------------|
 | `detect [<jid>]` | Pre-flight: DB stage, PDF, classify type. Omit JID to auto-pick first tailored. Outputs `TYPE:` + `NEXT:`. |
 | `navigate <jid>` | LinkedIn External only — click button, decode safety redirect, land on ATS. Auto-clicks "Apply now" on job listing pages. Prompts for login on auth wall — cookies persist via Chrome profile. |
+
+**Auth walls (login / account-creation / 2FA / CAPTCHA)** are handled in `apply/act/auth_flow.py`. Login and account creation use the credential vault (approved domains only — `report.py domains approve <domain>` before a password is ever typed). 2FA after login and account-verification emails are completed via the INBOX: `lib/inbox.py` searches `from:<domain>` for the security code or verification link, extracts it fail-closed (code = standalone 4-8 digit number adjacent to a strong keyword; link = verify/confirm/activate label + host attributing to the auth domain or a known ATS verify host), enters/clicks it, and re-checks. When nothing attributable is found the flow hands off for manual completion (`2fa_required` / `captcha_required`).
 | `act --fill <jid> [--answers '{}']` | Fill all fields. `--answers` exact → common_answers → profile. Auto-unchecks "Follow company". |
 | `act --next <jid>` | Click forward (Submit > Review > Next > Continue > Done). Detects submission (→ verify) / errors (→ retry fill). |
 | `act --submit <jid>` | Submit. Runs pre-submit check (incl. cross-field coherence) + regression canary. Sets `submit_clicked` flag before clicking. Investigates (no re-click) on retry. `--force` clears guard + gates. |

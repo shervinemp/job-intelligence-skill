@@ -102,14 +102,9 @@ def clean_text(raw):
     """Strip HTML/headers from a fetched message into searchable text."""
     if not raw:
         return ""
-    # gmail-cli prints headers then a blank line then the body.
-    body = raw
-    for h in ("From:", "To:", "Subject:", "Date:"):
-        pass
-    # crude split at the first blank line after headers
+    # gmail-cli prints headers then a blank line then the body — split there.
     parts = raw.split("\n\n", 1)
-    if len(parts) > 1:
-        body = parts[1]
+    body = parts[1] if len(parts) > 1 else raw
     body = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", body,
                   flags=re.DOTALL | re.IGNORECASE)
     body = re.sub(r"<[^>]+>", " ", body)

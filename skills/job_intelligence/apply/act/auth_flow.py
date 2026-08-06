@@ -73,6 +73,26 @@ def _try_complete_2fa_from_inbox(page, domain):
     # Enter the code into the visible one-time-code input.
     try:
         entered = page.evaluate("""(code) => {
+            const digits = (code || '').split('');
+            // Split-digit UI (maxlength=1 per box, several in a row).
+            const single = Array.from(document.querySelectorAll(
+                'input[inputmode="numeric"][maxlength="1"], '
+                + 'input[type="tel"][maxlength="1"], '
+                + 'input[autocomplete="one-time-code"][maxlength="1"]'));
+            if (single.length >= digits.length) {
+                let placed = 0;
+                for (const inp of single) {
+                    if (inp.offsetParent === null) continue;
+                    inp.focus();
+                    inp.value = digits[placed] || '';
+                    inp.dispatchEvent(new Event('input', {bubbles: true}));
+                    inp.dispatchEvent(new Event('change', {bubbles: true}));
+                    placed += 1;
+                    if (placed >= digits.length) break;
+                }
+                return placed > 0;
+            }
+            // Single full-length box.
             const inputs = document.querySelectorAll(
                 'input[autocomplete*="one-time-code" i],'
                 + 'input[inputmode="numeric"][maxlength],'
