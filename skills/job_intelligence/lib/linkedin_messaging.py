@@ -481,24 +481,21 @@ def send_message(ctx, profile_url, message_body, name=None, timeout=30, attach=N
 def _attach_file(page, file_path):
     """Attach a file to the open LinkedIn message composer.
 
-    VERIFIED (2026-08): the composer has an 'Attach a file...' button and a
-    document file input whose accept list includes .pdf. Click the button to
-    reveal the input, then set the file, then wait for the attachment chip.
-    Returns True when the attachment appears (chip present or upload ok).
+    VERIFIED (2026-08): the composer has a document file input whose accept
+    list includes .pdf. The correct way to attach is `set_input_files` on
+    the hidden input DIRECTLY — clicking the "Attach a file..." button opens
+    the native OS file picker, which is not automatable and can block the
+    session. Playwright's set_input_files bypasses the dialog entirely.
+
+    Returns True when the input accepted the file.
     """
     import os
     if not os.path.exists(file_path):
         return False
     try:
-        # Reveal the input via the explicit attach button if present.
-        btn = page.locator('button[aria-label^="Attach a file"], button[aria-label*="attach a file" i]').first
-        if btn.count() > 0 and btn.is_visible(timeout=2000):
-            try:
-                btn.click(timeout=3000)
-                page.wait_for_timeout(800)
-            except Exception:
-                pass
-        # Set the file on the document-capable input (accept includes .pdf).
+        # Prefer the document-capable input (accept includes .pdf); fall back
+        # to any file input. Do NOT click the attach button — it opens the
+        # OS file dialog. set_input_files works on hidden inputs directly.
         inputs = page.locator('input[type=file][accept*=".pdf"]')
         if inputs.count() == 0:
             inputs = page.locator('input[type=file]')
@@ -506,11 +503,7 @@ def _attach_file(page, file_path):
             return False
         inputs.first.set_input_files(file_path)
         page.wait_for_timeout(2500)
-        # Confirm: an attachment chip or file name appears in the composer.
-        chip = page.locator('.msg-form__file-upload-chip, [data-testid*="attachment"], [class*="attachment"]').first
-        if chip.count() > 0 and chip.is_visible(timeout=3000):
-            return True
-        return True  # set_input_files succeeded; no reliable chip selector
+        return True
     except Exception:
         return False
 

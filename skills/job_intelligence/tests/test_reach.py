@@ -879,6 +879,48 @@ class ToneCheck(unittest.TestCase):
         self.assertIn("short, warm", _voice_line("message").lower())
         self.assertIn("friendly", _voice_line("email").lower())
 
+    def test_empty_attach_filler_flagged(self):
+        """'attaching for your reference' is the exact junk that went out to
+        Sina — the tone check must flag it so a message whose whole point is
+        the attachment never transmits."""
+        notes = self._tone(
+            "Hi Sina, attaching the tailored resume for the role for your "
+            "reference. Happy to chat whenever works for you.")
+        self.assertTrue(any("empty filler" in n for n in notes))
+        self.assertTrue(any("resume dump" in n for n in notes))
+
+
+class PreflightSendGate(unittest.TestCase):
+    """The tone check must gate the ACTUAL send path, not just the dry-run.
+    A flagged message is a blind-send until --force clears it after review."""
+
+    def _preflight(self, body, force=False):
+        from reach import _preflight_send
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            ok = _preflight_send(body, "message", force=force)
+        return ok, buf.getvalue()
+
+    def test_flag_blocks_send_without_force(self):
+        ok, err = self._preflight(
+            "Hi Sina, attaching the tailored resume for your reference.")
+        self.assertFalse(ok)
+        self.assertIn("TONE_BLOCK", err)
+
+    def test_flag_overridden_by_force(self):
+        ok, err = self._preflight(
+            "Hi Sina, attaching the tailored resume for your reference.",
+            force=True)
+        self.assertTrue(ok)
+        self.assertIn("--force", err)
+
+    def test_clean_message_passes(self):
+        ok, err = self._preflight(
+            "Hi Sina, I applied. Would you be open to a quick chat sometime soon?")
+        self.assertTrue(ok)
+        self.assertNotIn("TONE_BLOCK", err)
+
 
 class TeamExtraction(unittest.TestCase):
     """Posting-page hiring team + tracker people — connection-independent

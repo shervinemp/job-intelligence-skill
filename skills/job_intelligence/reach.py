@@ -149,6 +149,19 @@ def _tone_check(body):
     for word, note in _STIFF:
         if word in lb:
             flags.append(note)
+    # Empty attach filler: a message whose whole point is "I attached a file"
+    # says nothing to a human. Flag constructions that ship an attachment
+    # without a role/recipient-specific sentence.
+    _EMPTY_ATTACH = [
+        ("for your reference", "empty filler — say something specific about the role"),
+        ("attaching the tailored resume", "robotic — a resume dump is not a message"),
+        ("i have attached my resume", "robotic — a resume dump is not a message"),
+        ("please find attached", "boilerplate — say something specific about the role"),
+        ("see attached", "empty — give the recipient a reason to open it"),
+    ]
+    for word, note in _EMPTY_ATTACH:
+        if word in lb:
+            flags.append(note)
     _CTA = [
         "would you be open to a quick chat",
         "if you have 15 minutes",
@@ -171,6 +184,31 @@ def _tone_check(body):
     if len((body or "").split()) > 200:
         flags.append(f"long ({len((body or '').split())} words) — a DM should be short")
     return flags
+
+
+def _preflight_send(body, channel, force=False):
+    """Gate the ACTUAL transmission, not just the dry-run.
+
+    The user's directive: sends are expected to happen (dry-run was a test
+    aid), but a message must pass the tone check and be VERIFIED before it
+    leaves. This runs the tone check on the real send path and BLOCKS on any
+    flag unless --force — fail-closed, the same pattern as the required-field
+    gate. An unverified send is the blind-send class we keep removing.
+    Returns True when the send may proceed."""
+    _tone = _tone_check(body)
+    if _tone and not force:
+        print(f"TONE_BLOCK: {len(_tone)} issue(s) — refusing to send:",
+              file=sys.stderr)
+        for _t in _tone:
+            print(f"    - {_t}", file=sys.stderr)
+        print(f"  Fix the message, or re-run with --force if the flag is a "
+              f"false positive (after review).", file=sys.stderr)
+        return False
+    if _tone:
+        print(f"TONE: {len(_tone)} note(s) overridden by --force:", file=sys.stderr)
+        for _t in _tone:
+            print(f"    - {_t}", file=sys.stderr)
+    return True
 
 
 def _voice_line(channel):
@@ -615,6 +653,9 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
     if _sandbox_refused():
         return
 
+    if not _preflight_send(body_text, "email", force=force):
+        return
+
     # Send via gmail-cli
     cmd = [
         sys.executable, GMAIL_CLI, "send", email_addr, subject,
@@ -758,6 +799,9 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
     # library-level refusal in lib.linkedin_messaging stays as the
     # backstop — this is the cheap outer gate.)
     if _sandbox_refused():
+        return
+
+    if not _preflight_send(body_text, "message", force=force):
         return
 
     from lib.chrome_manager import connect

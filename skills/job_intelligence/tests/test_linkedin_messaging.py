@@ -217,21 +217,50 @@ class AttachFile(unittest.TestCase):
         os.close(fd)
         try:
             page = MagicMock()
-            btn_first = MagicMock()
-            btn_first.count.return_value = 0
-            btn_box = MagicMock()
-            btn_box.first = btn_first
-            inputs = MagicMock()
-            inputs.count.return_value = 1
-            inputs.first.set_input_files = MagicMock()
+            pdf_input = MagicMock()
+            pdf_input.count.return_value = 1
+            pdf_input.first.set_input_files = MagicMock()
+            any_input = MagicMock()
+            any_input.count.return_value = 0
 
             def _locator(sel):
-                if sel.startswith('input[type=file]'):
-                    return inputs
-                return btn_box
+                if "accept*=\".pdf\"" in sel:
+                    return pdf_input
+                return any_input
             page.locator.side_effect = _locator
             self.assertTrue(_attach_file(page, path))
-            inputs.first.set_input_files.assert_called_once_with(path)
+            pdf_input.first.set_input_files.assert_called_once_with(path)
+        finally:
+            os.unlink(path)
+
+    def test_attach_never_clicks_the_attach_button(self):
+        """The attach flow must NOT click the 'Attach a file...' button — that
+        opens the native OS file picker (not automatable, blocks the session).
+        set_input_files on the hidden input is the whole mechanism."""
+        import os
+        from unittest.mock import MagicMock
+        from lib.linkedin_messaging import _attach_file
+        fd, path = __import__("tempfile").mkstemp(suffix=".pdf")
+        os.write(fd, b"%PDF-1.4")
+        os.close(fd)
+        try:
+            page = MagicMock()
+            pdf_input = MagicMock()
+            pdf_input.count.return_value = 1
+            pdf_input.first.set_input_files = MagicMock()
+            any_input = MagicMock()
+            any_input.count.return_value = 0
+
+            def _locator(sel):
+                if "accept*=\".pdf\"" in sel:
+                    return pdf_input
+                return any_input
+            page.locator.side_effect = _locator
+            self.assertTrue(_attach_file(page, path))
+            # No button locator ever queried, no .click on any control.
+            for call in page.locator.call_args_list:
+                self.assertNotIn("button[aria-label", str(call))
+            pdf_input.first.set_input_files.assert_called_once_with(path)
         finally:
             os.unlink(path)
 
