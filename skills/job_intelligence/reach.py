@@ -111,6 +111,57 @@ def _prior_outreach(conn, contact):
     return None
 
 
+def _tone_check(body):
+    """Tone self-check (polish #6): mechanical heuristics that flag when an
+    outreach message drifts from the warm human register — stiff corporate
+    filler, too many CTAs, cover-letter phrasing. Advisory only: prints
+    observations, never blocks the send."""
+    import re as _re
+    lb = (body or "").lower()
+    flags = []
+    _STIFF = [
+        ("kindly", '"kindly" — corporate filler, cut it'),
+        ("please be advised", "boilerplate legalese"),
+        ("i would welcome the opportunity", "cover-letter phrasing — sound like a person"),
+        ("this is to inform you", "announcement tone, not a message"),
+        ("it has come to my attention", "boilerplate opener"),
+    ]
+    for word, note in _STIFF:
+        if word in lb:
+            flags.append(note)
+    _CTA = [
+        "would you be open to a quick chat",
+        "if you have 15 minutes",
+        "i'd love to hear from you",
+        "let me know",
+        "happy to chat",
+        "would you be open to",
+    ]
+    # Count DISTINCT CTA phrasings: match longest-first and skip a phrase
+    # that is a substring of one already matched ("would you be open to a
+    # quick chat" contains "would you be open to" — one ask, not two).
+    cta_count = 0
+    _matched_cta = set()
+    for c in sorted(_CTA, key=len, reverse=True):
+        if c in lb and not any(c in m for m in _matched_cta):
+            _matched_cta.add(c)
+            cta_count += 1
+    if cta_count > 1:
+        flags.append(f"{cta_count} CTAs — the voice spec says ONE soft ask")
+    if len((body or "").split()) > 200:
+        flags.append(f"long ({len((body or '').split())} words) — a DM should be short")
+    return flags
+
+
+def _voice_line(channel):
+    """Compact tone anchor printed at dry-run time (polish #5) so the
+    register is in view at the moment of review, not just in the template."""
+    return {
+        "message": "VOICE: short, warm, relationship-first, ONE soft ask — see templates/linkedin_message.md",
+        "email": "VOICE: friendly, specific, respectful — see templates/email_recruiter.md",
+    }.get(channel, "")
+
+
 def _default_message_body(name, title, company):
     """Warm, human LinkedIn DM default — the same register as the curated
     templates/linkedin_message.md. Short, relationship-first, one soft ask."""
@@ -374,6 +425,12 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
     if dry_run:
         print(f"DRY_RUN: Would email {name} at {email_addr}", file=sys.stderr)
         print(f"  Subject: {subject}", file=sys.stderr)
+        print(f"  {_voice_line('email')}", file=sys.stderr)
+        _tone = _tone_check(body_text)
+        if _tone:
+            print(f"  TONE: {len(_tone)} note(s):", file=sys.stderr)
+            for _t in _tone:
+                print(f"    - {_t}", file=sys.stderr)
         print(f"  Body:\n{body_text}\n", file=sys.stderr)
         print(f"NEXT: reach.py email {jid} --contact {contact_idx}  (remove --dry-run to send)", file=sys.stderr)
         return
@@ -499,6 +556,12 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
     if dry_run:
         print(f"DRY_RUN: Would DM {name} on LinkedIn", file=sys.stderr)
         print(f"  To: {linkedin_url}", file=sys.stderr)
+        print(f"  {_voice_line('message')}", file=sys.stderr)
+        _tone = _tone_check(body_text)
+        if _tone:
+            print(f"  TONE: {len(_tone)} note(s):", file=sys.stderr)
+            for _t in _tone:
+                print(f"    - {_t}", file=sys.stderr)
         print(f"  Body:\n{body_text}\n", file=sys.stderr)
         print(f"NEXT: reach.py message {jid} --contact {contact_idx}  (remove --dry-run to send)", file=sys.stderr)
         return

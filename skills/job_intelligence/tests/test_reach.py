@@ -640,5 +640,44 @@ class OutreachLedger(_TempDBMixin, unittest.TestCase):
         self.assertEqual(len(self._rows("contact_attempts")), 0)
 
 
+class ToneCheck(unittest.TestCase):
+    """Polish #6: _tone_check flags stiff corporate phrasing and multiple
+    CTAs, stays quiet on the warm human register."""
+
+    def _tone(self, body):
+        from reach import _tone_check
+        return _tone_check(body)
+
+    def test_stiff_corporate_flags(self):
+        notes = self._tone(
+            "Kindly be advised that I would welcome the opportunity to "
+            "discuss. Please let me know if you are open to a chat.")
+        self.assertTrue(any("kindly" in n for n in notes))
+        self.assertTrue(any("cover-letter" in n for n in notes))
+
+    def test_warm_message_clean(self):
+        self.assertEqual(
+            self._tone("Hi Sina, I applied. Would you be open to a quick chat sometime soon?"),
+            [])
+
+    def test_two_ctas_flagged(self):
+        notes = self._tone(
+            "Hi Sina, I applied. Would you be open to a quick chat? "
+            "Let me know what works for you.")
+        self.assertTrue(any("CTAs" in n for n in notes))
+
+    def test_overlapping_cta_not_double_counted(self):
+        # "would you be open to a quick chat" contains "would you be open to"
+        # — must count as ONE ask, not two.
+        self.assertEqual(
+            self._tone("Hi Sina, I applied. Would you be open to a quick chat?"),
+            [])
+
+    def test_voice_line_present(self):
+        from reach import _voice_line
+        self.assertIn("short, warm", _voice_line("message").lower())
+        self.assertIn("friendly", _voice_line("email").lower())
+
+
 if __name__ == "__main__":
     unittest.main()
