@@ -669,6 +669,115 @@ def search_company_employees(ctx, company_slug, team_keywords=None, max_pages=2)
             pass
 
 
+def _extract_posting_team(ctx, job_url):
+    """Extract the hiring team visible on a job posting page — CONNECTION-
+    INDEPENDENT. Reads the 'Hiring team' / 'Meet the team' section of the
+    posting itself, which lists the people recruiting for this role whether
+    or not they are in the user's network.
+
+    Returns list of dicts {name, role, linkedin_url, connection_degree}.
+    """
+    page = ctx.new_page()
+    try:
+        page.goto(job_url, wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_timeout(4000)
+        js = """() => {
+          const seen = new Set();
+          const out = [];
+          const sections = [...document.querySelectorAll('section, div')]
+            .filter(el => /hiring team|meet the hiring team|hiring recruiter|posting activity/i.test(
+                (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('data-testid') || '')));
+          const pool = sections.length ? sections : [document];
+          for (const sec of pool) {
+            for (const link of sec.querySelectorAll('a[href*="/in/"]')) {
+              const href = (link.href || '').split('?')[0];
+              if (!href.includes('/in/')) continue;
+              const name = (link.textContent || '').trim().replace(/\\s+/g, ' ');
+              if (!name || name.length < 2 || seen.has(href)) continue;
+              seen.add(href);
+              let role = '';
+              let degree = '';
+              let p = link.closest('li, .artdeco-entity-lockup, div[class*="lockup"]');
+              for (let i = 0; i < 6 && p; i++) {
+                if (p) {
+                  const r = p.querySelector('.artdeco-entity-lockup__subtitle, [class*="subtitle"]');
+                  if (r && (r.textContent || '').trim()) { role = (r.textContent || '').trim(); break; }
+                  const d = p.querySelector('.artdeco-entity-lockup__degree, [class*="degree"]');
+                  if (d && (d.textContent || '').trim()) { degree = (d.textContent || '').trim(); break; }
+                }
+                p = p.parentElement;
+              }
+              out.push({ name, role, linkedin_url: href, connection_degree: degree });
+            }
+          }
+          return out;
+        }"""
+        try:
+            return page.evaluate(js) or []
+        except Exception:
+            return []
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+
+def search_tracker_applied_people(ctx):
+    """Extract people/team context from the Job Tracker's 'Applied' list.
+
+    The tracker's Applied tab is a server-side record of what the user
+    actually submitted (G2 source). This reads the tracker for any people
+    links visible on the applied-job rows (e.g. the hiring team surfaced
+    per job) — connection-independent, complementing posting-page + company
+    searches. Returns list of dicts {name, role, linkedin_url}.
+
+    Best-effort: the tracker rows are virtualized; scroll to load them.
+    """
+    page = ctx.new_page()
+    try:
+        page.goto("https://www.linkedin.com/my-items/saved-jobs/",
+                  wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(6000)
+        if not _check_auth(page):
+            return []
+        loc = page.locator("text=Applied").first
+        if loc.count() > 0:
+            try:
+                loc.click(timeout=5000)
+                page.wait_for_timeout(4000)
+            except Exception:
+                pass
+        for _ in range(15):
+            try:
+                page.evaluate("window.scrollBy(0, 2500); true")
+            except Exception:
+                break
+            page.wait_for_timeout(500)
+        js = """() => {
+          const seen = new Set();
+          const out = [];
+          for (const link of document.querySelectorAll('a[href*="/in/"]')) {
+            const href = (link.href || '').split('?')[0];
+            if (!href.includes('/in/')) continue;
+            const name = (link.textContent || '').trim().replace(/\\s+/g, ' ');
+            if (!name || name.length < 2 || seen.has(href)) continue;
+            seen.add(href);
+            out.push({ name, role: '', linkedin_url: href });
+          }
+          return out;
+        }"""
+        try:
+            return page.evaluate(js) or []
+        except Exception:
+            return []
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+
 def _extract_search_results(page):
     """Extract people from LinkedIn search results page."""
     js = """() => {

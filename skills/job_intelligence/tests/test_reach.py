@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -677,6 +678,66 @@ class ToneCheck(unittest.TestCase):
         from reach import _voice_line
         self.assertIn("short, warm", _voice_line("message").lower())
         self.assertIn("friendly", _voice_line("email").lower())
+
+
+class TeamExtraction(unittest.TestCase):
+    """Posting-page hiring team + tracker people — connection-independent
+    discovery (the sources the user flagged as missing)."""
+
+    def _ctx_with_page(self, page):
+        ctx = MagicMock()
+        ctx.new_page.return_value = page
+        return ctx
+
+    def _page(self, eval_result):
+        page = MagicMock()
+        page.evaluate.return_value = eval_result
+        page.goto.return_value = None
+        page.wait_for_timeout.return_value = None
+        page.close.return_value = None
+        loc = MagicMock()
+        loc.count.return_value = 0
+        loc.first.count.return_value = 0
+        page.locator.return_value = loc
+        return page
+
+    def test_extract_posting_team_parses_people(self):
+        from lib.linkedin_messaging import _extract_posting_team
+        page = self._page([
+            {"name": "Sina R.", "role": "Hiring Manager",
+             "linkedin_url": "https://www.linkedin.com/in/sinar", "connection_degree": ""},
+            {"name": "Aida K.", "role": "Recruiter",
+             "linkedin_url": "https://www.linkedin.com/in/aidak", "connection_degree": "2nd"},
+        ])
+        ctx = self._ctx_with_page(page)
+        people = _extract_posting_team(ctx, "https://www.linkedin.com/jobs/view/1")
+        self.assertEqual(len(people), 2)
+        self.assertEqual(people[0]["name"], "Sina R.")
+        self.assertEqual(people[0]["role"], "Hiring Manager")
+        page.goto.assert_called_once()
+
+    def test_extract_posting_team_empty_page(self):
+        from lib.linkedin_messaging import _extract_posting_team
+        page = self._page([])
+        ctx = self._ctx_with_page(page)
+        self.assertEqual(_extract_posting_team(ctx, "https://x.com"), [])
+
+    def test_tracker_people_extracts_links(self):
+        from lib.linkedin_messaging import search_tracker_applied_people
+        page = self._page([
+            {"name": "Ali M.", "role": "", "linkedin_url": "https://www.linkedin.com/in/alim"},
+        ])
+        ctx = self._ctx_with_page(page)
+        with patch("lib.linkedin_messaging._check_auth", return_value=True):
+            people = search_tracker_applied_people(ctx)
+        self.assertEqual(people[0]["name"], "Ali M.")
+
+    def test_tracker_people_auth_gate(self):
+        from lib.linkedin_messaging import search_tracker_applied_people
+        page = self._page([])
+        ctx = self._ctx_with_page(page)
+        with patch("lib.linkedin_messaging._check_auth", return_value=False):
+            self.assertEqual(search_tracker_applied_people(ctx), [])
 
 
 if __name__ == "__main__":

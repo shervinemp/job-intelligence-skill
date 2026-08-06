@@ -6,7 +6,9 @@ Orchestrates the multi-source discovery pipeline:
   3. Find company LinkedIn page
   4. Search for team members
   5. Find my connections at the company
-  6. LLM email suggestion
+  6. Extract the posting's hiring team (connection-independent)
+  7. Read the Job Tracker 'Applied' list for surfaced people
+  8. LLM email suggestion
 """
 
 import json
@@ -18,6 +20,8 @@ from lib.db.contacts import contact_list
 from lib.linkedin_messaging import (
     search_company_employees,
     search_company_connections,
+    _extract_posting_team,
+    search_tracker_applied_people,
 )
 
 from ..ask_api import ask_text
@@ -77,7 +81,7 @@ def discover_contacts(jid, team_name=None, use_llm=True, use_browser=True):
     for c in existing:
         if c.get("source") == "recruiter_auto":
             result["recruiters"].append(c)
-        elif c.get("source") == "team_search":
+        elif c.get("source") in ("team_search", "tracker_search"):
             result["team_members"].append(c)
         elif c.get("source") == "my_connection":
             result["my_connections"].append(c)
@@ -96,6 +100,26 @@ def discover_contacts(jid, team_name=None, use_llm=True, use_browser=True):
             if recruiter:
                 cid = _save_contact(jid, company, recruiter, source="recruiter_auto", confidence=0.8)
                 result["recruiters"].append({**recruiter, "id": cid})
+
+        # Posting-page hiring team — CONNECTION-INDEPENDENT (the 'Hiring
+        # team'/'Meet the team' section lists the people recruiting for THIS
+        # role whether or not they are in the network). Saved as team_search
+        # so they dedup against the company people search.
+        if "linkedin.com" in url:
+            posting_team = _extract_posting_team(ctx, url)
+            for tm in posting_team:
+                cid = _save_contact(jid, company, tm, source="team_search", confidence=0.75)
+                result["team_members"].append({**tm, "id": cid})
+
+        # Job Tracker 'Applied' list — people surfaced on the user's applied
+        # jobs (server-side record). Connection-independent.
+        try:
+            tracker_people = search_tracker_applied_people(ctx)
+            for tp in tracker_people:
+                cid = _save_contact(jid, company, tp, source="tracker_search", confidence=0.6)
+                result["team_members"].append({**tp, "id": cid})
+        except Exception as _te:
+            print(f"TRACKER_SKIP: {_te}", file=sys.stderr)
 
         # Find company LinkedIn slug (verified) and numeric ID
         company_slug = result["company_linkedin_slug"] or _find_company_slug(ctx, company)
