@@ -35,7 +35,7 @@ from .db import (
     get_conn,
     load_snapshot, get_job, search_jobs, job_count_by_stage,
     event_list,
-    desc_get, app_list, app_get,
+    desc_get, app_list, app_get, contact_list,
 )
 from .config import STATE_PATH, REGISTRY_PATH, RESULTS_DIR, atomic_write_json
 
