@@ -42,6 +42,11 @@ _KIND_AUTO = {
     "batch_verify": False,   # LLM re-reviewing ALL fields lowers accuracy
     "verify_reads": False,   # deterministic re-read + check is the verifier
     "auto_retry": False,     # failures surface as evidence, never hidden
+    "outreach": True,        # tone review: the orchestrator judges the
+                             # message against the voice spec + thread reality
+                             # before it leaves — no hardcoded phrase lists
+    "outreach_compose": False,  # message WRITING is the orchestrator's job;
+                             # the weak model does not draft the outreach
 }
 
 

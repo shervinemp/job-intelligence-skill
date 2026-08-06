@@ -131,86 +131,6 @@ def _prior_outreach(conn, contact):
     return None
 
 
-def _tone_check(body):
-    """Tone self-check (polish #6): mechanical heuristics that flag when an
-    outreach message drifts from the warm human register — stiff corporate
-    filler, too many CTAs, cover-letter phrasing. Advisory only: prints
-    observations, never blocks the send."""
-    import re as _re
-    lb = (body or "").lower()
-    flags = []
-    _STIFF = [
-        ("kindly", '"kindly" — corporate filler, cut it'),
-        ("please be advised", "boilerplate legalese"),
-        ("i would welcome the opportunity", "cover-letter phrasing — sound like a person"),
-        ("this is to inform you", "announcement tone, not a message"),
-        ("it has come to my attention", "boilerplate opener"),
-    ]
-    for word, note in _STIFF:
-        if word in lb:
-            flags.append(note)
-    # Empty attach filler: a message whose whole point is "I attached a file"
-    # says nothing to a human. Flag constructions that ship an attachment
-    # without a role/recipient-specific sentence.
-    _EMPTY_ATTACH = [
-        ("for your reference", "empty filler — say something specific about the role"),
-        ("attaching the tailored resume", "robotic — a resume dump is not a message"),
-        ("i have attached my resume", "robotic — a resume dump is not a message"),
-        ("please find attached", "boilerplate — say something specific about the role"),
-        ("see attached", "empty — give the recipient a reason to open it"),
-    ]
-    for word, note in _EMPTY_ATTACH:
-        if word in lb:
-            flags.append(note)
-    _CTA = [
-        "would you be open to a quick chat",
-        "if you have 15 minutes",
-        "i'd love to hear from you",
-        "let me know",
-        "happy to chat",
-        "would you be open to",
-    ]
-    # Count DISTINCT CTA phrasings: match longest-first and skip a phrase
-    # that is a substring of one already matched ("would you be open to a
-    # quick chat" contains "would you be open to" — one ask, not two).
-    cta_count = 0
-    _matched_cta = set()
-    for c in sorted(_CTA, key=len, reverse=True):
-        if c in lb and not any(c in m for m in _matched_cta):
-            _matched_cta.add(c)
-            cta_count += 1
-    if cta_count > 1:
-        flags.append(f"{cta_count} CTAs — the voice spec says ONE soft ask")
-    if len((body or "").split()) > 200:
-        flags.append(f"long ({len((body or '').split())} words) — a DM should be short")
-    return flags
-
-
-def _preflight_send(body, channel, force=False):
-    """Gate the ACTUAL transmission, not just the dry-run.
-
-    The user's directive: sends are expected to happen (dry-run was a test
-    aid), but a message must pass the tone check and be VERIFIED before it
-    leaves. This runs the tone check on the real send path and BLOCKS on any
-    flag unless --force — fail-closed, the same pattern as the required-field
-    gate. An unverified send is the blind-send class we keep removing.
-    Returns True when the send may proceed."""
-    _tone = _tone_check(body)
-    if _tone and not force:
-        print(f"TONE_BLOCK: {len(_tone)} issue(s) — refusing to send:",
-              file=sys.stderr)
-        for _t in _tone:
-            print(f"    - {_t}", file=sys.stderr)
-        print(f"  Fix the message, or re-run with --force if the flag is a "
-              f"false positive (after review).", file=sys.stderr)
-        return False
-    if _tone:
-        print(f"TONE: {len(_tone)} note(s) overridden by --force:", file=sys.stderr)
-        for _t in _tone:
-            print(f"    - {_t}", file=sys.stderr)
-    return True
-
-
 def _voice_line(channel):
     """Compact tone anchor printed at dry-run time (polish #5) so the
     register is in view at the moment of review, not just in the template."""
@@ -218,6 +138,56 @@ def _voice_line(channel):
         "message": "VOICE: short, warm, relationship-first, ONE soft ask — see templates/linkedin_message.md",
         "email": "VOICE: friendly, specific, respectful — see templates/email_recruiter.md",
     }.get(channel, "")
+
+
+def _preflight_send(body, channel, contact=None, job=None, force=False):
+    """Gate the ACTUAL transmission with an LLM tone review — no hardcoded
+    phrase lists.
+
+    The orchestrator (LLM) judges the message against the voice spec AND the
+    real thread evidence. A FAIL verdict blocks the send unless --force.
+
+    If no review could run (outreach tone gated to the operator in auto
+    mode, or ask_api down), the gate FAILS OPEN with a note — the message was
+    composed/approved by the orchestrator already, and a silent hard block
+    would strand the send. The review is a guardrail, not a bottleneck.
+    Returns True when the send may proceed."""
+    from lib import outreach_llm
+    from lib.config import TEMPLATES_DIR
+    voice_spec = ""
+    tpl_name = ("linkedin_message.md" if channel in ("message", "linkedin")
+                else "email_recruiter.md")
+    try:
+        with open(os.path.join(TEMPLATES_DIR, tpl_name), "r",
+                  encoding="utf-8") as f:
+            _t = f.read()
+        if "VOICE SPEC" in _t:
+            voice_spec = _t.split("VOICE SPEC", 1)[1].strip()
+    except Exception:
+        pass
+    ok, notes, detail = outreach_llm.tone_review(
+        body, contact=contact or {}, job=job or {}, voice_spec=voice_spec,
+        channel=channel)
+    if ok is False and notes and not force:
+        print(f"TONE_BLOCK: refusing to send — orchestrator review found:",
+              file=sys.stderr)
+        for n in notes:
+            print(f"    - {n}", file=sys.stderr)
+        print(f"  Fix the message, or re-run with --force if reviewed.",
+              file=sys.stderr)
+        return False
+    if ok is False and notes and force:
+        print(f"TONE_OVERRIDE: {len(notes)} note(s) reviewed and overridden "
+              f"with --force:", file=sys.stderr)
+        for n in notes:
+            print(f"    - {n}", file=sys.stderr)
+    elif ok is True and notes:
+        print(f"TONE: reviewed — {len(notes)} note(s):", file=sys.stderr)
+        for n in notes:
+            print(f"    - {n}", file=sys.stderr)
+    if ok is None:
+        print(f"TONE_SKIP: {detail}", file=sys.stderr)
+    return True
 
 
 def _default_message_body(name, title, company):
@@ -641,11 +611,6 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
             print(f"  Attach: NONE — no tailored resume PDF for {jid} "
                   f"(apply.py produces it during tailoring)",
                   file=sys.stderr)
-        _tone = _tone_check(body_text)
-        if _tone:
-            print(f"  TONE: {len(_tone)} note(s):", file=sys.stderr)
-            for _t in _tone:
-                print(f"    - {_t}", file=sys.stderr)
         print(f"  Body:\n{body_text}\n", file=sys.stderr)
         print(f"NEXT: reach.py email {jid} --contact {contact_idx}  (remove --dry-run to send)", file=sys.stderr)
         return
@@ -653,7 +618,8 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
     if _sandbox_refused():
         return
 
-    if not _preflight_send(body_text, "email", force=force):
+    if not _preflight_send(body_text, "email", contact=contact, job=job,
+                           force=force):
         return
 
     # Send via gmail-cli
@@ -786,11 +752,6 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
             print(f"  Attach: NONE — no tailored resume PDF for {jid} "
                   f"(apply.py produces it during tailoring)",
                   file=sys.stderr)
-        _tone = _tone_check(body_text)
-        if _tone:
-            print(f"  TONE: {len(_tone)} note(s):", file=sys.stderr)
-            for _t in _tone:
-                print(f"    - {_t}", file=sys.stderr)
         print(f"  Body:\n{body_text}\n", file=sys.stderr)
         print(f"NEXT: reach.py message {jid} --contact {contact_idx}  (remove --dry-run to send)", file=sys.stderr)
         return
@@ -801,7 +762,8 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
     if _sandbox_refused():
         return
 
-    if not _preflight_send(body_text, "message", force=force):
+    if not _preflight_send(body_text, "message", contact=contact, job=job,
+                           force=force):
         return
 
     from lib.chrome_manager import connect

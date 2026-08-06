@@ -41,6 +41,78 @@ TEMPLATE (the register to match, not to copy verbatim):
 Reply with ONLY the message text (no preamble, no quotes, no markdown)."""
 
 
+_TONE_REVIEW_BRIEF = """You are reviewing ONE outreach message before it is sent to a real person. Judge it against the voice spec and the thread reality.
+
+Judge for:
+1. Does it sound like a warm, specific human — not a form letter or a resume dump?
+2. Is it accurate to the THREAD? (Cold open if no thread; a follow-up if our last message went unanswered; a continuation if they replied. Never write as if the relationship is new when the evidence says otherwise.)
+3. Does a mention of the attached resume add specific role/recipient value, or is it empty filler ("for your reference", "attaching my resume")?
+4. ONE soft ask, not two. Short enough for the channel.
+5. No invented relationship the evidence does not support.
+
+Reply in EXACTLY this format (nothing else):
+VERDICT: PASS or FAIL
+NOTES: <one line per issue, or "none">
+
+MESSAGE:
+{message}
+
+THREAD EVIDENCE:
+{evidence}
+
+VOICE SPEC:
+{voice_spec}"""
+
+
+def tone_review(message, thread=None, voice_spec="", channel="message",
+                contact=None, job=None):
+    """LLM tone review of a message about to be sent. This is the ORCHESTRATOR
+    review — no hardcoded phrase lists (the calibrating rules that drift).
+    Returns (ok, notes, detail):
+      ok=False, notes=[...]  → the LLM flagged real issues; block the send.
+      ok=True                → the LLM judged it fine.
+      detail explains when no review could run (policy/infra) so the caller
+      can decide fail-open vs fail-closed.
+    """
+    try:
+        from lib.automation.llm import allow
+        if not allow("outreach"):
+            return None, [], ("orchestrator decision (outreach tone review "
+                              "gated to the operator in auto mode)")
+    except Exception as e:
+        return None, [], f"policy check failed: {str(e)[:60]}"
+    try:
+        from lib.ask_api import available, ask_text
+        if not available():
+            return None, [], "ask_api unavailable"
+        evidence = build_evidence(contact or {}, job or {},
+                                  thread=thread, channel=channel)
+        prompt = _TONE_REVIEW_BRIEF.format(
+            message=(message or "").strip(),
+            evidence=evidence,
+            voice_spec=voice_spec or "(no voice spec provided)",
+        )
+        reply, err = ask_text(prompt, temperature=0.2, max_tokens=300,
+                              timeout=30)
+        if err or not reply:
+            return None, [], f"ask_api declined: {str(err or 'empty reply')[:80]}"
+        verdict = "FAIL" if "\nVERDICT: FAIL" in f"\n{reply}" else "PASS"
+        notes = []
+        for line in (reply or "").splitlines():
+            s = line.strip()
+            if s.upper().startswith("NOTES:") or s.lower().startswith("note "):
+                rest = s.split(":", 1)[1].strip() if ":" in s else s
+                if rest and rest.lower() not in ("none", "no issues", "clean"):
+                    notes.append(rest[:200])
+            elif s.startswith("-") and s.strip("- ").strip():
+                notes.append(s.strip("- ").strip()[:200])
+        if verdict == "FAIL":
+            return False, notes, "llm review"
+        return True, notes, "llm review"
+    except Exception as e:
+        return None, [], f"ask_api exception: {str(e)[:80]}"
+
+
 def build_evidence(contact, job, thread=None, resume_pdf=None, channel="message"):
     """Package the outreach evidence into a compact, deterministic string the
     composer prompt can consume. All claims must trace to real data — this is
@@ -85,8 +157,9 @@ def compose(contact, job, thread=None, resume_pdf=None, channel="message",
                               resume_pdf=resume_pdf, channel=channel)
     try:
         from lib.automation.llm import allow
-        if not allow("outreach"):
-            return None, "orchestrator decision (outreach gated to the operator in auto mode)"
+        if not allow("outreach_compose"):
+            return None, ("orchestrator decision (outreach compose gated to "
+                          "the operator in auto mode)")
     except Exception:
         pass
     try:

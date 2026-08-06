@@ -382,8 +382,15 @@ class OutreachIsRecorded(_TempDBMixin, unittest.TestCase):
         self.reach = _reach
         self._saved_tests_env = os.environ.pop("JI_TESTS", None)
         self.sent = []
+        # The tone-review gate is tested separately (PreflightSendGate). These
+        # tests exercise the SEND path and must never hit the network or the
+        # real ask_api — stub availability so the gate skips deterministically.
+        from unittest import mock
+        self._ask_patch = mock.patch("lib.ask_api.available", return_value=False)
+        self._ask_patch.start()
 
     def tearDown(self):
+        self._ask_patch.stop()
         if self._saved_tests_env is not None:
             os.environ["JI_TESTS"] = self._saved_tests_env
         super().tearDown()
@@ -842,76 +849,85 @@ class OutreachLedger(_TempDBMixin, unittest.TestCase):
 
 
 class ToneCheck(unittest.TestCase):
-    """Polish #6: _tone_check flags stiff corporate phrasing and multiple
-    CTAs, stays quiet on the warm human register."""
+    """No hardcoded tone lists: the orchestrator (LLM) reviews the message
+    against the voice spec + thread reality. These tests pin the CONTRACT of
+    the review seam — what a FAIL vs PASS vs no-review looks like — with the
+    LLM stubbed."""
 
-    def _tone(self, body):
-        from reach import _tone_check
-        return _tone_check(body)
+    def _tone_review(self, reply=None, mode="on"):
+        from unittest.mock import patch
+        import os
+        old = os.environ.get("JI_LLM_MODE")
+        os.environ["JI_LLM_MODE"] = mode
+        try:
+            from lib.outreach_llm import tone_review
+            with patch("lib.ask_api.available", return_value=True), \
+                 patch("lib.ask_api.ask_text",
+                       return_value=(reply or "VERDICT: PASS\nNOTES: none", None)):
+                return tone_review(
+                    "Hi Sina, I applied. Would you be open to a quick chat?",
+                    thread=None, voice_spec="short, warm, one ask",
+                    channel="message")
+        finally:
+            if old is None:
+                os.environ.pop("JI_LLM_MODE", None)
+            else:
+                os.environ["JI_LLM_MODE"] = old
 
-    def test_stiff_corporate_flags(self):
-        notes = self._tone(
-            "Kindly be advised that I would welcome the opportunity to "
-            "discuss. Please let me know if you are open to a chat.")
-        self.assertTrue(any("kindly" in n for n in notes))
-        self.assertTrue(any("cover-letter" in n for n in notes))
+    def test_pass_verdict_is_ok(self):
+        ok, notes, detail = self._tone_review("VERDICT: PASS\nNOTES: none")
+        self.assertTrue(ok)
 
-    def test_warm_message_clean(self):
-        self.assertEqual(
-            self._tone("Hi Sina, I applied. Would you be open to a quick chat sometime soon?"),
-            [])
+    def test_fail_verdict_is_blocked(self):
+        ok, notes, detail = self._tone_review(
+            "VERDICT: FAIL\nNOTES: empty filler — say something specific "
+            "about the role")
+        self.assertFalse(ok)
+        self.assertTrue(any("empty filler" in n for n in notes))
 
-    def test_two_ctas_flagged(self):
-        notes = self._tone(
-            "Hi Sina, I applied. Would you be open to a quick chat? "
-            "Let me know what works for you.")
-        self.assertTrue(any("CTAs" in n for n in notes))
-
-    def test_overlapping_cta_not_double_counted(self):
-        # "would you be open to a quick chat" contains "would you be open to"
-        # — must count as ONE ask, not two.
-        self.assertEqual(
-            self._tone("Hi Sina, I applied. Would you be open to a quick chat?"),
-            [])
+    def test_auto_mode_runs_review(self):
+        """Tone review is ON in auto mode — the orchestrator LLM judges the
+        message before it leaves; only a FAIL verdict blocks. No hardcoded
+        phrase lists anywhere."""
+        ok, notes, detail = self._tone_review(mode="auto")
+        self.assertTrue(ok)
+        self.assertNotIn("orchestrator", detail.lower())
 
     def test_voice_line_present(self):
         from reach import _voice_line
         self.assertIn("short, warm", _voice_line("message").lower())
         self.assertIn("friendly", _voice_line("email").lower())
 
-    def test_empty_attach_filler_flagged(self):
-        """'attaching for your reference' is the exact junk that went out to
-        Sina — the tone check must flag it so a message whose whole point is
-        the attachment never transmits."""
-        notes = self._tone(
-            "Hi Sina, attaching the tailored resume for the role for your "
-            "reference. Happy to chat whenever works for you.")
-        self.assertTrue(any("empty filler" in n for n in notes))
-        self.assertTrue(any("resume dump" in n for n in notes))
-
 
 class PreflightSendGate(unittest.TestCase):
-    """The tone check must gate the ACTUAL send path, not just the dry-run.
-    A flagged message is a blind-send until --force clears it after review."""
+    """The LLM tone review gates the ACTUAL send path, not just the dry-run.
+    A FAIL verdict is a blind-send until --force clears it after review."""
 
-    def _preflight(self, body, force=False):
-        from reach import _preflight_send
+    def _preflight(self, body, force=False, reply=None):
+        from unittest.mock import patch
         import io, contextlib
+        from reach import _preflight_send
+        reply = reply or "VERDICT: PASS\nNOTES: none"
         buf = io.StringIO()
-        with contextlib.redirect_stderr(buf):
+        with contextlib.redirect_stderr(buf), \
+             patch("lib.automation.llm.mode", return_value="on"), \
+             patch("lib.ask_api.available", return_value=True), \
+             patch("lib.ask_api.ask_text", return_value=(reply, None)):
             ok = _preflight_send(body, "message", force=force)
         return ok, buf.getvalue()
 
-    def test_flag_blocks_send_without_force(self):
+    def test_fail_blocks_send_without_force(self):
         ok, err = self._preflight(
-            "Hi Sina, attaching the tailored resume for your reference.")
+            "Hi Sina, attaching the tailored resume for your reference.",
+            reply="VERDICT: FAIL\nNOTES: a resume dump is not a message")
         self.assertFalse(ok)
         self.assertIn("TONE_BLOCK", err)
 
-    def test_flag_overridden_by_force(self):
+    def test_fail_overridden_by_force(self):
         ok, err = self._preflight(
             "Hi Sina, attaching the tailored resume for your reference.",
-            force=True)
+            force=True,
+            reply="VERDICT: FAIL\nNOTES: a resume dump is not a message")
         self.assertTrue(ok)
         self.assertIn("--force", err)
 
