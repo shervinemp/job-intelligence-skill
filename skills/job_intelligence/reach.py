@@ -4,6 +4,7 @@
 Usage:
   reach.py discover <jid> [--team <name>] [--no-llm] [--no-browser]
   reach.py list <jid>                        Show discovered contacts for a job
+  reach.py draft <jid> [--contact N] [--channel message|email]   Draft from template
   reach.py email <jid> [--contact N] [--dry-run] [--force] [--body <text>] [--body-file <path>]
   reach.py message <jid> [--contact N] [--dry-run] [--force] [--body <text>] [--body-file <path>]
   reach.py connect <jid> [--contact N] [--note <text>]
@@ -120,6 +121,76 @@ def _default_message_body(name, title, company):
         f"sometime soon?\n\n"
         f"Thanks,\nShervin"
     )
+
+
+def _template_vars(name, title, company, contact=None, job=None):
+    """The {variable} fill set for outreach templates. Relationship signals
+    from the contact's notes (a referral, a mutual connection, a suggestion)
+    are surfaced here so the orchestrator can lead with them."""
+    vars = {
+        "contact_name": name or "",
+        "job_title": title or "",
+        "company": company or "",
+        "my_name": "Shervin",
+        "years_of_experience": "",
+        "relevant_skills": "machine learning",
+        "team_name": "",
+    }
+    if contact:
+        notes = (contact.get("notes") or "")
+        if notes:
+            vars["suggestion_reason"] = notes[:200]
+    return vars
+
+
+def cmd_draft(jid, contact_idx=1, channel="message"):
+    """Load the outreach template, fill {variables} from the job + contact,
+    and print the draft for review. No send, no browser — the orchestrator
+    reviews via --dry-run before any channel actually sends."""
+    contacts = contact_list(job_id=jid)
+    if not contacts:
+        print(f"No contacts for {jid}. Run 'reach.py discover {jid}' first.", file=sys.stderr)
+        return 1
+    if contact_idx < 1 or contact_idx > len(contacts):
+        print(f"Invalid contact index {contact_idx}. Valid range: 1-{len(contacts)}", file=sys.stderr)
+        return 1
+
+    contact = contacts[contact_idx - 1]
+    name = contact.get("name", "")
+    job = get_job(jid)
+    company = job.get("company", "") if job else ""
+    title = job.get("title", "") if job else ""
+
+    from lib.config import TEMPLATES_DIR
+    tpl_name = "linkedin_message.md" if channel in ("message", "linkedin") else "email_recruiter.md"
+    tpl_path = os.path.join(TEMPLATES_DIR, tpl_name)
+    if not os.path.exists(tpl_path):
+        print(f"TEMPLATE_NOT_FOUND: {tpl_path}", file=sys.stderr)
+        return 1
+    with open(tpl_path, "r", encoding="utf-8") as f:
+        template = f.read()
+
+    # Strip the trailing VOICE SPEC (orchestrator guidance) — it is not the
+    # message text. It stays in the file as the drafting anchor.
+    body = template
+    marker = "---\nVOICE SPEC"
+    if marker in body:
+        body = body.split(marker)[0].strip()
+
+    for k, v in _template_vars(name, title, company, contact=contact, job=job).items():
+        body = body.replace("{" + k + "}", v or "")
+    # Drop any placeholder the data didn't cover (shouldn't happen; guards
+    # against a literal {var} leaking into a send).
+    import re as _re
+    body = _re.sub(r"\{[a-z_]+\}", "", body)
+
+    print(f"DRAFT ({channel}): {name} @ {company}", file=sys.stderr)
+    print(f"  From template: {tpl_name}", file=sys.stderr)
+    print(f"  Voice spec at: {tpl_path} (review it — it is the tone anchor)", file=sys.stderr)
+    print(body)
+    print(f"\nNEXT: review, then reach.py {channel} {jid} --contact {contact_idx} --body-file <this> --dry-run",
+          file=sys.stderr)
+    return 0
 
 
 def _block_if_prior(conn, contact, force):
@@ -537,9 +608,11 @@ def cmd_connect(jid, contact_idx=1, note=None, force=False):
 
     job = get_job(jid)
     company = job.get("company", "") if job else ""
+    title = job.get("title", "") if job else ""
 
     if not note:
-        note = f"Hi {name}, I'm exploring opportunities at {company} and would love to connect!"
+        note = (f"Hi {name}, I'm exploring {title} at {company} and would "
+                f"love to connect!")
 
     if _sandbox_refused():
         return
@@ -716,6 +789,12 @@ def main():
     list_p = sub.add_parser("list", help="List contacts for a job")
     list_p.add_argument("jid", help="Job ID")
 
+    draft_p = sub.add_parser("draft", help="Draft an outreach message from the template")
+    draft_p.add_argument("jid", help="Job ID")
+    draft_p.add_argument("--contact", type=int, default=1, help="Contact index from list (1-based)")
+    draft_p.add_argument("--channel", choices=["message", "email"], default="message",
+                         help="Template to draft from (default message)")
+
     email_p = sub.add_parser("email", help="Send email to a contact")
     email_p.add_argument("jid", help="Job ID")
     email_p.add_argument("--contact", type=int, default=1, help="Contact index from list (1-based)")
@@ -775,6 +854,8 @@ def main():
             print("Usage: reach.py discover <jid>  OR  reach.py discover --all [--limit N]", file=sys.stderr)
     elif args.command == "list":
         cmd_list(args.jid)
+    elif args.command == "draft":
+        cmd_draft(args.jid, contact_idx=args.contact, channel=args.channel)
     elif args.command == "email":
         cmd_email(args.jid, contact_idx=args.contact, dry_run=args.dry_run,
                   body=args.body, body_file=args.body_file, force=args.force)

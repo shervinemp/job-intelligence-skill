@@ -307,14 +307,23 @@ def cmd_submit(jid, confirm=False, force=False):
     # skipping the one validation step and then claiming it passed is the
     # opposite of that.
     check_rc = 0
-    _url_host_check = _url_host(url)
     # LinkedIn Easy Apply does NOT persist form values across Chrome sessions:
     # a pre-check in its own session always sees a fresh empty modal and
     # false-errors on fields the fill DID set. For LinkedIn, the gate is the
     # IN-SESSION re-fill + empty-required check below (submit runs against the
     # re-filled modal in the same session). Non-LinkedIn platforms persist, so
-    # they keep the separate pre-check.
-    _linkedin_submit = _url_host_check and "linkedin.com" in (_url_host_check or "")
+    # they keep the separate pre-check. Resolve from the job row (the
+    # not-yet-defined `url` local is only set later in the session block).
+    _job_url_val = ""
+    try:
+        _ju = get_conn().execute(
+            "SELECT url, external_url FROM jobs WHERE id=?", (jid,)).fetchone()
+        if _ju:
+            _job_url_val = _ju["external_url"] or _ju["url"] or ""
+    except Exception:
+        pass
+    _url_host_check = _url_host(_job_url_val)
+    _linkedin_submit = "linkedin.com" in (_url_host_check or "")
     if not force and not _linkedin_submit:
         from apply.act.check import cmd_check
         print("  Pre-submit check...", file=sys.stderr)
