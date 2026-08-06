@@ -147,10 +147,10 @@ def _preflight_send(body, channel, contact=None, job=None, force=False):
     The orchestrator (LLM) judges the message against the voice spec AND the
     real thread evidence. A FAIL verdict blocks the send unless --force.
 
-    If no review could run (outreach tone gated to the operator in auto
-    mode, or ask_api down), the gate FAILS OPEN with a note — the message was
-    composed/approved by the orchestrator already, and a silent hard block
-    would strand the send. The review is a guardrail, not a bottleneck.
+    If no review could run (ask_api down, or the policy forbids it), the
+    gate FAILS OPEN with a note — the message was composed/approved by the
+    orchestrator already, and a silent hard block would strand the send. The
+    review is a guardrail, not a bottleneck.
     Returns True when the send may proceed."""
     from lib import outreach_llm
     from lib.config import TEMPLATES_DIR

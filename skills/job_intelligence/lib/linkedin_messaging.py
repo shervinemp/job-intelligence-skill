@@ -112,11 +112,6 @@ _INBOX_ITEMS_JS = """() => {
   return out;
 }"""
 
-_THREAD_TEXT_JS = """() => {
-  const log = document.querySelector('.msg-s-message-list__event, [role=log], .msg-convo-wrapper .msg-s-message-list');
-  return (log ? log.innerText : document.body.innerText).replace(/\\s+/g, ' ').trim().slice(0, 3000);
-}"""
-
 
 def thread_status(ctx, person, timeout=30):
     """Reconcile against the REAL LinkedIn inbox: is there an existing thread
@@ -185,23 +180,6 @@ def thread_status(ctx, person, timeout=30):
         except Exception:
             pass
 
-
-def _find_attach_input(page):
-    """The composer has TWO file inputs: image-only and a document input whose
-    accept list explicitly includes .pdf. Return the document-capable one.
-    VERIFIED (2026-08): accept="image/*,.ai,.psd,.pdf,.doc,.docx,.ppt,.pptx,
-    .pps,.ppsx,.xls,.xlsx,.txt,.eml,.mov,.mp4"."""
-    try:
-        for _ in range(5):
-            inputs = page.evaluate("""() => Array.from(document.querySelectorAll('input[type=file]'))
-                .map(f => ({accept: f.accept || '', visible: !!(f.offsetParent)}))""")
-            for f in inputs or []:
-                if ".pdf" in (f.get("accept") or "") and f.get("visible"):
-                    return f
-            page.wait_for_timeout(1000)
-    except Exception:
-        pass
-    return None
 
 _CONNECT_BUTTON_JS = """() => {
   const connectBtn = document.querySelector('a[href*="/preload/custom-invite/"], a[href*="/connect/"], button[aria-label="Connect"], button[aria-label*="connect" i]');

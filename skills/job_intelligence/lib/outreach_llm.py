@@ -5,20 +5,27 @@ the WEAK model; the orchestrator — the strong model that operates the pipeline
 — is the intended decision-maker. Outreach tone is a judgment call, exactly
 the kind of thing the orchestrator should write, not a calibrated rule.
 
-So the compose contract here is: code gathers the EVIDENCE (real inbox thread
-history via linkedin_messaging.thread_status, job/contact data, the voice
-spec, resume availability) and hands it to the orchestrator as a drafted
-message + context. The orchestrator adjusts it (continuation vs follow-up vs
-cold open, relationship-aware, last-message-aware) and returns the final text.
+Two seams, two roles (see the policy kinds in lib/automation/llm.py):
 
-The ask_api path is a FALLBACK for when no orchestrator is in the loop: the
-prompt is the same evidence + the template, and the weak model drafts it.
-In auto mode ask_api outreach is OFF (the orchestrator replaces it), so
-`compose` returns the evidence bundle and the operator writes/approves.
+  compose (kind: outreach_compose, OFF in auto):
+    Code gathers the EVIDENCE (real inbox thread history via
+    linkedin_messaging.thread_status, job/contact data, the voice spec,
+    resume availability) and hands it to the orchestrator as a drafted
+    message + context. The orchestrator adjusts it (continuation vs
+    follow-up vs cold open, relationship-aware, last-message-aware) and
+    returns the final text. The weak model does NOT draft outreach — compose
+    returns the evidence bundle and the operator writes/approves.
 
-This keeps the "never invent a relationship" rule: any relationship line must
+  tone_review (kind: outreach, ON in auto):
+    The guardrail BEFORE every send. The LLM judges the final message against
+    the voice spec + the thread reality and returns a PASS/FAIL verdict. A
+    FAIL blocks the transmission (unless --force). This REPLACES the old
+    hardcoded phrase lists — no calibrated rules that drift and
+    false-positive.
+
+Both keep the "never invent a relationship" rule: any relationship line must
 trace to the evidence (thread exists, notes say suggested the job). The
-prompt hard-forbids inventing history the evidence does not support.
+prompts hard-forbid inventing history the evidence does not support.
 """
 
 _ORCHESTRATOR_BRIEF = """You are composing a LinkedIn outreach message. Below is the EVIDENCE the pipeline gathered — the thread history, the job, the contact, the resume — and the VOICE SPEC from the template.
@@ -96,7 +103,10 @@ def tone_review(message, thread=None, voice_spec="", channel="message",
                               timeout=30)
         if err or not reply:
             return None, [], f"ask_api declined: {str(err or 'empty reply')[:80]}"
-        verdict = "FAIL" if "\nVERDICT: FAIL" in f"\n{reply}" else "PASS"
+        import re as _re
+        _vm = _re.search(r"\bVERDICT\s*:\s*(PASS|FAIL)\b", reply or "",
+                         flags=_re.IGNORECASE)
+        verdict = (_vm.group(1).upper() if _vm else "PASS")
         notes = []
         for line in (reply or "").splitlines():
             s = line.strip()

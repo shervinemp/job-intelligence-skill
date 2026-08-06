@@ -461,6 +461,39 @@ NEXT: reach.py message abc123def4567890 --contact 2   # DM team member
 NEXT: reach.py message abc123def4567890 --contact 3   # Ask connection for referral
 ```
 
+### 9.4 Thread Reconciliation, Resume Attach, and Tone Review
+
+Three capabilities make outreach survive the real inbox — where the pipeline's
+own ledger is NOT the history of the account.
+
+**Thread reconciliation — the inbox is authoritative.**
+The ledger records only what the pipeline sent. A person messaged manually (or
+from an earlier unrecorded run) leaves no DB trace (Sina Akbarian was messaged
+with zero `contact_attempts` rows). `reach.py threads <jid> [--backfill]`
+reads the REAL LinkedIn inbox per contact via `linkedin_messaging.thread_status`
+and returns `{exists, last_message_time, last_message_direction, preview}`.
+`--backfill` records a `backfilled` attempt row (channel `linkedin_message`,
+status `backfilled`) so the one-shot + cross-job guards see the truth. The
+schema migration rebuilds `contact_attempts` to allow the `backfilled` status.
+
+**Resume attach — the resume belongs on the FIRST message.**
+`cmd_message`/`cmd_email` auto-attach the per-job tailored resume
+(`_job_resume_pdf`). LinkedIn DMs accept `.pdf` via the composer's document
+file input (`input[type=file][accept*=".pdf"]`). Attach with `set_input_files`
+on the hidden input — NEVER click the "Attach a file..." button, which opens
+the native OS file picker. Because the resume goes out with the first message,
+follow-up-only-for-the-attachment sends should never happen.
+
+**LLM tone review — no hardcoded phrase lists.**
+`_preflight_send` runs `lib/outreach_llm.tone_review` before every real send.
+The LLM judges the message against the voice spec + real thread evidence (cold
+open vs follow-up vs continuation, no invented relationship, one soft ask, no
+empty attach filler). A FAIL verdict blocks unless `--force`. Policy split in
+`lib/automation/llm.py`: `outreach` (tone REVIEW) is ON in auto mode — a
+guardrail before every send; `outreach_compose` (message WRITING) stays
+orchestrator-gated — the weak model does not draft outreach. `compose` returns
+the evidence bundle and the operator writes/approves.
+
 ---
 
 ## 10. Selectors & DOM Investigation Methodology

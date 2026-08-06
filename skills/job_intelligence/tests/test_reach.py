@@ -885,6 +885,14 @@ class ToneCheck(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("empty filler" in n for n in notes))
 
+    def test_lowercase_inline_verdict_parsed(self):
+        """The model may reply 'verdict: fail' mid-text or lowercase — the
+        parser must still catch it as a FAIL, not fall through to PASS."""
+        ok, notes, detail = self._tone_review(
+            "I reviewed this.\nVerdict: fail\nnotes: it reads like a resume dump")
+        self.assertFalse(ok)
+        self.assertTrue(any("resume dump" in n for n in notes))
+
     def test_auto_mode_runs_review(self):
         """Tone review is ON in auto mode — the orchestrator LLM judges the
         message before it leaves; only a FAIL verdict blocks. No hardcoded

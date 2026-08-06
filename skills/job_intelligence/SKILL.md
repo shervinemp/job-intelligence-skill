@@ -123,7 +123,10 @@ Optional parallel track after `enrich`/`tailor`. Contact discovery finds recruit
 - **Premium**: 2nd/3rd-degree contacts use the InMail composer (`.msg-inmail-credits-display`); the pipeline proceeds and reports `INMAIL_COMPOSER`. `CONNECT_REQUIRED` → run `reach.py connect`. Free accounts always see InMail only for non-connections.
 - **Contact indices**: `--contact N` matches the numbering printed by `discover`/`list` (DB order).
 - **Email suggestions** from the LLM are never sent automatically — backfill with `reach.py update --email <addr>` after human verification.
-- **Attempts**: every outreach is recorded in `contact_attempts` (status: pending/sent/failed).
+- **Attempts**: every outreach is recorded in `contact_attempts` (status: pending/sent/failed/backfilled).
+- **Thread reconciliation (`reach.py threads <jid> [--backfill]`)**: the ledger records only what the pipeline sent — a person messaged manually (or before the ledger existed) leaves no DB trace. `threads` reads the REAL LinkedIn inbox per contact (`thread_status`), surfaces existing threads (last message, direction), and `--backfill` records a `backfilled` attempt row so the one-shot + cross-job guards see the truth. The inbox is authoritative, not the DB.
+- **Resume attach**: `message`/`email` auto-attach the per-job tailored resume (`_job_resume_pdf`); DMs support `.pdf` via the composer's document file input (attach via `set_input_files` on the hidden input — never click "Attach a file...", that opens the OS file picker). `--no-attach` to skip. The resume belongs on the FIRST message, so follow-up-only-for-the-attachment sends should never happen.
+- **LLM tone review (`_preflight_send`)**: before every real send the LLM judges the message against the voice spec + real thread evidence (cold open vs follow-up vs continuation, no invented relationship, one ask, no empty attach filler). A FAIL verdict blocks unless `--force`. No hardcoded phrase lists. Message WRITING is orchestrator-gated; tone REVIEW runs in auto mode.
 
 ## Submission policy (read before any live run)
 
