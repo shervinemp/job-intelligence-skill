@@ -11,6 +11,7 @@ Output is a structured report the orchestrator reviews before deciding to submit
 import re
 import sys
 import time
+from urllib.parse import urlparse
 
 from lib.db import get_conn
 from apply.common.output import emit_error, emit_status
@@ -27,6 +28,23 @@ from apply.common.resolve import resolve, _build_ephemeral
 
 _PHONE_RE = re.compile(r"phone|tel|contact|mobile|cell", re.I)
 _POSTAL_RE = re.compile(r"postal|zip", re.I)
+
+
+def _same_host(a, b):
+    """True when two URLs are on the same host (ignoring www). A stale tab
+    parked on another employer's ATS must not be treated as the target job's
+    form — navigate away even when the tab is non-blank."""
+    try:
+        ha = (urlparse(a).netloc or "").lower()
+        hb = (urlparse(b).netloc or "").lower()
+        for h in (ha, hb):
+            if h.startswith("www."):
+                h = h[4:]
+            if not h:
+                return False
+        return ha == hb
+    except Exception:
+        return False
 
 
 def _is_react_widget(page, sel):
@@ -105,7 +123,8 @@ def cmd_check(jid):
     try:
         with chrome_session(state) as (page, ctx):
             cur = page.url or ""
-            if not cur or "about:blank" in cur or "chrome-error" in cur:
+            if not cur or "about:blank" in cur or "chrome-error" in cur \
+                    or not _same_host(cur, url):
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 time.sleep(2)
 

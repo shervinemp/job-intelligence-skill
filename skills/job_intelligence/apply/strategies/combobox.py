@@ -661,6 +661,24 @@ def fill(page, f, ans, time_budget=25.0):
             diag["detail"] = "per-field time budget exceeded before unfiltered pass"
             f["_diag"] = diag
             return False
+        # Lesson #3: a prior attempt may already have landed the selection
+        # (Ember/React widgets often store it outside the raw input, and the
+        # read-back verifier may have missed it). Re-opening the menu to
+        # "score the full list" CLEARS the input and destroys that selection
+        # — check the current selection first and keep it when it matches.
+        try:
+            if _verify(page, sel, ans, candidates):
+                diag["reason"] = "already_selected"
+                try:
+                    _sv = _read_selection_values(page, sel)
+                    if _sv:
+                        diag["after"] = str(_sv[0])[:60]
+                except Exception:
+                    pass
+                f["_diag"] = diag
+                return True
+        except Exception:
+            pass
         _close_menu(page)
         if _open_menu(page, sel, root_id):
             opts = _collect_with_scroll(page, sel, root_id)

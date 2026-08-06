@@ -175,7 +175,9 @@ class FillFlow(unittest.TestCase):
 
     def test_unfiltered_fallback_matches_phrasing(self):
         """Typing produces nothing; the FULL list contains the option with
-        different phrasing (Work-Authorization class)."""
+        different phrasing (Work-Authorization class). The selection is NOT
+        already on the page, so the fallback must run (not the
+        already_selected guard)."""
         from apply.strategies.combobox import fill
         placeholder = [{"text": "Select...", "id": "ph", "x": 1, "y": 1}]
         page = FakePage(
@@ -193,7 +195,9 @@ class FillFlow(unittest.TestCase):
              patch("apply.common.value_reader.FuzzyComboboxReader") as fc:
             ac.return_value.read.return_value = None
             rs.return_value.read.return_value = None
-            fc.return_value.read.return_value = "I am legally authorized to work in Canada"
+            # Nothing readable yet — the guard must not short-circuit; the
+            # fallback clicks the option and the click is the selection.
+            fc.return_value.read.return_value = None
             self.assertTrue(fill(page, field, "Yes, I am legally authorized to work in Canada"))
         self.assertTrue(field["_diag"]["reason"].startswith("unfiltered_match"))
 
@@ -300,6 +304,104 @@ class LLMFallback(unittest.TestCase):
             self.assertFalse(fill(page, field, "Currently open to relocation"))
         self.assertEqual(field["_diag"]["reason"], "no_option_match")
         self.assertTrue(field["_diag"]["llm_tried"])
+
+    def test_selection_already_landed_does_not_reclear(self):
+        """Lesson #3: a prior attempt may have landed the selection in a
+        widget that stores it OUTSIDE the raw input (Ember/React). The
+        unfiltered fallback must not re-open and clear it — if the current
+        selection already matches the answer, return success."""
+        from apply.strategies.combobox import fill
+        placeholder = [{"text": "Select...", "id": "ph", "x": 1, "y": 1}]
+        page = FakePage(typed_options=[], menu_options=placeholder,
+                        unfiltered_options=[{"text": "I am willing to relocate",
+                                             "id": "r1", "x": 1, "y": 1}],
+                        collect_budget=3)
+        field = self._field()
+        with patch("apply.common.value_reader.AriaComboboxReader") as ac, \
+             patch("apply.common.value_reader.ReactSelectReader") as rs, \
+             patch("apply.common.value_reader.FuzzyComboboxReader") as fc:
+            ac.return_value.read.return_value = None
+            rs.return_value.read.return_value = None
+            # The selection is already visible to the fuzzy reader — the
+            # value landed but _try_click_best couldn't verify it.
+            fc.return_value.read.return_value = "I am willing to relocate"
+            self.assertTrue(fill(page, field, "I am willing to relocate"))
+        self.assertEqual(field["_diag"]["reason"], "already_selected")
+        self.assertIn("after", field["_diag"])
+
+
+class LinkedInResume(unittest.TestCase):
+    """Lesson #2: the LinkedIn Easy Apply resume step (select + Upload
+    button, no <input type=file>) must replace the pre-selected resume
+    with the job's tailored PDF. The handler was deleted as 'dead code'
+    in bec1a9e and no test caught the regression — this locks it in."""
+
+    def _page(self):
+        page = MagicMock()
+        page.url = "https://www.linkedin.com/jobs/view/123"
+        page.evaluate.return_value = None
+        return page
+
+    def _mk_pdf(self, name="Shervin_Naseri_Acme_Senior_Engineer_Resume.pdf"):
+        import tempfile
+        root = tempfile.mkdtemp()
+        rd = os.path.join(root, "jid1")
+        os.makedirs(rd, exist_ok=True)
+        with open(os.path.join(rd, name), "wb") as f:
+            f.write(b"%PDF-1.4 fake")
+        return root
+
+    def test_non_linkedin_page_returns_true(self):
+        from apply.common.fill_runner import linkedin_ensure_resume
+        page = MagicMock()
+        page.url = "https://www.acme.com/jobs/5"
+        self.assertTrue(linkedin_ensure_resume(page, "jid1"))
+
+    def test_resume_step_not_visible_returns_true(self):
+        from apply.common.fill_runner import linkedin_ensure_resume
+        page = self._page()
+
+        def eval_js(js, arg=None):
+            # _in_linkedin_dialog checks host (uses page.url); _resume_step_visible
+            # queries the dialog for .pdf spans / upload button.
+            if "querySelector" in js and "some" in js:
+                return False  # no .pdf spans / upload button
+            return None
+        page.evaluate = eval_js
+        with patch("apply.common.fill_runner.RESULTS_DIR", "/nonexistent"):
+            self.assertTrue(linkedin_ensure_resume(page, "jid1"))
+
+    def test_no_tailored_pdf_returns_false(self):
+        from apply.common.fill_runner import linkedin_ensure_resume
+        page = self._page()
+
+        def eval_js(js, arg=None):
+            if "some" in js:
+                return True  # resume step visible
+            return None
+        page.evaluate = eval_js
+        with patch("apply.common.fill_runner.RESULTS_DIR", "/nonexistent"):
+            self.assertFalse(linkedin_ensure_resume(page, "jid1"))
+
+    def test_selects_existing_resume(self):
+        from apply.common.fill_runner import linkedin_ensure_resume
+        rd = self._mk_pdf()
+        page = self._page()
+        calls = {"n": 0}
+
+        def eval_js(js, arg=None):
+            calls["n"] += 1
+            # resume step visible; then _select_resume_by_name clicks the
+            # matching <a> and returns True.
+            if "some" in js and ".pdf" in js:
+                return True
+            if "closest('a')" in js:
+                return True
+            return None
+        page.evaluate = eval_js
+        with patch("apply.common.fill_runner.RESULTS_DIR", rd):
+            self.assertTrue(linkedin_ensure_resume(page, "jid1"))
+        self.assertGreater(calls["n"], 0)
 
 
 if __name__ == "__main__":

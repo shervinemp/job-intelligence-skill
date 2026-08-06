@@ -25,6 +25,7 @@ def _host_of(page):
 import os
 import re
 import sys
+import time
 
 from lib.config import JI_HOME
 from apply.common.field_types import is_combobox as _is_combobox
@@ -160,6 +161,168 @@ def _file_path_for(label, f, resume_path, cover_path):
     ident = f"{lc} {(f.get('id') or '').lower()} {(f.get('name') or '').lower()}"
     is_cover = "cover" in ident and "resume" not in ident and not re.search(r"\bcv\b", ident)
     return cover_path if is_cover else resume_path
+
+
+# ─── LinkedIn Easy Apply resume step ──────────────────────────────────
+# The Easy Apply modal presents the resume as a <select> of previously
+# uploaded resumes plus an "Upload resume" button — there is NO
+# <input type=file> in the DOM. The generic upload path (_is_upload_field)
+# never fires, so LinkedIn would submit with whatever resume is
+# pre-selected from the profile (usually the wrong one). This handler
+# detects the resume step, selects the tailored PDF if already uploaded,
+# otherwise uploads it via the file chooser, then verifies by filename.
+_DIALOG = '[role="dialog"], dialog'
+
+
+def _in_linkedin_dialog(page):
+    try:
+        host = _host_of(page)
+        return "linkedin.com" in (host or "")
+    except Exception:
+        return False
+
+
+def _resume_step_visible(page):
+    """True when the Easy Apply dialog is showing the resume step (a list of
+    stored resumes with .pdf filenames + an upload control)."""
+    try:
+        return page.evaluate(f"""() => {{
+            const d = document.querySelector({json.dumps(_DIALOG)});
+            if (!d) return false;
+            const spans = Array.from(d.querySelectorAll('span'));
+            const hasPdf = spans.some(s => (s.textContent || '').includes('.pdf'));
+            const hasUpload = Array.from(d.querySelectorAll('button')).some(
+                b => /upload\\s*resume|add\\s*resume|change\\s*resume/i.test(
+                    (b.textContent || '').trim()));
+            return hasPdf || hasUpload;
+        }}""")
+    except Exception:
+        return False
+
+
+def _click_text_in_dialog(page, text):
+    """Click the first clickable ancestor of an element containing `text`."""
+    return page.evaluate(f"""() => {{
+        const d = document.querySelector({json.dumps(_DIALOG)});
+        if (!d) return false;
+        for (const el of d.querySelectorAll('button, a, span, div, label, p')) {{
+            if (el.offsetParent === null) continue;
+            if (!(el.textContent || '').trim().includes({json.dumps(text)})) continue;
+            let parent = el;
+            for (let i = 0; i < 15 && parent; i++) {{
+                const clickable = parent.tagName === 'A' || parent.tagName === 'BUTTON'
+                    || parent.getAttribute('tabindex') === '0'
+                    || parent.getAttribute('role') === 'button';
+                if (clickable && parent.offsetParent !== null) {{
+                    parent.click();
+                    return true;
+                }}
+                parent = parent.parentElement;
+            }}
+        }}
+        return false;
+    }}""")
+
+
+def _select_resume_by_name(page, target_name):
+    """Click the stored-resume entry whose filename matches target_name."""
+    safe = json.dumps(target_name)
+    return page.evaluate(f"""() => {{
+        const d = document.querySelector({json.dumps(_DIALOG)});
+        if (!d) return false;
+        for (const s of d.querySelectorAll('span')) {{
+            const txt = (s.textContent || '').trim();
+            if (!txt.includes('.pdf') || !txt.includes({safe})) continue;
+            let el = s;
+            for (let i = 0; i < 15 && el; i++) {{
+                const a = el.closest('a');
+                if (a && a.offsetParent !== null) {{ a.click(); return true; }}
+                el = el.parentElement;
+            }}
+        }}
+        return false;
+    }}""")
+
+
+def _expand_resume_list(page):
+    try:
+        page.evaluate(f"""() => {{
+            const d = document.querySelector({json.dumps(_DIALOG)});
+            if (!d) return;
+            for (const b of d.querySelectorAll('button')) {{
+                if (b.offsetParent && !b.disabled &&
+                        /show\\s*3\\s*more\\s*resumes/i.test(b.textContent || '')) {{
+                    b.click(); return;
+                }}
+            }}
+        }}""")
+        time.sleep(1)
+    except Exception:
+        pass
+
+
+def _upload_file_by_text(page, text, file_path):
+    if not os.path.exists(file_path):
+        return False
+    try:
+        with page.expect_file_chooser(timeout=10000) as fc_info:
+            if not _click_text_in_dialog(page, text):
+                return False
+        fc = fc_info.value
+        fc.set_files(file_path)
+        time.sleep(3)
+        return True
+    except Exception:
+        return False
+
+
+def linkedin_ensure_resume(page, jid):
+    """Replace the LinkedIn Easy Apply resume with the job's tailored PDF.
+
+    Returns:
+      True  — resume handled (selected or uploaded) or no resume step / not
+              LinkedIn (nothing to do).
+      False — resume step present but the tailored PDF could not be placed.
+    Runs inline in the fill loop so submit never sends the profile default.
+    """
+    if not _in_linkedin_dialog(page) or not _resume_step_visible(page):
+        return True
+
+    rd = os.path.join(RESULTS_DIR, jid)
+    pdf_path = None
+    target_name = None
+    if os.path.isdir(rd):
+        for f in sorted(os.listdir(rd)):
+            if "Resume" in f and f.endswith(".pdf"):
+                pdf_path = os.path.join(rd, f)
+                target_name = f.replace(".pdf", "")
+                break
+    if not pdf_path or not os.path.exists(pdf_path):
+        print(f"RESUME:{jid} no tailored resume PDF found", file=sys.stderr)
+        return False
+
+    # 1. Select if already on LinkedIn.
+    if _select_resume_by_name(page, target_name):
+        print(f"RESUME:{jid} selected {target_name}", file=sys.stderr)
+        return True
+
+    # 2. Expand the stored list ("Show 3 more resumes") and re-check.
+    _expand_resume_list(page)
+    if _select_resume_by_name(page, target_name):
+        print(f"RESUME:{jid} selected existing {target_name}", file=sys.stderr)
+        return True
+
+    # 3. Upload the tailored PDF.
+    if not _upload_file_by_text(page, "Upload resume", pdf_path):
+        print(f"RESUME:{jid} upload failed", file=sys.stderr)
+        return False
+    print(f"RESUME:{jid} uploaded {os.path.basename(pdf_path)}", file=sys.stderr)
+    time.sleep(4)
+
+    # 4. Select the freshly uploaded resume.
+    if _select_resume_by_name(page, target_name):
+        print(f"RESUME:{jid} selected after upload", file=sys.stderr)
+    return True
 
 
 def field_deterministic(page, f, ans):
@@ -404,6 +567,17 @@ def fill_page(page, fields, profile, answers_override=None, filled_keys=None):
 
     state = load_state()
     jid = state.get("jid", "")
+
+    # LinkedIn Easy Apply: replace the pre-selected resume with the tailored
+    # PDF before touching any other field on the page. No-op on other
+    # platforms / other steps.
+    if jid:
+        try:
+            if not linkedin_ensure_resume(page, jid):
+                print("  RESUME_BLOCK: tailored resume could not be placed — "
+                      "do not submit blind", file=sys.stderr)
+        except Exception as re_:
+            print(f"  RESUME_WARN: {str(re_)[:120]}", file=sys.stderr)
 
     resume_path = None
     cover_path = None

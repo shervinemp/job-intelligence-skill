@@ -1,9 +1,40 @@
 """act/inspect.py — Inspect and Next commands."""
 import sys, time
+from urllib.parse import urlparse
 
 from apply.common.output import emit_next, emit_status, emit_error
 from apply.common.page_helpers import load_state
 from apply.act.helpers import chrome_session, _find_next_button, _click_action
+
+
+def _same_host(a, b):
+    try:
+        ha = (urlparse(a).netloc or "").lower()
+        hb = (urlparse(b).netloc or "").lower()
+        if not ha or not hb:
+            return False
+        return ha == hb
+    except Exception:
+        return False
+
+
+def _job_url(jid, state):
+    """The target job's URL, ignoring stale shared-state for another jid.
+    The runtime cache (apply_state.json) is shared across jobs — a prior
+    operation on a different job must never steer navigation or inspection."""
+    if state.get("jid") == jid:
+        ext = state.get("external_url") or state.get("url", "")
+        if ext:
+            return ext
+    try:
+        from lib.db import get_conn
+        row = get_conn().execute(
+            "SELECT url, external_url FROM jobs WHERE id=?", (jid,)).fetchone()
+        if row:
+            return row["external_url"] or row["url"] or ""
+    except Exception:
+        pass
+    return ""
 
 
 def cmd_inspect(jid):
@@ -13,7 +44,7 @@ def cmd_inspect(jid):
     state = load_state()
 
     with chrome_session(state) as (page, ctx):
-        url = state.get("external_url") or state.get("url", "")
+        url = _job_url(jid, state)
         if url:
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -60,9 +91,10 @@ def cmd_next(jid):
         emit_next("act --submit", "the submit path investigates (never re-clicks)")
         return 1
     with chrome_session(state) as (page, ctx):
-        url = state.get("external_url") or state.get("url", "")
+        url = _job_url(jid, state)
         cur = page.url or ""
-        if url and (not cur or "about:blank" in cur or "chrome-error" in cur):
+        if url and (not cur or "about:blank" in cur or "chrome-error" in cur
+                    or not _same_host(cur, url)):
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             time.sleep(1)
 

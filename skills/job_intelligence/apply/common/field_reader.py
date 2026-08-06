@@ -176,6 +176,7 @@ _READER_JS = """(config) => {
             autocomplete: el.getAttribute('autocomplete') || '',
             aria_autocomplete: el.getAttribute('aria-autocomplete') || '',
             data_automation_id: el.getAttribute('data-automation-id') || '',
+            data_testid: el.getAttribute('data-testid') || '',
             role: el.getAttribute('role') || '',
             required: !!el.required || el.getAttribute('aria-required') === 'true',
             value: rawVal, isEmpty: isEmptyValue(rawVal),
