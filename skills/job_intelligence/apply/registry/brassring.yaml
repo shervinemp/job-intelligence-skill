@@ -1,0 +1,26 @@
+name: brassring
+version: 1
+
+detect:
+  domains:
+    - brassring.com
+    - jobs.brassring.com
+  source_keywords:
+    - "brassring.com"
+    - "brassring"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Brassring (Kenexa/IBM) application forms are classic multi-step HTML
+  (profile → resume → questions → review). The ProfileBuilder flow can
+  load in a frame or a separate page; login/registration wall common.

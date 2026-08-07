@@ -1,0 +1,26 @@
+name: teamtailor
+version: 1
+
+detect:
+  domains:
+    - teamtailor.com
+  source_keywords:
+    - "teamtailor-cdn.com"
+    - "teamtailor.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Teamtailor career sites (<company>.teamtailor.com) are single-app
+  SPAs; the JS assets load from teamtailor-cdn.com — the detection
+  keyword when the job board is embedded on the employer's domain.
+  Standard fields; consent checkboxes auto-checked.

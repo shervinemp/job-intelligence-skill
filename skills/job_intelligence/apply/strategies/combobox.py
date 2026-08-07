@@ -181,6 +181,62 @@ def _collect_visible_options(page, root_id=""):
     return opts or []
 
 
+def _fiber_option_fallback(page, sel, candidates):
+    """Fiber-assisted option recovery (COMPARISON §S2).
+
+    When the listbox-root scoping missed rendered options (Workday renders
+    the list in a container our aria-controls lookup can't see), React fiber
+    props still carry the option texts. We re-locate each fiber option in the
+    REAL DOM by text and return it with its actual id/coordinates — so the
+    click path operates on a real element, never a phantom.
+
+    Fiber is READ-ONLY disambiguation; the deterministic read-back in
+    fill_field remains the certifier. Options that don't resolve to a real
+    visible DOM element are dropped (they cannot be clicked).
+    """
+    try:
+        from apply.common.fiber import options_from_fiber
+        texts = options_from_fiber(page, sel)
+    except Exception:
+        return []
+    if not texts:
+        return []
+    from apply.common.match import scoring_candidates as _msc
+    cnorms = _msc(candidates)
+    # Resolve each candidate option text to a real, visible DOM element.
+    try:
+        resolved = page.evaluate("""(texts) => {
+            const out = {};
+            const nodes = document.querySelectorAll(
+                '[role="option"], li, [role="menuitem"], [class*="option"], '
+                + '[class*="menu-item"], .select2-results__option, button');
+            for (const o of nodes) {
+                if (o.offsetParent === null) continue;
+                const t = (o.textContent || '').trim();
+                if (!t || t.length > 120) continue;
+                if (!(t in out)) {
+                    const r = o.getBoundingClientRect();
+                    out[t] = { id: o.id || '', x: Math.round(r.x + r.width / 2),
+                               y: Math.round(r.y + r.height / 2) };
+                }
+            }
+            return out;
+        }""", texts)
+    except Exception:
+        resolved = {}
+    out = []
+    for t in texts:
+        sc = _score_option(t, cnorms)
+        if sc < 2:
+            continue
+        loc = (resolved or {}).get(t)
+        if not loc:
+            continue  # no real DOM element → cannot click, drop
+        out.append({"text": t, "id": loc.get("id", ""), "x": loc.get("x", 0),
+                    "y": loc.get("y", 0), "score": sc, "fiber": True})
+    return out
+
+
 def _collect_with_scroll(page, sel, root_id="", max_passes=5):
     """Collect options from a (possibly virtualized) listbox, scrolling
     it between passes until the option set stabilizes."""
@@ -694,6 +750,27 @@ def fill(page, f, ans, time_budget=25.0):
                         diag, "unfiltered"):
                 f["_diag"] = diag
                 return True
+        # Fiber disambiguation (COMPARISON §S2): the DOM listbox was empty
+        # (Workday renders options only on focus), but React fiber props
+        # already hold the option texts. Try them as a last mechanical pass
+        # before falling through to no_option_match.
+        try:
+            fopts = _fiber_option_fallback(page, sel, candidates)
+            if fopts:
+                ok, picked, verdict = _try_click_best(page, sel, ans, fopts, candidates, country_words=_cw)
+                if ok:
+                    diag["reason"] = "fiber_match"
+                    diag["after"] = picked["text"][:60]
+                    if verdict is None:
+                        diag["unverified"] = True
+                    f["_diag"] = diag
+                    return True
+                if _try_llm(page, sel, fopts, f.get("label", ""), ans, candidates,
+                            diag, "fiber"):
+                    f["_diag"] = diag
+                    return True
+        except Exception:
+            pass
 
         diag["reason"] = "no_option_match"
         diag["typed_options"] = typed_seen

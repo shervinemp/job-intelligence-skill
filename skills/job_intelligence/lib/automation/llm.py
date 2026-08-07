@@ -45,8 +45,10 @@ _KIND_AUTO = {
     "outreach": True,        # tone review: the orchestrator judges the
                              # message against the voice spec + thread reality
                              # before it leaves — no hardcoded phrase lists
-    "outreach_compose": False,  # message WRITING is the orchestrator's job;
-                             # the weak model does not draft the outreach
+    "outreach_compose": True,   # the orchestrator DRAFTS the outreach message
+                             # from the evidence (thread/position/shared
+                             # commonalities) + the style prompt, then tone
+                             # review gates the send. Best judgment, automated.
 }
 
 

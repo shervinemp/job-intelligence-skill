@@ -1,0 +1,34 @@
+name: eightfold
+version: 1
+
+detect:
+  domains:
+    - eightfold.ai
+    - careers.eightfold.ai
+  # NOTE: Jobright detects eightfold via `?pid=` but we deliberately do NOT —
+  # `pid` is a generic query param (product/post id) on countless sites and
+  # would false-classify them as eightfold. Eightfold portals are identified
+  # by host or the eightfold JS bundle in page source only.
+  # Bare "eightfold" is also too generic (prose: "eightfold increase").
+  source_keywords:
+    - "eightfold.ai"
+    - "eightfold-careers"
+
+probe:
+  best_strategy: standard
+  widgets:
+    dropdown: "button[aria-haspopup='listbox']"
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Eightfold career portals (careers.<company>.eightfold.ai or the
+  customer's domain) run a multi-step SPA. Detect via host, pid query
+  param, or the eightfold JS bundle in page source. Custom dropdowns +
+  comboboxes; login wall common.

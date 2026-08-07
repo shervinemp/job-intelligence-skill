@@ -223,9 +223,32 @@ def _click_apply_button(page):
 
 def _probe_form(page, reg, jid, allow_vision=True):
     from apply.common import inspector as _insp
+    # Layer-3 detection (COMPARISON §S1): a customer-branded career page that
+    # matched no registry by URL may still be a known ATS via page source
+    # (APPLY_form_renderer.js, teamtailor, recruiterflow, icims embed, ...).
+    # Upgrade the registry config BEFORE probing so its best_strategy/widgets
+    # and iframe_only flag apply.
+    if reg is None:
+        try:
+            from apply.common.registry import resolve_from_page as _rfp
+            reg = _rfp(page.url, page=page)
+            if reg is not None:
+                print(f"REGISTRY: resolved by page source → {reg.name}", file=sys.stderr)
+        except Exception:
+            reg = None
     orig = _insp._PROBE_STRATEGIES
     if not allow_vision:
         _insp._PROBE_STRATEGIES = [s for s in orig if s[0] != "vision"]
+    # iframe_only platforms (iCIMS): the form lives in a frame on a customer
+    # host. Bump iframe probing to the front of the cascade so we don't burn
+    # standard/dialog probes on a page whose only form is inside a frame.
+    if reg is not None and getattr(reg, "iframe_only", False):
+        _insp._PROBE_STRATEGIES = (
+            [("iframe", _insp._probe_iframes),
+             ("iframe_navigate", _insp._probe_iframe_navigate)]
+            + [s for s in _insp._PROBE_STRATEGIES
+               if s[0] not in ("iframe", "iframe_navigate")]
+        )
     try:
         orig_url = page.url
         pr = _insp.probe(page, registry_config=reg, jid=jid)

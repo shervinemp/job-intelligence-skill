@@ -4,6 +4,10 @@ version: 1
 detect:
   domains:
     - sapsf.com
+  source_keywords:
+    - "successfactors.com"
+    - "sapsf.com"
+    - "successfactors_cdm"
 
 probe:
   best_strategy: standard

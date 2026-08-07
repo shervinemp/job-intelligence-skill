@@ -127,11 +127,93 @@ def _probe_dialog(page, registry_config=None):
     )
 
 
+def _frame_has_form_controls(frame):
+    """Cheap presence check: does `frame` expose visible form controls?
+    Uses a minimal evaluate (not the full reader) so polling is cheap."""
+    try:
+        return bool(frame.evaluate("""() => {
+            const els = document.querySelectorAll(
+                'input:not([type=hidden]):not([type=submit]), select, textarea');
+            for (const el of els) {
+                if (el.offsetParent !== null) return true;
+            }
+            return false;
+        }"""))
+    except Exception:
+        return False
+
+
+def wait_for_form_frame(page, timeout=8):
+    """Wait until any non-main frame contains visible form fields.
+
+    Iframe-based ATS (iCIMS, Brassring, Jobvite, SmartRecruiters, ...) mount
+    their form lazily after the parent page settles — probing frames on
+    arrival races the mount and reports an empty form. This polls the frame
+    tree until a frame exposes form controls (COMPARISON §S5), returning the
+    frame, or None on timeout. Never raises.
+
+    Also returns a frame whose URL matches a registered iframe_only platform
+    even when no fields are reachable yet — that signals "form lives in a
+    cross-origin frame we can't pierce", which the caller should treat as a
+    direct-navigation target rather than an empty page."""
+    import time as _t
+
+    # No iframes at all → nothing to wait for.
+    try:
+        if not page.evaluate("() => !!document.querySelector('iframe')"):
+            return None
+    except Exception:
+        return None
+
+    from apply.common.registry import resolve as _resolve
+    waited = 0.0
+    while waited < timeout:
+        try:
+            frames = page.frames
+        except Exception:
+            return None
+        for frame in frames:
+            if frame == page.main_frame:
+                continue
+            if _frame_has_form_controls(frame):
+                return frame
+            try:
+                src = (frame.url or "").lower()
+            except Exception:
+                src = ""
+            if src:
+                cfg = _resolve(src)
+                if cfg is not None and getattr(cfg, "iframe_only", False):
+                    return frame
+        _t.sleep(0.4)
+        waited += 0.4
+    return None
+
+
 def _probe_iframes(page):
-    """Depth 2: Probe same-origin iframes recursively."""
+    """Depth 2: Probe same-origin iframes recursively.
+
+    Waits up to JI_IFRAME_WAIT (default 8s) for a lazy-mounted form frame
+    before giving up (COMPARISON §S5), so iframe-based ATS aren't
+    misclassified as empty on the first poll."""
     all_fields = []
     all_buttons = []
     iframe_srcs = []
+
+    # Wait for lazy form-frame mounts (iCIMS/Brassring/Jobvite family).
+    # Default 6s, configurable via JI_IFRAME_WAIT; the cheap frame-presence
+    # poll returns as soon as a form lands. Skipped under JI_TESTS so the
+    # suite stays fast (the mock pages never mount a lazy form).
+    try:
+        import os as _os
+        if _os.environ.get("JI_TESTS"):
+            wait_s = 0
+        else:
+            wait_s = float(_os.environ.get("JI_IFRAME_WAIT", "6"))
+        if wait_s > 0:
+            wait_for_form_frame(page, timeout=wait_s)
+    except Exception:
+        pass
 
     try:
         frames = page.frames

@@ -28,13 +28,24 @@ trace to the evidence (thread exists, notes say suggested the job). The
 prompts hard-forbid inventing history the evidence does not support.
 """
 
-_ORCHESTRATOR_BRIEF = """You are composing a LinkedIn outreach message. Below is the EVIDENCE the pipeline gathered — the thread history, the job, the contact, the resume — and the VOICE SPEC from the template.
+_ORCHESTRATOR_BRIEF = """You are composing a LinkedIn outreach message that follows an application. Below is the EVIDENCE the pipeline gathered — the thread history, the job, the contact, the resume — and the VOICE SPEC.
 
-Write the message that a thoughtful human would send in this exact situation. Rules:
-- NEVER invent a relationship, a prior conversation, or a shared connection that the evidence does not show. If there is no thread history, it is a cold open. If the thread shows a prior message from you that went unanswered, it is a follow-up — acknowledge it ("circling back on my earlier message") without guilt or apology spirals.
-- Lead with what is real: a referral/suggestion if the contact notes say so, a prior thread if one exists, the application itself otherwise.
-- ONE soft ask at the end. Short (a DM: under ~120 words). Warm, human, specific — never a cover letter.
-- If the evidence says the last message was YOURS very recently (hours), do not send a near-identical repeat; either stand down or make the new message materially different (new info, attached resume, a specific question).
+Write the message a thoughtful human would send in this exact situation. The style is modeled on real messages the user has sent and found natural — adopt the STYLE, never a fixed template.
+
+These are SUGGESTIONS, not rules — apply your best judgment for this specific person and situation:
+
+- Consider opening with the concrete, verifiable action: "I recently applied for the {{job title}} role at {{company}}" — exact title, not vague. The recipient should know immediately what this is about.
+- A single specific, real relationship signal, stated warmly — co-founder, shared alma mater, mutual connections, a relevant post, or they suggested the job ("a fellow uOttawa grad!"). Use one only if the evidence supports it; never invent one.
+- The ask works well conditional and self-narrowing: "If you happen to be overseeing hiring for this role — or could point me toward whoever is — I'd really appreciate a quick moment." Don't assume they're the decision-maker; an easy alternative helps.
+- A release valve at the end tends to land well: "no worries at all if you're tied up!" — it makes declining costless.
+- Short — around 3 tight paragraphs is a good shape: (1) context; (2) relationship + ask; (3) thanks + release valve. Let the content dictate the length.
+- Tone: first-name sign-off, contractions, natural cadence, one warm touch. Sound like a person, not a template or cover letter.
+
+Thread reality (from the EVIDENCE): no thread → clean cold open. You messaged recently and they never replied → this is a follow-up; acknowledge it ("circling back on my earlier message") without guilt or a near-identical repeat. They replied → continuation; reference their actual message. Never write as if the relationship is new when the evidence says it isn't.
+
+The resume is ATTACHED — avoid "attaching my resume for your reference" or filler that makes the attachment the message. The message still has to say something specific about the role and the recipient; the attachment is context, not content.
+
+NEVER invent a relationship, a prior conversation, or a shared connection the evidence does not show.
 
 EVIDENCE:
 {evidence}
@@ -123,21 +134,91 @@ def tone_review(message, thread=None, voice_spec="", channel="message",
         return None, [], f"ask_api exception: {str(e)[:80]}"
 
 
+def _profile_commonalities(contact):
+    """Shared-background signals between the user and the contact, derived
+    from the profile + contact data. These are the "fellow uOttawa grad" /
+    "we share connections" hooks — ONLY derived, never invented.
+
+    Returns a list of concrete signal strings, e.g.:
+      ["your contact's role: Co-founder @ STAN AI",
+       "shared alma mater: University of Ottawa (your MSc, 2021-2024)",
+       "mutual connections present on their profile"]
+    Empty when nothing attributable is found — the message must not invent
+    a commonality.
+    """
+    sig = []
+    try:
+        from lib.config import PROFILE_PATH
+        import json as _json
+        profile = {}
+        with open(PROFILE_PATH, encoding="utf-8") as f:
+            profile = _json.load(f) or {}
+    except Exception:
+        profile = {}
+    contact = contact or {}
+
+    role = (contact.get("role") or "").strip()
+    headline = (contact.get("headline") or "").strip()
+    degree = (contact.get("connection_degree") or "").strip()
+    if role:
+        sig.append(f"their role: {role[:80]}")
+    elif headline:
+        sig.append(f"their headline: {headline[:80]}")
+
+    # Shared alma mater — compare profile education vs any education signal
+    # we have on the contact (notes may carry it).
+    my_edu = [str(e.get("institution", "")).strip()
+              for e in (profile.get("education") or []) if e.get("institution")]
+    notes = (contact.get("notes") or "")
+    notes_l = notes.lower()
+    for inst in my_edu:
+        if inst and inst.lower() in notes_l:
+            sig.append(f"shared alma mater: {inst} (yours in profile)")
+            break
+    # A contact whose alma mater we do not have on record but whose notes
+    # mention one of ours → same signal (handled above). Otherwise nothing.
+
+    if degree:
+        d = degree.lower()
+        if "1st" in d:
+            sig.append("1st-degree connection")
+        elif "2nd" in d:
+            sig.append("2nd-degree connection")
+        elif "mutual" in d or "co-worker" in d:
+            sig.append(degree[:40])
+    return sig
+
+
 def build_evidence(contact, job, thread=None, resume_pdf=None, channel="message"):
     """Package the outreach evidence into a compact, deterministic string the
     composer prompt can consume. All claims must trace to real data — this is
-    the anti-hallucination boundary for relationship lines."""
+    the anti-hallucination boundary for relationship lines.
+
+    Includes role/headline/degree and derived shared commonalities (alma
+    mater, degree), the job + application state, and the real thread history
+    — so the orchestrator can lead with what is actually true.
+    """
     lines = []
     job_c = (job or {}).get("company", "") or ""
     job_t = (job or {}).get("title", "") or ""
+    stage = (job or {}).get("stage", "") or ""
     name = (contact or {}).get("name", "") or ""
     notes = (contact or {}).get("notes", "") or ""
     lines.append(f"Contact: {name}")
     lines.append(f"Job: {job_t} at {job_c}")
+    if stage:
+        lines.append(f"Application state: {stage}")
     if notes:
         lines.append(f"Contact notes: {notes[:200]}")
     else:
         lines.append("Contact notes: (none)")
+    # Shared-background signals — the concrete relationship hooks.
+    common = _profile_commonalities(contact)
+    if common:
+        lines.append("Shared signals: " + "; ".join(common))
+    else:
+        lines.append("Shared signals: (none found — cold open, no invented "
+                     "relationship)")
     if thread:
         lines.append(f"Existing thread: {'YES' if thread.get('exists') else 'NO'}")
         if thread.get("exists"):
@@ -156,20 +237,21 @@ def build_evidence(contact, job, thread=None, resume_pdf=None, channel="message"
 
 def compose(contact, job, thread=None, resume_pdf=None, channel="message",
             voice_spec="", template=""):
-    """Compose the outreach message.
+    """Compose the outreach message from the EVIDENCE + the style prompt.
 
-    Returns (body, detail). When no orchestrator is in the loop and the weak
-    model is allowed (JI_LLM_MODE=on), drafts via ask_text. Otherwise returns
-    (None, reason) and the caller uses its own template fallback — the
-    orchestrator (operator) writes the message with the evidence in view.
+    The orchestrator LLM drafts it (thread history, position, shared
+    commonalities, application state, resume) following the guiding style
+    prompt. Returns (body, detail). When the model is unavailable or the
+    policy forbids it, returns (None, reason) and the caller uses its own
+    fallback — the composed message is still tone-reviewed at send time.
     """
     evidence = build_evidence(contact, job, thread=thread,
                               resume_pdf=resume_pdf, channel=channel)
     try:
         from lib.automation.llm import allow
         if not allow("outreach_compose"):
-            return None, ("orchestrator decision (outreach compose gated to "
-                          "the operator in auto mode)")
+            return None, ("orchestrator decision (outreach compose disabled "
+                          "by JI_LLM_MODE)")
     except Exception:
         pass
     try:
@@ -190,6 +272,6 @@ def compose(contact, job, thread=None, resume_pdf=None, channel="message",
         body = body.strip()
         if body.startswith('"') and body.endswith('"'):
             body = body[1:-1].strip()
-        return body, "ask_api draft"
+        return body, "orchestrator draft (from evidence + style prompt)"
     except Exception as e:
         return None, f"ask_api exception: {str(e)[:80]}"

@@ -35,10 +35,47 @@ from apply.common.resolve import resolve, learn_mapping, _build_ephemeral
 from apply.common.validate import validate_value
 from apply.steps.probe import resolve_selector
 
+_SKILLS_LABEL_RE = re.compile(r"skill|competenc|school|education|degree|certif", re.I)
+
 # Upper bound on fields processed in one page pass. The largest real
 # application forms (Workday multi-section) sit well under 200; anything
 # above this is a malformed or hostile DOM, not a form to fill.
 MAX_FIELDS_PER_PAGE = int(os.environ.get("JI_MAX_FIELDS", "300"))
+
+# Humanization (COMPARISON §S7): randomized per-field pacing so the fill
+# cadence isn't a fixed, machine-regular beat. Range in seconds; parse from
+# "min-max" or a single float. OFF when disabled via JI_FILL_DELAY=0 or when
+# JI_TESTS is set (tests must stay fast and deterministic).
+_DELAY_LO, _DELAY_HI = 0.0, 0.0
+
+
+def _load_delay_bounds():
+    global _DELAY_LO, _DELAY_HI
+    try:
+        if os.environ.get("JI_TESTS"):
+            _DELAY_LO, _DELAY_HI = 0.0, 0.0
+            return
+        raw = os.environ.get("JI_FILL_DELAY", "0.15-0.35").strip()
+        if not raw or raw == "0":
+            _DELAY_LO, _DELAY_HI = 0.0, 0.0
+            return
+        if "-" in raw:
+            lo, hi = (float(p) for p in raw.split("-", 1))
+            _DELAY_LO, _DELAY_HI = min(lo, hi), max(lo, hi)
+        else:
+            _DELAY_LO, _DELAY_HI = 0.0, float(raw)
+    except Exception:
+        _DELAY_LO, _DELAY_HI = 0.0, 0.0
+
+
+def inter_field_delay():
+    """Randomized delay between field fills (humanization jitter)."""
+    import random
+    _load_delay_bounds()
+    if _DELAY_HI <= 0:
+        return
+    time.sleep(random.uniform(_DELAY_LO, _DELAY_HI))
+
 
 RESULTS_DIR = os.path.join(JI_HOME, "results")
 
@@ -118,6 +155,162 @@ def _try_filechooser_upload(page, label, path, sel=""):
         except Exception:
             continue
     return False
+
+
+def _try_show_open_file_picker(page, label, path, sel=""):
+    """Fallback: intercept the File System Access API.
+
+    Modern ATS (2024+) call `showOpenFilePicker()` instead of opening an
+    `<input type=file>` chooser — Playwright's expect_file_chooser can't
+    see that, so the upload would silently no-op. We patch
+    `window.showOpenFilePicker` in the MAIN world (our own original
+    implementation, COMPARISON §S6) to resolve a synthetic FileSystemFileHandle
+    backed by `path`, then click the upload control that triggers it.
+
+    The patch is installed on the current frame tree only and restored
+    after the click — it never survives to other pages. Returns True on
+    success, False when the patched path didn't fire."""
+    if not os.path.exists(path):
+        return False
+    import base64 as _b64
+    try:
+        with open(path, "rb") as _f:
+            _payload = _b64.b64encode(_f.read()).decode("ascii")
+    except Exception:
+        return False
+    name = os.path.basename(path)
+    _mime = "application/pdf" if path.lower().endswith(".pdf") else \
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" \
+        if path.lower().endswith(".docx") else "application/msword"
+    lc = (label or "").lower()
+    upload_kws = ["resume", "cv", "cover", "upload", "attach", "browse"]
+    targets = []
+    if sel:
+        targets.append(sel)
+    for kw in upload_kws:
+        for selector in [
+            f'button:has-text("{kw}")',
+            f'[role="button"]:has-text("{kw}")',
+            f'a:has-text("{kw}")',
+            f'label:has-text("{kw}")',
+        ]:
+            targets.append(selector)
+    for target in targets:
+        try:
+            btn = page.locator(target).first
+            if btn.count() == 0:
+                continue
+            ok = _patch_show_open_file_picker(page, _payload, name, _mime)
+            if not ok:
+                continue
+            try:
+                btn.click(timeout=3000)
+            except Exception:
+                btn.click(force=True, timeout=3000)
+            time.sleep(2)
+            fired = _fsap_was_called(page)
+            _unpatch_show_open_file_picker(page)
+            if fired:
+                return True
+            # The patched picker never fired — the click was not an FSAP
+            # trigger. Keep trying other targets.
+            continue
+        except Exception:
+            try:
+                _unpatch_show_open_file_picker(page)
+            except Exception:
+                pass
+            continue
+    return False
+
+
+def _patch_show_open_file_picker(page, b64_payload, name, mime):
+    """Install a synthetic showOpenFilePicker on page + its frames.
+
+    Sets window.__ji_fsap_called = 0 before, and increments it inside the
+    patched handler, so _try_show_open_file_picker can verify the picker
+    was actually invoked (a click on a non-upload button must not count as
+    a successful upload)."""
+    import json as _json
+    _code = f"""() => {{
+        const payload = {_json.dumps(b64_payload)};
+        const fname = {_json.dumps(name)};
+        const fmime = {_json.dumps(mime)};
+        const bin = atob(payload);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const file = new File([bytes], fname, {{ type: fmime }});
+        const handle = {{
+            name: fname,
+            kind: 'file',
+            getFile: async () => file,
+            createWritable: async () => ({{
+                write: async () => {{}},
+                close: async () => {{}},
+            }}),
+        }};
+        window.__ji_orig_showOpenFilePicker = window.showOpenFilePicker;
+        window.__ji_fsap_called = 0;
+        window.showOpenFilePicker = async () => {{
+            window.__ji_fsap_called = (window.__ji_fsap_called || 0) + 1;
+            return [handle];
+        }};
+        return true;
+    }}"""
+    try:
+        page.evaluate(_code)
+    except Exception:
+        return False
+    for fr in page.frames:
+        if fr == page.main_frame:
+            continue
+        try:
+            fr.evaluate(_code)
+        except Exception:
+            continue
+    return True
+
+
+def _fsap_was_called(page):
+    """Did the patched showOpenFilePicker fire anywhere in the frame tree?"""
+    try:
+        if int(page.evaluate("() => window.__ji_fsap_called || 0") or 0) > 0:
+            return True
+    except Exception:
+        pass
+    for fr in page.frames:
+        if fr == page.main_frame:
+            continue
+        try:
+            if int(fr.evaluate("() => window.__ji_fsap_called || 0") or 0) > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _unpatch_show_open_file_picker(page):
+    """Restore the original showOpenFilePicker on the page AND every frame
+    (the patch in _patch_show_open_file_picker is installed per-frame; a
+    stale patch left in a sub-frame would feed the NEXT upload a frozen
+    file handle)."""
+    _code = """() => {
+        if (window.__ji_orig_showOpenFilePicker) {
+            window.showOpenFilePicker = window.__ji_orig_showOpenFilePicker;
+            delete window.__ji_orig_showOpenFilePicker;
+        }
+    }"""
+    try:
+        page.evaluate(_code)
+    except Exception:
+        pass
+    for fr in page.frames:
+        if fr == page.main_frame:
+            continue
+        try:
+            fr.evaluate(_code)
+        except Exception:
+            continue
 
 
 def _field_key(f):
@@ -643,6 +836,26 @@ def fill_page(page, fields, profile, answers_override=None, filled_keys=None):
     # Merges LLM key-mapping results into answers_override so Phase 2 picks them up.
     answers_override = gap_fill_into_answers(fields, profile, answers_override, jid, ephemeral)
 
+    # ── Per-field registry fill hints (COMPARISON §S4) ────────────────
+    # Registry fill.hints select a platform's fill protocol per field
+    # (Workday skills_enter, clear_field_errors). Attach the matching hint
+    # keys onto each field so the filler chain can read them.
+    try:
+        from apply.common.registry import resolve as _resolve_reg_hints
+        _hint_url = page.url if isinstance(page.url, str) else ""
+        _hint_reg = _resolve_reg_hints(_hint_url) if _hint_url else None
+        if _hint_reg is not None:
+            _hints = getattr(_hint_reg, "fill_hints", {}) or {}
+            if _hints:
+                for f in fields:
+                    if _hints.get("skills_enter") and _SKILLS_LABEL_RE.search(
+                            (f.get("label") or "")):
+                        f["hint_skills_enter"] = True
+                    if _hints.get("clear_field_errors"):
+                        f["hint_clear_field_errors"] = True
+    except Exception:
+        pass
+
     for f in fields:
         label = f.get("label", "").strip()
         if not label:
@@ -650,6 +863,8 @@ def fill_page(page, fields, profile, answers_override=None, filled_keys=None):
 
         tag = (f.get("tag") or "").lower()
         ftype = (f.get("type") or "").lower()
+        # Humanization (COMPARISON §S7): randomized inter-field pacing.
+        inter_field_delay()
         if _is_upload_field(f):
             path = _file_path_for(label, f, resume_path, cover_path)
             if path and os.path.exists(path):
@@ -681,6 +896,10 @@ def fill_page(page, fields, profile, answers_override=None, filled_keys=None):
                     else:
                         if _try_filechooser_upload(page, label, path, sel=sel):
                             filled.append({"label": label, "key": _field_key(f)})
+                        elif _try_show_open_file_picker(page, label, path, sel=sel):
+                            # File System Access API upload (2024+ ATS).
+                            filled.append({"label": label, "key": _field_key(f),
+                                           "method": "show_open_file_picker"})
                         else:
                             print(f"  UPLOAD_FAIL: {label}", file=sys.stderr)
                 except Exception as ue:

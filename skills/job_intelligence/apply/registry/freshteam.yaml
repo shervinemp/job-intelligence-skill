@@ -1,0 +1,24 @@
+name: freshteam
+version: 1
+
+detect:
+  domains:
+    - freshteam.com
+  source_keywords:
+    - "freshteam.com"
+    - "freshteam"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: false
+  has_eeo: false
+
+notes: |
+  Freshworks FreshTeam career pages are single-page application forms.
+  Standard HTML fields; consent checkboxes auto-checked.

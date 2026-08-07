@@ -6,6 +6,22 @@ detect:
     - greenhouse.io
     - boards.greenhouse.io
     - grnh.se
+  # Apply URLs can sit on a customer's branded domain while naming the
+  # engine via query params or the greenhouse JS bundle.
+  query_params:
+    - gh_jid
+    - gh_src
+  source_keywords:
+    - "boards.greenhouse.io"
+    - "gh_jid"
+    - "greenhouse.io/embed"
+    - "grnh.se"
+
+url_normalize:
+  # boards.greenhouse.io/<co>/jobs/<id>/ (trailing slash) drops ?gh_jid —
+  # normalize the canonical URL so the query string survives navigation.
+  - pattern: '^(https?://boards\.greenhouse\.io/[^/]+/jobs/\d+)/+(\?|$)'
+    replace: '\1\2'
 
 url_rewrites:
   # boards.greenhouse.io/<co>/jobs/<id> redirects to branded SPA career pages

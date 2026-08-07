@@ -1,0 +1,26 @@
+name: comeet
+version: 1
+
+detect:
+  domains:
+    - comeet.co
+    - jobs.comeet.co
+  source_keywords:
+    - "comeet.co"
+    - "comeet"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: false
+  has_eeo: false
+
+notes: |
+  Comeet positions render as single-page application forms on
+  jobs.comeet.co or the customer's domain. Standard HTML fields + file
+  uploads; the probe cascade handles discovery.

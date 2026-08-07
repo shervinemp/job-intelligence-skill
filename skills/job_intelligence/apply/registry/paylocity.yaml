@@ -1,0 +1,26 @@
+name: paylocity
+version: 1
+
+detect:
+  domains:
+    - paylocity.com
+    - careers.paylocity.com
+  source_keywords:
+    - "paylocity.com"
+    - "paylocity"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Paylocity career portals are multi-step forms (personal → resume →
+  questions → review). Standard HTML fields + file uploads; login wall
+  common.

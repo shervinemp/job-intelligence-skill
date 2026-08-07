@@ -273,8 +273,11 @@ class OutreachLLM(unittest.TestCase):
             {"company": "Co", "title": "Role"},
             thread=None, resume_pdf=None, channel="message")
         self.assertIn("Existing thread: UNKNOWN", ev)
-        self.assertNotIn("suggested", ev.lower())
-        self.assertNotIn("shared", ev.lower())
+        self.assertIn("none found", ev.lower())
+        # With no role/degree/notes, the evidence must not assert any
+        # relationship exists.
+        self.assertNotIn("Co-founder", ev)
+        self.assertNotIn("alma mater", ev.lower())
 
     def test_build_evidence_includes_thread_when_present(self):
         from lib.outreach_llm import build_evidence
@@ -290,16 +293,52 @@ class OutreachLLM(unittest.TestCase):
         self.assertIn("you sent it", ev)
         self.assertIn("Resume: attached", ev)
 
-    def test_compose_gated_in_auto_mode(self):
+    def test_compose_runs_in_auto_mode(self):
+        """outreach_compose is ON in auto mode — the orchestrator drafts the
+        message from evidence + the style prompt. The send is still gated by
+        tone review."""
         import os
+        from unittest.mock import patch
         os.environ["JI_LLM_MODE"] = "auto"
         try:
             from lib.outreach_llm import compose
-            body, detail = compose({"name": "X"}, {"company": "C", "title": "T"})
-            self.assertIsNone(body)
-            self.assertIn("orchestrator", detail.lower())
+            with patch("lib.ask_api.available", return_value=True), \
+                 patch("lib.ask_api.ask_text",
+                       return_value=("Hi Sina, I applied. Open to a chat?", None)):
+                body, detail = compose({"name": "X", "role": "Co-founder"},
+                                       {"company": "C", "title": "T"})
+            self.assertTrue(body)
+            self.assertIn("orchestrator draft", detail.lower())
         finally:
             os.environ.pop("JI_LLM_MODE", None)
+
+    def test_compose_falls_back_when_model_down(self):
+        from unittest.mock import patch
+        from lib.outreach_llm import compose
+        with patch("lib.ask_api.available", return_value=False):
+            body, detail = compose({"name": "X"}, {"company": "C", "title": "T"})
+        self.assertIsNone(body)
+        self.assertIn("unavailable", detail.lower())
+
+    def test_evidence_includes_shared_signals(self):
+        from lib.outreach_llm import build_evidence
+        ev = build_evidence(
+            {"name": "Bogdan", "role": "Co-founder",
+             "connection_degree": "1st",
+             "notes": "uOttawa — fellow grad, suggested the job"},
+            {"company": "STAN AI", "title": "AI Developer", "stage": "applied"},
+            thread=None, channel="message")
+        self.assertIn("Co-founder", ev)
+        self.assertIn("Application state: applied", ev)
+        self.assertIn("Shared signals", ev)
+
+    def test_evidence_no_shared_signal_is_cold_open(self):
+        from lib.outreach_llm import build_evidence
+        ev = build_evidence(
+            {"name": "K", "notes": ""}, {"company": "C", "title": "T"},
+            thread=None, channel="message")
+        self.assertIn("none found", ev.lower())
+        self.assertIn("cold open", ev.lower())
 
 
 if __name__ == "__main__":

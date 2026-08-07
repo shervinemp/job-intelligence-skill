@@ -202,6 +202,52 @@ def _default_message_body(name, title, company):
     )
 
 
+def _auto_compose(jid, contact, channel="message"):
+    """Compose the outreach message from evidence + the style prompt — the
+    orchestrator drafts it (thread history, position, shared commonalities,
+    app state, resume) and tone review gates the send.
+
+    Returns (body, detail). When the model is unavailable or policy forbids
+    it, returns (None, reason) — the caller falls back to the default body.
+    The thread evidence is read live from the real inbox."""
+    from lib import linkedin_messaging as _lm
+    from lib.outreach_llm import compose as _compose
+    job = get_job(jid) or {}
+    name = (contact or {}).get("name", "")
+    thread = None
+    try:
+        from lib.chrome_manager import connect as _connect
+        b, ctx = _connect(timeout=30)
+        if ctx:
+            thread = _lm.thread_status(ctx, name)
+            try:
+                b.close()
+            except Exception:
+                pass
+    except Exception:
+        thread = None
+    from lib.config import TEMPLATES_DIR
+    tpl_name = ("linkedin_message.md" if channel in ("message", "linkedin")
+                else "email_recruiter.md")
+    voice_spec, template = "", ""
+    try:
+        with open(os.path.join(TEMPLATES_DIR, tpl_name), "r",
+                  encoding="utf-8") as f:
+            _t = f.read()
+        marker = "---\nVOICE SPEC"
+        if marker in _t:
+            head, _, spec = _t.partition(marker)
+            template = head.strip()
+            voice_spec = spec.strip()
+        else:
+            template = _t.strip()
+    except Exception:
+        pass
+    resume_pdf = _job_resume_pdf(jid)
+    return _compose(contact, job, thread=thread, resume_pdf=resume_pdf,
+                    channel=channel, voice_spec=voice_spec, template=template)
+
+
 def _template_vars(name, title, company, contact=None, job=None):
     """The {variable} fill set for outreach templates. Relationship signals
     from the contact's notes (a referral, a mutual connection, a suggestion)
@@ -253,6 +299,22 @@ def _template_vars(name, title, company, contact=None, job=None):
         notes = (contact.get("notes") or "")
         if notes:
             vars["suggestion_reason"] = notes[:200]
+        # relationship_signal: a warm, evidence-based hook (co-founder, shared
+        # alma mater, mutual connection, suggested the job). Take it from the
+        # notes when they carry it; otherwise leave empty — the orchestrator
+        # writes it from evidence, never inventing one.
+        rel = ""
+        for key in ("role", "connection_degree", "headline"):
+            v = (contact.get(key) or "").strip()
+            if v:
+                rel = v
+                break
+        if notes and rel:
+            vars["relationship_signal"] = f"{rel} — {notes[:120]}"
+        elif rel:
+            vars["relationship_signal"] = rel
+        else:
+            vars["relationship_signal"] = ""
     return vars
 
 
@@ -581,6 +643,11 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
 
     subject = f"Regarding {title} at {company}" if title and company else f"Inquiry regarding {company}"
 
+    # Sandbox FIRST — refuse before any browser opens or any auto-compose
+    # reads the inbox.
+    if _sandbox_refused():
+        return
+
     if body:
         body_text = body
     elif body_file:
@@ -591,13 +658,23 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
             print(f"Body file not found: {body_file}", file=sys.stderr)
             return
     else:
-        body_text = (
-            f"Hi {name},\n\n"
-            f"I recently came across the {title} role at {company} and "
-            f"wanted to reach out to learn more about the position and the team.\n\n"
-            f"Thanks,\nShervin"
-        )
-        print(f"DEFAULT_BODY: used template — provide --body or --body-file for custom message", file=sys.stderr)
+        # Auto-compose from evidence + the style prompt (orchestrator drafts
+        # from thread/position/shared commonalities; tone review gates the
+        # send). Falls back to the default body when no model is available.
+        _composed, _detail = _auto_compose(jid, contact, channel="email")
+        if _composed:
+            body_text = _composed
+            print(f"AUTO_COMPOSE: {_detail}", file=sys.stderr)
+        else:
+            body_text = (
+                f"Hi {name},\n\n"
+                f"I recently came across the {title} role at {company} and "
+                f"wanted to reach out to learn more about the position and the team.\n\n"
+                f"Thanks,\nShervin"
+            )
+            print(f"DEFAULT_BODY: no auto-compose ({_detail}) — used template "
+                  f"fallback; provide --body or --body-file for custom message",
+                  file=sys.stderr)
 
     if dry_run:
         resume_pdf = _job_resume_pdf(jid)
@@ -613,9 +690,6 @@ def cmd_email(jid, contact_idx=1, dry_run=False, body=None, body_file=None, forc
                   file=sys.stderr)
         print(f"  Body:\n{body_text}\n", file=sys.stderr)
         print(f"NEXT: reach.py email {jid} --contact {contact_idx}  (remove --dry-run to send)", file=sys.stderr)
-        return
-
-    if _sandbox_refused():
         return
 
     if not _preflight_send(body_text, "email", contact=contact, job=job,
@@ -727,6 +801,12 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
     company = job.get("company", "") if job else ""
     title = job.get("title", "") if job else ""
 
+    # Sandbox FIRST — refuse before any browser opens or any auto-compose
+    # reads the inbox. (The library-level refusal in lib.linkedin_messaging
+    # stays as the backstop — this is the cheap outer gate.)
+    if _sandbox_refused():
+        return
+
     if body:
         body_text = body
     elif body_file:
@@ -737,8 +817,18 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
             print(f"Body file not found: {body_file}", file=sys.stderr)
             return
     else:
-        body_text = _default_message_body(name, title, company)
-        print(f"DEFAULT_BODY: used template — provide --body or --body-file for custom message", file=sys.stderr)
+        # Auto-compose from evidence + the style prompt (orchestrator drafts
+        # from thread/position/shared commonalities; tone review gates the
+        # send). Falls back to the default body when no model is available.
+        _composed, _detail = _auto_compose(jid, contact, channel="message")
+        if _composed:
+            body_text = _composed
+            print(f"AUTO_COMPOSE: {_detail}", file=sys.stderr)
+        else:
+            body_text = _default_message_body(name, title, company)
+            print(f"DEFAULT_BODY: no auto-compose ({_detail}) — used template "
+                  f"fallback; provide --body or --body-file for custom message",
+                  file=sys.stderr)
 
     if dry_run:
         print(f"DRY_RUN: Would DM {name} on LinkedIn", file=sys.stderr)
@@ -754,12 +844,6 @@ def cmd_message(jid, contact_idx=1, dry_run=False, body=None, body_file=None, fo
                   file=sys.stderr)
         print(f"  Body:\n{body_text}\n", file=sys.stderr)
         print(f"NEXT: reach.py message {jid} --contact {contact_idx}  (remove --dry-run to send)", file=sys.stderr)
-        return
-
-    # Sandbox FIRST: refuse before launching a browser, not after. (The
-    # library-level refusal in lib.linkedin_messaging stays as the
-    # backstop — this is the cheap outer gate.)
-    if _sandbox_refused():
         return
 
     if not _preflight_send(body_text, "message", contact=contact, job=job,

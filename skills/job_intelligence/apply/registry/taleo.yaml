@@ -1,0 +1,28 @@
+name: taleo
+version: 1
+
+detect:
+  domains:
+    - taleo.net
+    - tbe.taleo.net
+  source_keywords:
+    - "taleo.net"
+    - "oraclecloud"
+    - "taleo"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Oracle Taleo applications are classic multi-step server-rendered forms
+  (Contact → Resume → Questions → Review). Standard HTML inputs + file
+  uploads; login wall common (existing account prompt). detect covers both
+  taleo.net and the TBE (Talent Business Experience) subdomain.

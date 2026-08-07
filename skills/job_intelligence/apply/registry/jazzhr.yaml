@@ -1,0 +1,27 @@
+name: jazzhr
+version: 1
+
+detect:
+  domains:
+    - jazz.co
+    - apply.jazz.co
+    - jazzhr.com
+  source_keywords:
+    - "jazz.co"
+    - "jazzhr"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  JazzHR application forms (apply.<company>.jazz.co) are multi-step
+  (contact → resume → questions → review). Standard HTML fields + file
+  uploads; login wall uncommon.

@@ -1,0 +1,30 @@
+name: workable
+version: 1
+
+detect:
+  domains:
+    - workable.com
+    - apply.workable.com
+  # Bare "workable" is an English word ("a workable solution") — only the
+  # domain markers classify.
+  source_keywords:
+    - "apply.workable.com"
+    - "workable.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+    - "you have already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Workable applications are multi-step forms with standard HTML inputs and
+  custom consent checkboxes (auto-checked via the consent path). Apply URL
+  is usually apply.<company>.workable.com — detected by source keyword when
+  the hostname is the customer's own domain.

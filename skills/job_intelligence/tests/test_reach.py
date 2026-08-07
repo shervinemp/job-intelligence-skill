@@ -563,6 +563,31 @@ class OutreachIsRecorded(_TempDBMixin, unittest.TestCase):
         self.assertIn("tailored resume", err)
         self.assertNotIn("MESSAGE_SENT", err)
 
+    def test_auto_compose_used_when_no_body(self):
+        """With no --body/--body-file, cmd_message auto-composes from evidence
+        (orchestrator drafts from thread/position/shared commonalities) and
+        sends it — the default-body fallback only fires when no model is
+        available."""
+        from unittest import mock
+        import json as _json
+        cid = self._contact(url="https://www.linkedin.com/in/test-person")
+        composed = "Hi Test Person, I recently applied for the Role at Co and wanted to reach out directly."
+        with mock.patch("lib.chrome_manager.connect",
+                        return_value=(mock.Mock(), mock.Mock())), \
+             mock.patch.object(self.reach, "send_message",
+                               return_value={"status": "sent",
+                                             "conversation_url": "u"}), \
+             mock.patch.object(self.reach, "_auto_compose",
+                               return_value=(composed, "orchestrator draft")), \
+             mock.patch.object(self.reach, "_preflight_send", return_value=True), \
+             mock.patch.object(self.reach, "_job_resume_pdf", return_value=None), \
+             mock.patch.object(self.reach.subprocess, "run",
+                               return_value=mock.Mock(returncode=0,
+                                                      stdout=b"", stderr=b"")):
+            err = self._stderr_of(self.reach.cmd_message, "aaaaaaaaaaaaaaaa", 1)
+        self.assertIn("AUTO_COMPOSE", err)
+        self.assertNotIn("DEFAULT_BODY", err)
+
     def test_failed_email_still_records_the_attempt(self):
         """Failures must be recorded too — an unrecorded failure is
         indistinguishable from 'never tried' on the next run."""

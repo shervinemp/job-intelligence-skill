@@ -1,0 +1,33 @@
+name: gohire
+version: 1
+
+detect:
+  domains:
+    - gohire.io
+  source_keywords:
+    - "gohire.io"
+
+url_normalize:
+  # GoHire drops the query string when the URL ends in a trailing slash —
+  # normalize so the job id survives navigation (COMPARISON §S8). The
+  # pattern is anchored to the gohire.io host so it never rewrites an
+  # unrelated site's URL.
+  - pattern: '^(https?://[^/]*\.gohire\.io/[^/]+/[^/?]+\d+)/+(\?|$)'
+    replace: '\1\2'
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: false
+  has_eeo: false
+
+notes: |
+  GoHire career pages (<company>.gohire.io/<role>/<slug>-<id>/) are
+  single-page application forms. The URL's trailing slash drops query
+  params during navigation — normalized by url_normalize. Standard HTML
+  fields + file upload.

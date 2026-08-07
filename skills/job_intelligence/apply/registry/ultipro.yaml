@@ -1,0 +1,31 @@
+name: ultipro
+version: 1
+
+detect:
+  domains:
+    - ultipro.com
+    - ultipro.ca
+    - rec.pro.ukg.net
+    - myhronline.com
+  source_keywords:
+    - "ultipro.com"
+    - "rec.pro.ukg.net"
+    - "ukg.com"
+    - "ultipro"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  UKG Pro / UltiPro career sites (rec.<company>.ultipro.com) are classic
+  multi-step server-rendered forms. Apply links may live on the employer's
+  domain with the form hosted on ultipro/UKG — detect via source keyword
+  or the rec.pro.ukg.net redirect family. Login wall common.

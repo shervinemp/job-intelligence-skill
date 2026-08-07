@@ -618,7 +618,11 @@ class FileFiller(FieldFiller):
             pass
         # Fallback: intercept file chooser (SPA upload button pattern)
         from apply.common.fill_runner import _try_filechooser_upload
-        return _try_filechooser_upload(page, f.get("label", ""), path, sel=sel)
+        if _try_filechooser_upload(page, f.get("label", ""), path, sel=sel):
+            return True
+        # Fallback: File System Access API (showOpenFilePicker) — 2024+ ATS.
+        from apply.common.fill_runner import _try_show_open_file_picker
+        return _try_show_open_file_picker(page, f.get("label", ""), path, sel=sel)
 
 
 class AutocompleteFiller(FieldFiller):
@@ -848,6 +852,50 @@ class NativeSetterFallback(FieldFiller):
         return False
 
 
+class WorkdayFiller(FieldFiller):
+    """Workday-specific fill protocol (COMPARISON §S4).
+
+    Active only on Workday hosts (the field carries a `hint_*` set by the
+    registry fill.hints). Two semantics:
+      - `hint_clear_field_errors`: dispatch focus/input so Workday's
+        "requires a value" underline re-evaluates before we type.
+      - `hint_skills_enter` on typeahead fields (skills/school/location):
+        confirm the suggestion with Enter rather than a click — Workday
+        ignores the click on its typeahead.
+
+    Fiber use is READ-ONLY and only a disambiguation aid (option list /
+    selected label when the DOM is empty); the deterministic read-back
+    in fill_field remains the certifier. Any exception → False (the chain
+    falls through to the generic fillers).
+    """
+    name = "workday"
+
+    def can_handle(self, f):
+        return bool(f.get("hint_clear_field_errors")
+                    or f.get("hint_skills_enter"))
+
+    def fill(self, page, f, ans):
+        sel = f.get("_sel", "")
+        if not sel:
+            return False
+        if f.get("hint_clear_field_errors"):
+            try:
+                from apply.strategies.workday import clear_field_errors
+                clear_field_errors(page, sel)
+            except Exception:
+                pass
+        if f.get("hint_skills_enter"):
+            try:
+                from apply.strategies.workday import confirm_with_enter
+                if confirm_with_enter(page, sel, str(ans)):
+                    return True
+            except Exception:
+                pass
+            # Fall through: the generic combobox filler knows how to type
+            # + click the suggestion; Workday Enter just preferred.
+        return False
+
+
 # ─── Filler registry (order matters) ──────────────────────────────────
 
 _FILLERS = [
@@ -856,6 +904,12 @@ _FILLERS = [
     CheckboxFiller(),
     FileFiller(),
     SelectFiller(),
+    # Workday BEFORE ComboboxFiller: a Workday skills typeahead IS a combobox
+    # (role=combobox), so the generic combobox filler would claim it first and
+    # the Enter-confirm protocol (COMPARISON §S4) would never fire. WorkdayFiller
+    # only matches fields carrying a registry fill hint, so moving it ahead is
+    # safe — non-Workday fields fall straight through to ComboboxFiller.
+    WorkdayFiller(),
     ComboboxFiller(),
     DatepickerFiller(),
     ContentEditableFiller(),

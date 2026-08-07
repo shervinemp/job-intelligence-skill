@@ -1,0 +1,28 @@
+name: phenom
+version: 1
+
+detect:
+  domains:
+    - phenompeople.com
+    - careers.phenompeople.com
+  source_keywords:
+    - "phenompeople"
+    - "APPLY_form_renderer.js"
+    - "phenom-people"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Phenom (phenompeople) powers branded career portals; the application
+  form loads via APPLY_form_renderer.js on the employer's domain. Detected
+  by source keyword when the hostname is the customer's own. Multi-step
+  form (profile → questions → review); login wall common.

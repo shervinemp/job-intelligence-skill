@@ -1,0 +1,27 @@
+name: dayforce
+version: 1
+
+detect:
+  domains:
+    - dayforce.com
+    - dayforcehcm.com
+  source_keywords:
+    - "dayforce.com"
+    - "dayforcehcm.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Ceridian Dayforce career portals are multi-step SPAs on the employer's
+  domain with the form hosted by the platform. Detect via dayforce.com /
+  dayforcehcm.com host or page-source keyword. Custom dropdowns +
+  comboboxes; login wall common.

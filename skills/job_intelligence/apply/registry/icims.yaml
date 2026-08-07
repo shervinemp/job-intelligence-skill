@@ -4,6 +4,13 @@ version: 1
 detect:
   domains:
     - icims.com
+  # iCIMS embeds its application form in an iframe on the employer's
+  # branded career portal — the customer hostname never contains icims.com.
+  iframe_only: true
+  source_keywords:
+    - "icims.com"
+    - "jobs.icims.com"
+    - "icims_candidate_application"
 
 properties:
   multi_page: true

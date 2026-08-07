@@ -13,9 +13,22 @@ detect:
     - myworkdayjobs.com
     - myworkdayjobs.wd5.myworkdayjobs.com
     - myworkdayjobs.wd1.myworkdayjobs.com
+    - myworkdaysite.com
     - workday.com
     - workdayjobs.com
     - wday.com
+  # Workday customer career pages live on the employer's domain; the engine
+  # is identified by the workday JS bundle path in the page source.
+  # DELIBERATELY no bare "Workday"/"workday" keyword — it appears in job
+  # descriptions as "Workday experience" and would false-classify any page
+  # that merely mentions the product.
+  source_keywords:
+    - "wd5.myworkdayjobs.com"
+    - "myworkdayjobs.com"
+    - "myworkdayjobs.wd5"
+    - "myworkdaysite.com"
+    - "workdayprd"
+    - "wdrun"
 
 probe:
   best_strategy: dialog
@@ -42,3 +55,15 @@ properties:
   has_eeo: true
   has_progress_bar: true
   page_range: [3, 7]
+
+# Per-field fill semantics (COMPARISON §S4). Workday's widgets are fiber-
+# driven; generic click-the-first-suggestion fails. These hints select the
+# protocol per field class:
+#   enter_to_confirm: type the value then press Enter (skills/school
+#     typeahead accepts Enter, not a click on the suggestion)
+#   clear_field_errors: before filling, clear the field's error state
+#     (Workday keeps a "requires a value" red underline until corrected)
+fill:
+  hints:
+    skills_enter: true
+    clear_field_errors: true

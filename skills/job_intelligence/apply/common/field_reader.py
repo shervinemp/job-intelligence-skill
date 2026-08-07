@@ -454,7 +454,7 @@ _READER_JS = """(config) => {
 
     return {
         fieldCount: finalFields.length,
-        fields: finalFields.slice(0, 35),
+        fields: finalFields.slice(0, config.max_fields || 300),
         pageType: pageType,
         hasFileInput: fileCount > 0,
         hasRequiredFile: root.querySelectorAll('input[type="file"][required]').length > 0,
@@ -464,13 +464,16 @@ _READER_JS = """(config) => {
 }"""
 
 
-def read_fields(page, scope="document", custom_widgets=None):
+def read_fields(page, scope="document", custom_widgets=None, max_fields=None):
     """Read all form fields from a page. Returns dict with fieldCount, fields, buttons, etc.
 
     Args:
         page: Playwright page object
         scope: 'document' for full page, 'dialog' for modal only
         custom_widgets: dict of widget type ΓåÆ CSS selector from registry config
+        max_fields: upper bound on fields returned (default 300). The old
+            hard-capped 35 silently dropped fields on large Workday/matrix
+            forms (COMPARISON §S3); the cap is now explicit and configurable.
 
     Returns structured dict on success or empty dict on failure (dead tab, cross-origin, detached element).
     """
@@ -478,6 +481,7 @@ def read_fields(page, scope="document", custom_widgets=None):
         return page.evaluate(_READER_JS, {
             "scope": scope,
             "custom_widgets": custom_widgets or {},
+            "max_fields": max_fields or 300,
         })
     except Exception as e:
         print(f"FIELD_READ_ERROR: read_fields failed ΓÇö {e}", file=sys.stderr)

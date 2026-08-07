@@ -1,0 +1,26 @@
+name: jobscore
+version: 1
+
+detect:
+  domains:
+    - jobscore.com
+    - jobs.jobscore.com
+  source_keywords:
+    - "jobscore.com"
+    - "jobscore"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: false
+  has_eeo: false
+
+notes: |
+  JobScore career pages render the application form directly or in an
+  iframe (jobs.<company>.jobscore.com). Standard HTML fields; the probe
+  cascade's iframe + standard strategies both apply.

@@ -1,0 +1,29 @@
+name: personio
+version: 1
+
+detect:
+  domains:
+    - personio.com
+    - personio.de
+    - jobs.personio.com
+    - jobs.personio.de
+  source_keywords:
+    - "personio.com"
+    - "personio.de"
+    - "personio"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Personio job boards (jobs.personio.de/.com or embedded on the customer's
+  domain) are multi-step forms. Standard HTML fields; consent checkboxes
+  auto-checked. Login wall uncommon but present on some tenants.

@@ -1,0 +1,25 @@
+name: breezy
+version: 1
+
+detect:
+  domains:
+    - breezy.hr
+  # Bare "breezy" is an English adjective — only the domain marker classifies.
+  source_keywords:
+    - "breezy.hr"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Breezy application forms are multi-step (profile → questions → review).
+  Standard HTML fields; consent checkboxes auto-checked. Login/account wall
+  common.

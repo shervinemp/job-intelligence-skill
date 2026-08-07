@@ -1,0 +1,32 @@
+name: jobvite
+version: 1
+
+detect:
+  domains:
+    - jobvite.com
+    - jobs.jobvite.com
+  query_params:
+    - jobviteiframe
+  source_keywords:
+    - "jobvite.com"
+    - "jobs.jobvite.com"
+    - "jvite"
+
+probe:
+  best_strategy: standard
+  widgets:
+    dropdown: "button[aria-haspopup='listbox']"
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Jobvite application forms are standard HTML, multi-step (personal →
+  work history → EEOC → review). URL may carry ?jobviteiframe= — the form
+  renders inline or in an iframe; the probe cascade handles both.
+  Login/account wall is common.

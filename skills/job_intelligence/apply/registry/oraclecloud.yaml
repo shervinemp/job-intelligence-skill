@@ -1,0 +1,27 @@
+name: oraclecloud
+version: 1
+
+detect:
+  domains:
+    - oraclecloud.com
+  source_keywords:
+    - "oraclecloud.com"
+    - "cloud.oracle.com"
+    - "oraclecloud"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Oracle Cloud HCM (CandidateExperience) career portals are multi-step
+  SPAs on oraclecloud.com or the employer's domain (via the oraclecloud
+  page-source keyword). Distinct from Ceridian Dayforce — Oracle and
+  Dayforce are separate platforms.

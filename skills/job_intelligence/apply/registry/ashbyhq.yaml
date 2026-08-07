@@ -12,6 +12,13 @@ detect:
   domains:
     - ashbyhq.com
     - trmlabs.com
+  query_params:
+    - ashby_jid
+  source_keywords:
+    - "ashbyhq.com/embed"
+    - "ashbyhq.com/application"
+    - "ashby_candidate_application"
+    - "ashby-jd"
 probe:
   best_strategy: standard
   widgets:

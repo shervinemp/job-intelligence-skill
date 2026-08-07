@@ -1,0 +1,26 @@
+name: rippling
+version: 1
+
+detect:
+  domains:
+    - rippling.com
+    - ats.rippling.com
+  source_keywords:
+    - "rippling.com"
+    - "rippling-ats"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: false
+  has_eeo: false
+
+notes: |
+  Rippling ATS career sites (ats.<company>.rippling.com or the customer's
+  domain) are single-page React applications. Standard HTML fields +
+  custom dropdowns; consent checkboxes auto-checked.

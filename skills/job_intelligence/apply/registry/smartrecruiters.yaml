@@ -1,0 +1,27 @@
+name: smartrecruiters
+version: 1
+
+detect:
+  domains:
+    - smartrecruiters.com
+  source_keywords:
+    - "smartrecruiters.com"
+    - "smartrecruiters_candidate"
+    - "jobs.smartrecruiters.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  SmartRecruiters application is a multi-step SPA (profile → questions →
+  review). Fields render standard HTML + custom dropdowns; login wall
+  common ("Sign in to apply"). The probe cascade's standard + custom_widgets
+  strategies cover it.

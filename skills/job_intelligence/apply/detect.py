@@ -28,9 +28,9 @@ def _classify(url: str, ext_url: str = "") -> tuple[str, str]:
     if "linkedin.com/jobs" in ul and not eul:
         return "easy_apply", ""
     # Direct ATS URL — consult registry as single source of truth
-    from apply.common.registry import resolve as resolve_registry
+    from apply.common.registry import resolve as resolve_registry, normalize_url
     if resolve_registry(url):
-        return "ats_direct", url
+        return "ats_direct", normalize_url(url)
     return "external", url  # assume external if we have a URL
 
 

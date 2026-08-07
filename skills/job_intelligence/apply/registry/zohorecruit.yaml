@@ -1,0 +1,29 @@
+name: zohorecruit
+version: 1
+
+detect:
+  domains:
+    - zohorecruit.com
+    - zohorecruit.in
+  source_keywords:
+    - "zohorecruit"
+    - "zoho.com/recruit"
+    - "zoho.com/portal"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Zoho Recruit career portals (jobs.<company>.zohorecruit.com or
+  jobs.zohorecruit.in) are multi-step forms. Detect via zohorecruit host
+  or the zoho.com/recruit portal path in the URL/page. Login wall common
+  (portal sign-in). Deliberately NOT matched on bare zoho.com — Zoho Mail,
+  CRM, etc. are unrelated products.

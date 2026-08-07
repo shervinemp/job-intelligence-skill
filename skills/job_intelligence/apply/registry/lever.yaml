@@ -8,6 +8,11 @@ notes: |
 detect:
   domains:
     - lever.co
+  query_params:
+    - LeverAppId
+  source_keywords:
+    - "jobs.lever.co"
+    - "lever.co/apply"
 probe:
   best_strategy: standard
 patterns:

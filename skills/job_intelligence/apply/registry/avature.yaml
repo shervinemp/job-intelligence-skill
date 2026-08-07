@@ -1,0 +1,27 @@
+name: avature
+version: 1
+
+detect:
+  domains:
+    - avature.net
+  # Bare "avature" is a proper noun that can appear in prose — only the
+  # domain-specific marker classifies.
+  source_keywords:
+    - "avature.net"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Avature career portals (careers.<company>.avature.net) are multi-step
+  forms; the employer's branded domain hosts the apply URL but the engine
+  is Avature. Detect via avature.net host or page-source keyword. Standard
+  HTML fields + file uploads; login wall common.
