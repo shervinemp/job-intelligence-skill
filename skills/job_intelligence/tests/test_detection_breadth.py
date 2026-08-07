@@ -84,6 +84,34 @@ class PageSourceDetection(unittest.TestCase):
                                 html="<html><body>nothing here</body></html>")
         self.assertIsNone(reg)
 
+    def test_link_to_ats_is_not_a_match(self):
+        """Weak-signal guard (COMPARISON §S1 audit): a page that merely LINKS
+        to careers.google.com / amazon.jobs / boards.greenhouse.io must NOT
+        classify as that ATS — the keyword inside <a href> is only a link,
+        not evidence the ATS powers this page."""
+        from apply.common.registry import resolve_from_page
+        for url, html in [
+            ("https://acme.com/blog",
+             '<html><body><a href="https://careers.google.com/jobs">jobs</a></body></html>'),
+            ("https://acme.com/blog",
+             '<html><body><a href="https://www.amazon.jobs/en">Apply</a></body></html>'),
+            ("https://acme.com/blog",
+             '<html><body><a href="https://boards.greenhouse.io/acme">Careers</a></body></html>'),
+        ]:
+            with self.subTest(url=url):
+                self.assertIsNone(resolve_from_page(url, html=html))
+
+    def test_script_src_is_a_match(self):
+        """A real loaded bundle (script src / iframe src / form action) IS
+        evidence the ATS powers the page — must still classify."""
+        from apply.common.registry import resolve_from_page
+        reg = resolve_from_page(
+            "https://acme.com/careers",
+            html='<html><script src="https://boards.greenhouse.io/embed/job_app?for=acme"></script></html>')
+        self.assertIsNotNone(reg)
+        self.assertEqual(reg.name, "greenhouse")
+        self.assertEqual(reg.name, "greenhouse")
+
 
 class IframeOnlyFlag(unittest.TestCase):
     """S1 layer 4: iframe_only platforms surface their flag so the probe

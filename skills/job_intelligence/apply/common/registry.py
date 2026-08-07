@@ -18,7 +18,7 @@ is a customer-branded domain (the Jobright-detection gap, COMPARISON §S1):
      host (iCIMS, SmartRecruiters embeds); the probe must look in frames.
 """
 
-import os, sys
+import os, re, sys
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -95,10 +95,19 @@ class RegistryConfig:
         """True when a captured page's raw HTML carries this platform's
         source keyword (JS bundle path, CDN, or engine marker). Used by
         resolve_from_page for customer-branded career sites whose hostname
-        is NOT the ATS's own domain."""
+        is NOT the ATS's own domain.
+
+        WEAK-SIGNAL GUARD (COMPARISON §S1 audit): a keyword inside an
+        <a href="..."> is only a LINK to the ATS, not evidence the ATS is
+        powering this page — an unrelated careers page linking to
+        careers.google.com must not classify as google. Anchor hrefs are
+        stripped before matching, so only non-link occurrences (script src,
+        iframe src, form action, body text, the page's own hostname) count."""
         if not html or not self.source_keywords:
             return False
         h = html.lower()
+        # Strip <a ... href="..."> attributes — links are weak signals.
+        h = re.sub(r'<a\b[^>]*?\bhref\s*=\s*"[^"]*"', "", h, flags=re.I)
         return any(k.lower() in h for k in self.source_keywords)
 
 

@@ -63,7 +63,12 @@ Detection is layered (COMPARISON §S1):
   so `mail.google.com` / `amazon.com/gp/cart` never classify as an ATS.
   Exception: Tesla/Uber/Waymo/Jacobs/Dover genuinely host careers on the root
   domain (`tesla.com/careers`) — an over-match there is benign (probe finds no
-  form → `no_apply_path`, never a dangerous fill).
+  form → `no_apply_path`, never a dangerous fill);
+- **weak-signal guard** — `match_page_source` strips `<a href>` values before
+  matching, so a page that merely LINKS to `careers.google.com` is not
+  classified as google; only a real loaded bundle (script/iframe/form/BODY
+  reference) counts. Audit find: the naive substring match previously fired on
+  an unrelated page's "Apply at careers.google.com" link.
 
 ### S2 — React fiber access: Jobright drives React from the inside; we drive from the outside
 Jobright injects MAIN-world scripts that read/write `__reactFiber$` internals:
