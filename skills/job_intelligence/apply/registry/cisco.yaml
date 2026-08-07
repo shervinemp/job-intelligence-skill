@@ -1,0 +1,23 @@
+name: cisco
+version: 1
+
+detect:
+  domains:
+    - jobs.cisco.com
+  source_keywords:
+    - "jobs.cisco.com"
+    - "cisco.com/careers"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Cisco Careers is a multi-step application form. Detect via jobs.cisco.com host or source. Login/account wall common. Root cisco.com is NOT matched.

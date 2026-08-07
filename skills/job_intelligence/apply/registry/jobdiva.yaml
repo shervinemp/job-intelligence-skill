@@ -1,0 +1,23 @@
+name: jobdiva
+version: 1
+
+detect:
+  domains:
+    - jobdiva.com
+    - jobs.jobdiva.com
+  source_keywords:
+    - "jobdiva.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  JobDiva application forms are multi-step. Standard HTML fields; login wall common.

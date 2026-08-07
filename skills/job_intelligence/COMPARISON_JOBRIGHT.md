@@ -22,7 +22,7 @@ original implementation** — no extension source was copied. New tests in
 |---|---|---|
 | Execution model | MV3 service worker + content script at `document_start`, all frames, injected React helper in shadow DOM | Python + Playwright over CDP, sequential per-job CLI (`apply.py act --fill`) |
 | Form crawl | Per-ATS crawler classes → rules `{label, type, $input, options, children, required}` | Generic `field_reader` JS block + YAML registry per ATS |
-| ATS registry | **~70** ATS, detected by domain + path regex + query params + page-source keywords + iframe-only flag | **36** registry YAMLs, detected by domain + query params + page-source keywords + iframe-only flag |
+| ATS registry | **~70** ATS, detected by domain + path regex + query params + page-source keywords + iframe-only flag | **70** registry YAMLs, detected by domain + query params + page-source keywords + iframe-only flag |
 | Answer source | Server AI (`/swan/autofill/fill-v2`) generates answers from user profile + resume | Deterministic `resolve` against `profile.json` + LLM **key-mapping** (label→profile key), never answer generation |
 | React handling | MAIN-world fiber injection (`__reactFiber$`) for Ashby/Workday/react-select/Recruitee/Workable | No fiber access; native setters + Playwright real events + keyboard typing + DOM readers |
 | Workday | Full fiber state machine (`updateStateFromValue`, `fireChangeEvent`, `onDatePicked`, `clearFieldErrors`) | Generic `button[aria-haspopup]` dropdown strategy + combobox; no fiber |
@@ -39,17 +39,16 @@ original implementation** — no extension source was copied. New tests in
 
 ## 2. Shortcomings of our project vs Jobright
 
-### S1 — ATS coverage: 36 vs ~70 (the single biggest gap)
-Jobright ships crawlers/detection for Workday, Greenhouse, Lever, Ashby, iCIMS,
-Phenom, Eightfold, UltiPro/UKG, Taleo, Brassring, Jobvite, Workable, Rippling,
-SmartRecruiters, Avature, Teamtailor, Personio, Dayforce, Paylocity,
-RecruiterFlow, Freshteam, JazzHR, Comeet, GoHire, ADP, Oracle Cloud HCM, Taleo,
-and dozens more. We cover 36 (`apply/registry/*.yaml`) — the 14 original plus
-jobvite, comeet, smartrecruiters, workable, breezy, taleo (already trusted in
-`url_safety._SESSION_HOST_SUFFIXES` but previously unregistered), and a second
-batch: phenom, eightfold, ultipro, brassring, avature, teamtailor, personio,
-gohire, rippling, zohorecruit, dayforce, oraclecloud, paylocity, jazzhr,
-freshteam, jobscore.
+### S1 — ATS coverage: 70 vs ~70 (headline gap closed)
+Jobright ships crawlers/detection for ~70 ATS. We now cover **70** (`apply/registry/*.yaml`): the 14 original + 22 multi-tenant ATS (jobvite, comeet,
+smartrecruiters, workable, breezy, taleo, phenom, eightfold, ultipro,
+brassring, avature, teamtailor, personio, gohire, rippling, zohorecruit,
+dayforce, oraclecloud, paylocity, jazzhr, freshteam, jobscore) + **34 company
+portals** (amazon, google, apple, cisco, tesla, uber, tiktok, bytedance,
+metacareers, hubspot, paycom, intuit, waymo, gusto, adobe, recruitee,
+trakstar, pinpointhq, isolved, jobdiva, careerplug, careerspage, clearcompany,
+recruiterflow, hiringthing, catsone, prismhr, toast, okta, jacobs, ycombinator,
+walmart, trinehire, dover).
 Detection is layered (COMPARISON §S1):
 - **query params** (`gh_jid`, `gh_src`, `ashby_jid`, `LeverAppId`,
   `jobviteiframe`) — an ATS apply URL on a foreign host still names its engine;
@@ -57,7 +56,14 @@ Detection is layered (COMPARISON §S1):
   `phenompeople`, `recruiterflow`, Avature) — `resolve_from_page()` scans the
   live page when hostname + query both fail;
 - **iframe-only flag** (iCIMS renders its form in an iframe with no page form) —
-  `_probe_form` bumps iframe probing to the front for such platforms.
+  `_probe_form` bumps iframe probing to the front for such platforms;
+- **company portals are path-scoped** — consumer-root domains (google.com,
+  amazon.com, apple.com, ...) are only matched via their **careers
+  subdomain/portal** (`careers.google.com`, `amazon.jobs`, `jobs.apple.com`),
+  so `mail.google.com` / `amazon.com/gp/cart` never classify as an ATS.
+  Exception: Tesla/Uber/Waymo/Jacobs/Dover genuinely host careers on the root
+  domain (`tesla.com/careers`) — an over-match there is benign (probe finds no
+  form → `no_apply_path`, never a dangerous fill).
 
 ### S2 — React fiber access: Jobright drives React from the inside; we drive from the outside
 Jobright injects MAIN-world scripts that read/write `__reactFiber$` internals:

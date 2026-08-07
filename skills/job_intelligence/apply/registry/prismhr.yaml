@@ -1,0 +1,23 @@
+name: prismhr
+version: 1
+
+detect:
+  domains:
+    - prismhr.com
+    - careers.prismhr.com
+  source_keywords:
+    - "prismhr.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  PrismHR career portals are multi-step application forms. Standard HTML fields; login wall common.

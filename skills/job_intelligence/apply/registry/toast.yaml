@@ -1,0 +1,23 @@
+name: toast
+version: 1
+
+detect:
+  domains:
+    - careers.toasttab.com
+  source_keywords:
+    - "careers.toasttab.com"
+    - "toasttab.com/careers"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Toast Careers is a multi-step application form. Standard HTML fields; login wall common. Root toasttab.com is NOT matched.

@@ -1,0 +1,22 @@
+name: intuit
+version: 1
+
+detect:
+  domains:
+    - careers.intuit.com
+  source_keywords:
+    - "careers.intuit.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Intuit Careers is a multi-step application form. Standard HTML fields; login wall common. Root intuit.com is NOT matched.

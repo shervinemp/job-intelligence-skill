@@ -1,0 +1,23 @@
+name: uber
+version: 1
+
+detect:
+  domains:
+    - uber.com
+  source_keywords:
+    - "uber.com/careers"
+    - "uber.com/us/en/careers"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Uber Careers is a multi-step SPA portal. Standard HTML fields + comboboxes; login wall common. Only the /careers path is a source keyword; root uber.com is NOT a domain match.

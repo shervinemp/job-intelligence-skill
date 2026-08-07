@@ -1,0 +1,22 @@
+name: recruiterflow
+version: 1
+
+detect:
+  domains:
+    - recruiterflow.com
+  source_keywords:
+    - "recruiterflow.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  RecruiterFlow career sites are multi-step application forms. Detect via recruiterflow host or source. Login wall common.

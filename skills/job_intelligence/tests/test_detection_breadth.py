@@ -132,6 +132,41 @@ class NewAtsCoverage(unittest.TestCase):
         ("jazzhr", "https://apply.acme.jazz.co/1"),
         ("freshteam", "https://acme.freshteam.com/1"),
         ("jobscore", "https://jobs.acme.jobscore.com/1"),
+        # Batch 3 — company portals (careers subdomain / portal only, NOT root).
+        ("amazon", "https://www.amazon.jobs/en/jobs/123"),
+        ("google", "https://careers.google.com/jobs/results/123"),
+        ("apple", "https://jobs.apple.com/en-us/details/123"),
+        ("cisco", "https://jobs.cisco.com/jobs/123"),
+        ("tesla", "https://www.tesla.com/careers/search/job/123"),
+        ("uber", "https://www.uber.com/us/en/careers/123"),
+        ("tiktok", "https://careers.tiktok.com/position/123"),
+        ("bytedance", "https://jobs.bytedance.com/en/position/123"),
+        ("metacareers", "https://www.metacareers.com/jobs/123"),
+        ("hubspot", "https://careers.hubspot.com/jobs/123"),
+        ("paycom", "https://careers.paycom.com/jobs/123"),
+        ("intuit", "https://careers.intuit.com/jobs/123"),
+        ("waymo", "https://www.waymo.com/careers/123"),
+        ("gusto", "https://careers.gusto.com/jobs/123"),
+        ("adobe", "https://careers.adobe.com/jobs/123"),
+        ("recruitee", "https://careers.acme.recruitee.com/1"),
+        ("trakstar", "https://apply.acme.trakstar.com/1"),
+        ("pinpointhq", "https://acme.pinpointhq.com/1"),
+        ("isolved", "https://careers.isolved.com/1"),
+        ("jobdiva", "https://jobs.jobdiva.com/1"),
+        ("careerplug", "https://acme.careerplug.com/1"),
+        ("careerspage", "https://acme.careers-page.com/1"),
+        ("clearcompany", "https://acme.hrmdirect.com/1"),
+        ("recruiterflow", "https://acme.recruiterflow.com/1"),
+        ("hiringthing", "https://acme.hiringthing.com/1"),
+        ("catsone", "https://acme.catsone.com/1"),
+        ("prismhr", "https://careers.prismhr.com/1"),
+        ("toast", "https://careers.toasttab.com/1"),
+        ("okta", "https://careers.okta.com/jobs/123"),
+        ("jacobs", "https://www.jacobs.com/careers/123"),
+        ("ycombinator", "https://www.workatastartup.com/companies/123"),
+        ("walmart", "https://careers.walmart.com/jobs/123"),
+        ("trinehire", "https://acme.trinehire.com/1"),
+        ("dover", "https://www.dover.com/careers/123"),
     ]
 
     def test_each_ats_resolves(self):
@@ -149,6 +184,27 @@ class NewAtsCoverage(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue((regdir / f"{name}.yaml").exists(),
                                 f"missing registry/{name}.yaml")
+
+    _FALSE_POSITIVES = [
+        "https://www.google.com/search?q=jobs",
+        "https://mail.google.com/",
+        "https://www.amazon.com/gp/cart/",
+        "https://www.apple.com/iphone/",
+        "https://www.tiktok.com/@user",
+        "https://www.walmart.com/grocery/",
+        "https://www.adobe.com/products/",
+        "https://www.hubspot.com/",
+        "https://careers-hubspot.com/",
+        "https://www.cisco.com/",
+    ]
+
+    def test_company_portals_do_not_match_root_domains(self):
+        """Regression: careers portals must NOT match the consumer root
+        (mail.google.com, amazon.com/gp/cart, apple.com/iphone, ...)."""
+        from apply.common.registry import resolve
+        for url in self._FALSE_POSITIVES:
+            with self.subTest(url=url):
+                self.assertIsNone(resolve(url), f"false positive: {url}")
 
     def test_gohire_trailing_slash_normalized(self):
         from apply.common.registry import normalize_url

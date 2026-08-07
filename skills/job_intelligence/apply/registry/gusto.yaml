@@ -1,0 +1,23 @@
+name: gusto
+version: 1
+
+detect:
+  domains:
+    - careers.gusto.com
+  source_keywords:
+    - "gusto.com/careers"
+    - "careers.gusto.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Gusto Careers is a multi-step application form. Standard HTML fields; login wall common. Root gusto.com is NOT matched.

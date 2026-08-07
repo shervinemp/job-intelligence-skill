@@ -1,0 +1,22 @@
+name: careerspage
+version: 1
+
+detect:
+  domains:
+    - careers-page.com
+  source_keywords:
+    - "careers-page.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  CareersPage job boards are multi-step application forms. Standard HTML fields; login wall common.

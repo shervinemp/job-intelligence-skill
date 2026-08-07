@@ -1,0 +1,22 @@
+name: hiringthing
+version: 1
+
+detect:
+  domains:
+    - hiringthing.com
+  source_keywords:
+    - "hiringthing.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  HiringThing-powered career sites are multi-step application forms. Standard HTML fields; login wall common.

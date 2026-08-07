@@ -1,0 +1,22 @@
+name: tiktok
+version: 1
+
+detect:
+  domains:
+    - careers.tiktok.com
+  source_keywords:
+    - "careers.tiktok.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  TikTok Careers (careers.tiktok.com) is a multi-step application portal. Standard HTML fields; login wall common. Root tiktok.com is NOT matched.

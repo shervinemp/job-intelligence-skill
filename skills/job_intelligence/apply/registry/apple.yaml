@@ -1,0 +1,23 @@
+name: apple
+version: 1
+
+detect:
+  domains:
+    - jobs.apple.com
+  source_keywords:
+    - "jobs.apple.com"
+    - "apple.com/careers"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Apple Careers (jobs.apple.com) is a multi-step application portal. Standard HTML fields; login wall common. Root apple.com is NOT matched.

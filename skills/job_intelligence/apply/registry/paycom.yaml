@@ -1,0 +1,22 @@
+name: paycom
+version: 1
+
+detect:
+  domains:
+    - careers.paycom.com
+  source_keywords:
+    - "careers.paycom.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Paycom Careers is a multi-step application form. Standard HTML fields; login wall common. Root paycom.com is NOT matched.

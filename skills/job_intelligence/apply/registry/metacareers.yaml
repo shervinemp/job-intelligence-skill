@@ -1,0 +1,23 @@
+name: metacareers
+version: 1
+
+detect:
+  domains:
+    - metacareers.com
+  source_keywords:
+    - "metacareers.com"
+    - "facebook.com/careers"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Meta Careers (metacareers.com) is a multi-step application portal. Standard HTML fields; login wall (Meta SSO) common.

@@ -1,0 +1,22 @@
+name: dover
+version: 1
+
+detect:
+  domains:
+    - dover.com
+  source_keywords:
+    - "dover.com/careers"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: false
+
+notes: |
+  Dover-powered career sites (dover.com) are single-page application forms. Standard HTML fields. Only /careers is a source keyword.

@@ -1,0 +1,23 @@
+name: hubspot
+version: 1
+
+detect:
+  domains:
+    - careers.hubspot.com
+  source_keywords:
+    - "careers.hubspot.com"
+    - "hubspot.com/careers"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  HubSpot Careers is a multi-step application form. Standard HTML fields; login wall common. Root hubspot.com is NOT matched.

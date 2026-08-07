@@ -1,0 +1,23 @@
+name: adobe
+version: 1
+
+detect:
+  domains:
+    - careers.adobe.com
+  source_keywords:
+    - "careers.adobe.com"
+    - "adobe.com/careers"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Adobe Careers is a multi-step application form. Detect via careers.adobe.com URL or adobe.com/careers source. Login wall common. Root adobe.com is NOT matched.

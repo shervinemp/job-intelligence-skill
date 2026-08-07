@@ -1,0 +1,22 @@
+name: trinehire
+version: 1
+
+detect:
+  domains:
+    - trinehire.com
+  source_keywords:
+    - "trinehire.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  TrineHire career sites are multi-step application forms. Standard HTML fields; login wall common.

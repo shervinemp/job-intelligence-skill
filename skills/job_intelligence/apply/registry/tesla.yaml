@@ -1,0 +1,27 @@
+name: tesla
+version: 1
+
+detect:
+  domains:
+    - tesla.com
+    - careers.tesla.com
+  source_keywords:
+    - "tesla.com/careers"
+    - "careers.tesla.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Tesla Careers (www.tesla.com/careers) is a multi-step form; the careers
+  pages live on the ROOT domain (no careers. subdomain), so tesla.com is a
+  domain match. Only job URLs enter the pipeline, so an over-match is benign
+  (probe finds no form → no_apply_path, never a dangerous fill).

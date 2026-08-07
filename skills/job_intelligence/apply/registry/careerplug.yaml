@@ -1,0 +1,22 @@
+name: careerplug
+version: 1
+
+detect:
+  domains:
+    - careerplug.com
+  source_keywords:
+    - "careerplug.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  CareerPlug job boards are multi-step application forms. Standard HTML fields; login wall common.

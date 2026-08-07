@@ -1,0 +1,24 @@
+name: recruitee
+version: 1
+
+detect:
+  domains:
+    - recruitee.com
+    - careers.recruitee.com
+  source_keywords:
+    - "recruitee.com"
+    - "careers.recruitee.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Recruitee job boards (careers.<company>.recruitee.com) are multi-step forms. Detect via recruitee host or source. Login wall common.

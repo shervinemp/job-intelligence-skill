@@ -1,0 +1,24 @@
+name: clearcompany
+version: 1
+
+detect:
+  domains:
+    - hrmdirect.com
+    - clearcompany.com
+  source_keywords:
+    - "hrmdirect.com"
+    - "clearcompany.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  ClearCompany (hrmdirect) career portals are multi-step application forms. Detect via hrmdirect.com host or source. Login wall common.

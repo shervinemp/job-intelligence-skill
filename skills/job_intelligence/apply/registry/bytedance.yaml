@@ -1,0 +1,24 @@
+name: bytedance
+version: 1
+
+detect:
+  domains:
+    - jobs.bytedance.com
+    - careers.bytedance.com
+  source_keywords:
+    - "jobs.bytedance.com"
+    - "careers.bytedance.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  ByteDance Careers (jobs.bytedance.com) is a multi-step application portal. Standard HTML fields; login wall common. Root bytedance.com is NOT matched.

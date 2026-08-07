@@ -1,0 +1,25 @@
+name: amazon
+version: 1
+
+detect:
+  domains:
+    - amazon.jobs
+    - careers.amazon.com
+  source_keywords:
+    - "amazon.jobs"
+    - "careers.amazon.com"
+    - "amazon.com/careers"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Amazon Jobs (amazon.jobs) is a multi-step application portal (login wall common, uses Amazon SSO). Detect via amazon.jobs host or URL path. Root amazon.com is NOT matched (cart/console/etc. are unrelated).

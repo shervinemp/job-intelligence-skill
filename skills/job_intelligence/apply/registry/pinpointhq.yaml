@@ -1,0 +1,23 @@
+name: pinpointhq
+version: 1
+
+detect:
+  domains:
+    - pinpointhq.com
+  source_keywords:
+    - "pinpointhq.com"
+    - "d2n5ied94mazop.cloudfront.net"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  PinpointHQ career sites are multi-step forms; their JS assets load from pinpointhq.com or the shared cloudfront CDN. Detect via host or source.

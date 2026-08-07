@@ -1,0 +1,24 @@
+name: ycombinator
+version: 1
+
+detect:
+  domains:
+    - ycombinator.com
+    - workatastartup.com
+  source_keywords:
+    - "workatastartup.com"
+    - "ycombinator.com/jobs"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: false
+
+notes: |
+  Y Combinator Work at a Startup is a job board that redirects to each startup's own ATS. Detect via workatastartup.com; the pipeline follows the external apply link.

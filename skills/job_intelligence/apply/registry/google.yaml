@@ -1,0 +1,22 @@
+name: google
+version: 1
+
+detect:
+  domains:
+    - careers.google.com
+  source_keywords:
+    - "careers.google.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Google Careers is a multi-step portal with standard HTML fields + comboboxes. Detect via careers.google.com. Login wall (Google account) common. Root google.com is NOT matched (search/mail are unrelated).

@@ -1,0 +1,23 @@
+name: trakstar
+version: 1
+
+detect:
+  domains:
+    - trakstar.com
+    - apply.trakstar.com
+  source_keywords:
+    - "trakstar.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  Trakstar application forms (apply.<company>.trakstar.com) are multi-step. Standard HTML fields; login wall common.

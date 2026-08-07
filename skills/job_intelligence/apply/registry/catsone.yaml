@@ -1,0 +1,22 @@
+name: catsone
+version: 1
+
+detect:
+  domains:
+    - catsone.com
+  source_keywords:
+    - "catsone.com"
+
+probe:
+  best_strategy: standard
+
+patterns:
+  already_applied:
+    - "already applied"
+
+properties:
+  multi_page: true
+  has_eeo: true
+
+notes: |
+  CatsOne career portals are multi-step application forms; apply links carry job-id params. Detect via catsone host or source. Login wall common.

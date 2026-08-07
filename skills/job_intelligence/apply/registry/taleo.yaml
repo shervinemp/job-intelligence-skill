@@ -5,10 +5,12 @@ detect:
   domains:
     - taleo.net
     - tbe.taleo.net
+  # "oraclecloud" belongs to the separate oraclecloud.yaml (Oracle Cloud HCM)
+  # — keeping it here would misclassify Oracle Cloud pages as Taleo. Bare
+  # "taleo" is a proper noun; only the domain markers classify.
   source_keywords:
     - "taleo.net"
-    - "oraclecloud"
-    - "taleo"
+    - "tbe.taleo.net"
 
 probe:
   best_strategy: standard
