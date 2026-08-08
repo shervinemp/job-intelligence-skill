@@ -399,16 +399,20 @@ def validate_file(path):
     return True
 
 
-def build(data_path, output_dir, company=None):
+def build(data_path, output_dir, company=None, pdf_check=True):
     """Validate + build resume and cover letter PDFs from a JSON Resume data file.
 
     Args:
         data_path: Path to resume JSON
         output_dir: Directory to write PDFs into
         company: Target company name for filenames (falls back to most recent work entry)
+        pdf_check: Run the post-build PDF quality gate (one-page + overlap +
+            clipping). Default True — the gate emits PDF_CHECK stderr lines and
+            the report is returned under `check`; callers decide whether to
+            treat a failure as blocking (admit does).
 
     Returns: dict with keys "resume" and "cover" (paths to generated PDFs, or None),
-             or None if validation fails.
+             plus "check" (the pdf_check report when enabled), or None if validation fails.
     """
     if not validate_file(data_path):
         return None
@@ -431,7 +435,11 @@ def build(data_path, output_dir, company=None):
             cover_style["portfolio_url"] = profiles[0].get("url", "")
         cpdf = _CoverLetterPDF(cover_style)
         cpath = _build_cover_letter(cpdf, data, company=company)
-        return {"resume": rpath, "cover": cpath}
+        result = {"resume": rpath, "cover": cpath}
+        if pdf_check and rpath and os.path.exists(rpath):
+            from lib.pdf_check import check_file as _pdf_check_file
+            result["check"] = _pdf_check_file(rpath, max_pages=1, label="resume")
+        return result
     finally:
         os.chdir(cwd)
 

@@ -384,6 +384,26 @@ class UrlNormalization(unittest.TestCase):
         url = "https://example.com/jobs/123/"
         self.assertEqual(normalize_url(url), url)
 
+    def test_navigate_normalizes_external_url(self):
+        """S8 polish: navigate stores the same canonical external_url as
+        detect — a query-dropping ATS must hash/dedupe identically regardless
+        of entry path."""
+        from unittest.mock import patch, MagicMock
+        from apply.navigate import run as navigate_run
+        with patch("apply.navigate.get_conn") as get_conn, \
+             patch("apply.common.page_helpers.save_state") as save_state, \
+             patch("apply.common.page_helpers.load_state", return_value={}):
+            conn = MagicMock()
+            row = {"url": "https://boards.greenhouse.io/acme/jobs/123",
+                   "title": "R", "company": "C", "state": "active",
+                   "external_url": "https://boards.greenhouse.io/acme/jobs/123/?gh_jid=456"}
+            conn.execute.return_value.fetchone.return_value = row
+            get_conn.return_value = conn
+            navigate_run("jid123")
+        saved = save_state.call_args[0][0]
+        self.assertEqual(saved["external_url"],
+                         "https://boards.greenhouse.io/acme/jobs/123?gh_jid=456")
+
 
 class ShowOpenFilePicker(unittest.TestCase):
     """S6: the FSAP upload fallback patches showOpenFilePicker in-page."""

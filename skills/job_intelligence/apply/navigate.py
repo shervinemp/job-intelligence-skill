@@ -31,6 +31,11 @@ def run(jid):
     if prior.get("jid") == jid:
         prior_ext = prior.get("external_url", "") or ""
     target_url = ext_url or prior_ext or url
+    # Canonicalize (COMPARISON §S8): a query-dropping ATS (greenhouse/goHire
+    # trailing slash) must store the same normalized URL as detect does, or
+    # the same posting could hash/dedupe differently depending on entry path.
+    from apply.common.registry import normalize_url as _norm_url
+    target_url = _norm_url(target_url)
     print(f"EXTERNAL_URL: {target_url}", file=sys.stderr)
 
     reg = resolve_registry(target_url)

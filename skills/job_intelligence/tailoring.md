@@ -20,6 +20,28 @@ Both routes converge on `admit` — gem route auto-builds PDFs, agent route requ
 
 Prompt does not include default resume — fill in CV content from candidate profile + job requirements.
 
+## PDF Quality Gate
+
+Every built resume is checked against a strict PDF gate (`lib/pdf_check.py`):
+
+- **One page** — `pages <= 1` (authoritative; blocks admit).
+- **No overlapping text** — word-bounding-box collisions detected via pdfplumber.
+- **No clipped text** — words past the right/bottom printable edge.
+
+The gate runs automatically after every build and emits `PDF_CHECK:` stderr lines.
+On failure the gem route **retries with feedback** (up to `JI_PDF_RETRY`, default 2):
+the exact findings ("3 page(s) — must be <= 1", "overlapping text on page 2:
+'...' x '...'") are fed back to the model and it re-generates. The agent route
+(the LLM writes resume.json + builds manually) runs the same gate via:
+
+```
+tailor.py check <jid>          # re-run the gate on the built resume PDF
+tailor.py retry <jid> --feedback "one page, no overlap"   # fix with feedback
+```
+
+`tailor.py admit` blocks a resume that breaks the gate unless `--force` (the
+orchestrator's explicit review verdict), mirroring the grounding gate.
+
 ## Quality Review
 
 After tailoring, optionally review generated CVs before admitting:

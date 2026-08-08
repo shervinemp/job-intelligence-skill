@@ -15,6 +15,8 @@ Usage:
                                       tailored claim must trace to
                                       profile.json (admit is blocked until
                                       clean; --force after human review)
+  tailor.py check <jid>               Re-run the PDF quality gate (one-page
+                                      + no overlapping/clipped text)
   tailor.py review [--jobs N]         Review tailored jobs (approve, or
                                       retry --feedback)
 """
@@ -100,20 +102,76 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
 
     app_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(app_dir, exist_ok=True)
-    stale = os.path.join(app_dir, "gemini_response.txt")
-    if os.path.exists(stale):
-        os.remove(stale)
-    success, output = call_gemini_node([prompt, "--app-dir", app_dir], timeout_seconds=600, gem=gem)
-    if not success:
-        response_path = os.path.join(app_dir, "gemini_response.txt")
-        if os.path.exists(response_path):
-            with open(response_path, encoding="utf-8") as f:
-                content = f.read().strip()
-            if len(content) > 50:
-                success, output = True, content
-    if not success:
-        return False, output
-    app_save(job_id, "gemini_response.txt", output)
+
+    # PDF-quality retry loop: the one-page/overlap/clip gate runs after every
+    # build; a failing resume re-invokes the gem with the exact findings as
+    # feedback (the orchestrator's "retry with feedback" contract). Bounded so
+    # a stuck model can't loop forever.
+    _MAX_PDF_RETRIES = int(os.environ.get("JI_PDF_RETRY", "2"))
+    _pdf_feedback = ""
+    success = False
+    output = ""
+    _gate_exhausted = False
+    _no_json = False
+    for attempt in range(_MAX_PDF_RETRIES + 1):
+        stale = os.path.join(app_dir, "gemini_response.txt")
+        if os.path.exists(stale):
+            os.remove(stale)
+        _prompt = prompt
+        if _pdf_feedback:
+            _prompt += (
+                "\n\n--- PDF QUALITY CHECK FAILED (fix these, keep the JSON "
+                "Resume format) ---\n" + _pdf_feedback)
+        success, output = call_gemini_node(
+            [_prompt, "--app-dir", app_dir], timeout_seconds=600, gem=gem)
+        if not success:
+            response_path = os.path.join(app_dir, "gemini_response.txt")
+            if os.path.exists(response_path):
+                with open(response_path, encoding="utf-8") as f:
+                    content = f.read().strip()
+                if len(content) > 50:
+                    success, output = True, content
+        if not success:
+            return False, output
+        app_save(job_id, "gemini_response.txt", output)
+
+        report = _extract_and_build_resume(output, app_dir, job)
+        if report is None:
+            # No resume JSON block in the output (model replied with prose or
+            # an error). This is NOT a successful tailor — the resume does not
+            # exist, so nothing passed the gate. Fail so the job is retryable
+            # rather than advancing with no resume.
+            _gate_exhausted = True
+            print(f"  PDF_FAILED: no resume JSON in gem output — review the "
+                  f"response before admit", file=sys.stderr)
+            _no_json = True
+            break
+        if report["check"].get("ok", True):
+            print(f"  PDF_CHECK: resume OK — {report['check']['pages']} page(s)",
+                  file=sys.stderr)
+            break
+        if attempt < _MAX_PDF_RETRIES:
+            from lib.pdf_check import feedback_for as _pdf_feedback_for
+            _pdf_feedback = _pdf_feedback_for(report["check"])
+            print(f"  PDF_RETRY: resume failed check (attempt {attempt + 1}) — "
+                  f"re-invoking gem with feedback", file=sys.stderr)
+        else:
+            _gate_exhausted = True
+            print(f"  PDF_FAILED: resume still fails check after "
+                  f"{_MAX_PDF_RETRIES + 1} attempt(s) — review the PDF before "
+                  f"admit", file=sys.stderr)
+            break
+
+    if _gate_exhausted:
+        # A resume that cannot pass the one-page/overlap gate (or was never
+        # produced) must NOT be marked tailored. Return failure so the job
+        # goes to `failed` state and `tailor.py retry` (with feedback) can fix.
+        if _no_json:
+            return False, ("no resume JSON in gem output — the model did not "
+                           "produce a resume; review the response and retry")
+        return False, ("resume fails the PDF quality gate (one page / no "
+                       "overlap / no clipping) after retries — fix via "
+                       "tailor.py retry <jid> --feedback or review manually")
 
     strategy_path = None
     strategy_match = re.search(r"(?:1\.\s*)?(Strategy.*?)(?=\n\s*(?:2\s*[&.]|3\.|Optimized|$))", output, re.DOTALL)
@@ -122,39 +180,46 @@ def generate_tailored_docs(job_entry, feedback=None, prev_response=None):
         app_save(job_id, "strategy.md", strategy_text)
         strategy_path = f"db://{job_id}/strategy.md"
 
-    # Extract JSON Resume from response
-    json_match = re.search(r"```json\s*(.*?)```", output, re.DOTALL)
-    if not json_match:
-        json_match = re.search(r"\b[Jj][Ss][Oo][Nn]\s*\n\s*(\{[\s\S]*?\})\s*$", output)
-    if json_match:
-        try:
-            raw = json_match.group(1)
-            resume_data = json.loads(raw)
-            # Strip empty or invalid date fields
-            for section in ('work', 'education', 'volunteer'):
-                for item in resume_data.get(section, []):
-                    for f in ('startDate', 'endDate', 'date'):
-                        if f in item:
-                            v = item[f]
-                            if not v or not re.match(r'^\d{4}(-\d{2}(-\d{2})?)?$', str(v)):
-                                del item[f]
-            resume_path = os.path.join(app_dir, "resume.json")
-            with open(resume_path, "w", encoding="utf-8") as f:
-                json.dump(resume_data, f, indent=2)
-            from lib.build_resume import build as build_pdfs
-            out = build_pdfs(resume_path, app_dir, company=job.get("company", ""))
-            if out:
-                print(f"  RESUME: {out['resume']}", file=sys.stderr)
-                if out.get('cover'):
-                    print(f"  COVER: {out['cover']}", file=sys.stderr)
-        except Exception as e:
-            print(f"  JSON extraction failed: {e}", file=sys.stderr)
-
     return True, {
         "response_path": f"db://{job_id}/gemini_response.txt",
         "text": output[:2000], "scripts": [],
         "strategy_path": strategy_path,
     }
+
+
+def _extract_and_build_resume(output, app_dir, job):
+    """Extract the JSON Resume block from a gem response, write resume.json,
+    and build PDFs. Returns {'check': report} on success, or None when no
+    resume JSON is present in the output."""
+    json_match = re.search(r"```json\s*(.*?)```", output, re.DOTALL)
+    if not json_match:
+        json_match = re.search(r"\b[Jj][Ss][Oo][Nn]\s*\n\s*(\{[\s\S]*?\})\s*$", output)
+    if not json_match:
+        return None
+    try:
+        raw = json_match.group(1)
+        resume_data = json.loads(raw)
+        for section in ('work', 'education', 'volunteer'):
+            for item in resume_data.get(section, []):
+                for f in ('startDate', 'endDate', 'date'):
+                    if f in item:
+                        v = item[f]
+                        if not v or not re.match(r'^\d{4}(-\d{2}(-\d{2})?)?$', str(v)):
+                            del item[f]
+        resume_path = os.path.join(app_dir, "resume.json")
+        with open(resume_path, "w", encoding="utf-8") as f:
+            json.dump(resume_data, f, indent=2)
+        from lib.build_resume import build as build_pdfs
+        out = build_pdfs(resume_path, app_dir, company=job.get("company", ""))
+        if out:
+            print(f"  RESUME: {out['resume']}", file=sys.stderr)
+            if out.get('cover'):
+                print(f"  COVER: {out['cover']}", file=sys.stderr)
+            return {"check": out.get("check", {})}
+        return None
+    except Exception as e:
+        print(f"  JSON extraction failed: {e}", file=sys.stderr)
+        return None
 
 
 def cmd_craft(auto=False):
@@ -226,6 +291,32 @@ def craft_jid(jid):
             print(f"  FAILED {jid} {err_str}", file=sys.stderr)
 
 
+def cmd_pdf_check(job_id):
+    """Re-run the PDF quality gate on an existing tailored resume.
+
+    For the agent route (the LLM writes resume.json + builds manually), this
+    is the orchestrator's post-build verification: read the built resume PDF
+    and emit PDF_CHECK lines. Returns 0 if the gate passes, 1 if it fails or
+    no resume PDF exists."""
+    if not job_id:
+        print("Usage: python3 tailor.py check <jid>", file=sys.stderr)
+        return 1
+    rd = os.path.join(RESULTS_DIR, job_id)
+    if not os.path.isdir(rd):
+        print(f"PDF_CHECK: {job_id} — no results dir", file=sys.stderr)
+        return 1
+    pdfs = [f for f in os.listdir(rd) if "Resume" in f and f.endswith(".pdf")]
+    if not pdfs:
+        print(f"PDF_CHECK: {job_id} — no resume PDF; build first "
+              f"(python -m lib.build_resume {os.path.join(rd, 'resume.json')} {rd})",
+              file=sys.stderr)
+        return 1
+    from lib.pdf_check import check_file as _pdf_check_file
+    path = os.path.join(rd, pdfs[0])
+    report = _pdf_check_file(path, max_pages=1, label=f"resume[{job_id}]")
+    return 0 if report["ok"] else 1
+
+
 def cmd_review(jid=None, count=1):
     state = load()
     if jid:
@@ -273,6 +364,29 @@ def cmd_admit(*job_ids, pdf_path=None, force=False):
         if pdf_path and not os.path.exists(pdf_path):
             print(f"PDF_NOT_FOUND: {job_id} — {pdf_path}", file=sys.stderr)
             continue
+        # PDF quality gate (one-page + no overlap/clip). A resume that breaks
+        # the one-page rule must not ship to an employer — admit is blocked
+        # unless --force (the orchestrator's explicit review verdict).
+        if not force:
+            try:
+                _rd = os.path.join(RESULTS_DIR, job_id)
+                _pdfs = [f for f in os.listdir(_rd)
+                         if "Resume" in f and f.endswith(".pdf")] \
+                    if os.path.isdir(_rd) else []
+                if _pdfs:
+                    from lib.pdf_check import check as _pdf_check
+                    _pc = _pdf_check(os.path.join(_rd, _pdfs[0]), max_pages=1)
+                    if not _pc["ok"]:
+                        print(f"PDF_CHECK_BLOCKED: {job_id} — "
+                              f"{_pc['pages']} page(s), "
+                              f"{len(_pc['overlaps'])} overlap(s), "
+                              f"{len(_pc['clipped'])} clip(s). "
+                              f"Fix the resume (tailor.py retry {job_id} "
+                              f"--feedback ... or tailor.py check {job_id}) "
+                              f"or --force after review.", file=sys.stderr)
+                        continue
+            except Exception as _pe:
+                print(f"PDF_CHECK_ERR: {job_id} — {_pe}", file=sys.stderr)
         if not force:
             _rp = os.path.join(RESULTS_DIR, job_id, "resume.json")
             if os.path.exists(_rp):
@@ -557,6 +671,7 @@ def cmd_help():
   retry                                     Retry all failed (batch)
   retry <jid>                               Re-tailor a job
   retry <jid> --feedback "text"             Re-tailor with feedback
+  check <jid>                               Re-run the PDF quality gate
   reset <jid>                               Reset to extracted (first stage)
   reset --all                               Mass reset
   reset --state failed,skipped              Reset by stage
@@ -577,6 +692,8 @@ def main():
                          help="Skip the factual-grounding gate (after human review)")
     ground_p = sub.add_parser("ground", help="Factual-grounding manifest for a tailored resume")
     ground_p.add_argument("jids", nargs="+")
+    check_p = sub.add_parser("check", help="Re-run the PDF quality gate (one-page + no overlap/clip)")
+    check_p.add_argument("jid", help="Job ID whose resume PDF to check")
     sub.add_parser("reject", help="Reject job").add_argument("jids", nargs="+")
     review_p = sub.add_parser("review", help="Review tailored jobs (strategy + cover letter)")
     review_p.add_argument("--jid", help="Specific job ID to review")
@@ -601,6 +718,8 @@ def main():
         for jid in args.jids:
             rc |= cmd_ground(jid, RESULTS_DIR)
         return rc
+    elif args.command == "check":
+        return cmd_pdf_check(args.jid)
     elif args.command == "admit":
         cmd_admit(*args.jids, pdf_path=args.pdf, force=getattr(args, "force", False))
     elif args.command == "reject":
